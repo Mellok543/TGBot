@@ -1,27 +1,37 @@
 # Telegram Manager
 
-Telegram bot for channel administrators, implemented in **C# / .NET 10**.
+C# / .NET 10 Telegram bot for channel owners.
 
-## Status
+## Modules implemented (feature branch)
 
-Early MVP skeleton: /start menu, placeholder sections for channel connection and advertising requests. No payments or database connection yet.
+- User registration in PostgreSQL.
+- Owner-only channel linking using Telegram's native channel picker.
+- Checks that both owner and bot have suitable rights.
+- Persistent list of linked channels.
+- Advertising UI placeholder. Payments are not implemented.
 
-## Local or VPS launch
+## Requirements
 
-1. Create a bot using @BotFather.
-2. Set the BOT_TOKEN environment variable (do not commit tokens).
-3. Run `dotnet run --project src/TelegramManager.Bot`.
+- .NET 10 SDK/runtime.
+- PostgreSQL with a separate database for this project.
+- `BOT_TOKEN` environment variable.
+- `DATABASE_URL` environment variable (Npgsql format, e.g. `Host=db.example;Port=5432;Database=telegram_manager;Username=telegram_manager;Password=YOUR_SECRET`).
 
-## Build without a computer
+Don't commit credentials or put them into chat messages. The bot automatically creates its initial database tables on startup; future changes should use migrations. Note: first startup requires database access and sufficient schema-creation permissions.
 
-GitHub Actions builds and publishes the .NET project on every push. Go to **Actions → .NET build** to inspect results and download the build artifact.
+### Run
 
-## Roadmap
+```sh
+dotnet run --project src/TelegramManager.Bot
+```
 
-- Verify channel administrator rights before connecting a channel.
-- PostgreSQL storage for users, channels, and advertising requests.
-- Advertising booking and manual payment confirmation.
-- Background scheduled publication.
-- Paid subscriptions: later.
+### Pterodactyl
 
-Never put secrets in repository files.
+Provide `DATABASE_URL` as a protected egg/server environment variable (alongside `BOT_TOKEN`). Do not reinstall the production server until database configuration is ready. Pterodactyl install runs only when installing or reinstalling; updating the GitHub repository does not update running files.
+
+## Next steps
+
+- Safer database migrations and audit trails.
+- Channel disconnect/settings and permission revalidation.
+- Advertising request workflows, scheduling and billing.
+- Safe deployment from GitHub Actions after build validation.
