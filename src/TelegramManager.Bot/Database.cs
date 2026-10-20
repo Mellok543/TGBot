@@ -44,9 +44,9 @@ public sealed class Database(string connectionString) : IAsyncDisposable
             VALUES (@id, @username, @name)
             ON DUPLICATE KEY UPDATE username=VALUES(username), display_name=VALUES(display_name)
             """);
-        cmd.Parameters.AddWithValue("@id", id);
-        cmd.Parameters.AddWithValue("@username", (object?)username ?? DBNull.Value);
-        cmd.Parameters.AddWithValue("@name", name.Length > 255 ? name[..255] : name);
+        cmd.Parameters.Add(new MySqlParameter("@id", id));
+        cmd.Parameters.Add(new MySqlParameter("@username", (object?)username ?? DBNull.Value));
+        cmd.Parameters.Add(new MySqlParameter("@name", name.Length > 255 ? name[..255] : name));
         await cmd.ExecuteNonQueryAsync(ct);
     }
 
@@ -59,10 +59,10 @@ public sealed class Database(string connectionString) : IAsyncDisposable
                 title=VALUES(title), username=VALUES(username),
                 connected_by=VALUES(connected_by), connected_at=CURRENT_TIMESTAMP
             """);
-        cmd.Parameters.AddWithValue("@channelId", channelId);
-        cmd.Parameters.AddWithValue("@title", title.Length > 255 ? title[..255] : title);
-        cmd.Parameters.AddWithValue("@username", (object?)username ?? DBNull.Value);
-        cmd.Parameters.AddWithValue("@userId", userId);
+        cmd.Parameters.Add(new MySqlParameter("@channelId", channelId));
+        cmd.Parameters.Add(new MySqlParameter("@title", title.Length > 255 ? title[..255] : title));
+        cmd.Parameters.Add(new MySqlParameter("@username", (object?)username ?? DBNull.Value));
+        cmd.Parameters.Add(new MySqlParameter("@userId", userId));
         await cmd.ExecuteNonQueryAsync(ct);
     }
 
@@ -72,7 +72,7 @@ public sealed class Database(string connectionString) : IAsyncDisposable
             SELECT telegram_id, title, username FROM channels
             WHERE connected_by=@ownerId ORDER BY connected_at DESC
             """);
-        cmd.Parameters.AddWithValue("@ownerId", ownerId);
+        cmd.Parameters.Add(new MySqlParameter("@ownerId", ownerId));
         await using var reader = await cmd.ExecuteReaderAsync(ct);
         var channels = new List<(long, string, string?)>();
         while (await reader.ReadAsync(ct))
@@ -85,8 +85,8 @@ public sealed class Database(string connectionString) : IAsyncDisposable
         await using var cmd = _source.CreateCommand("""
             DELETE FROM channels WHERE telegram_id=@channelId AND connected_by=@userId
             """);
-        cmd.Parameters.AddWithValue("@channelId", channelId);
-        cmd.Parameters.AddWithValue("@userId", userId);
+        cmd.Parameters.Add(new MySqlParameter("@channelId", channelId));
+        cmd.Parameters.Add(new MySqlParameter("@userId", userId));
         await cmd.ExecuteNonQueryAsync(ct);
     }
 
