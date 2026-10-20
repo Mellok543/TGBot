@@ -1,0 +1,17 @@
+services:
+  telegram-manager:
+    build: .
+    container_name: telegram-manager
+    restart: unless-stopped
+    env_file:
+      - .env
+    init: true
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 384m
+    cpus: 0.5
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
