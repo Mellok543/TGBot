@@ -1,0 +1,6 @@
+.git
+.github
+.env
+**/bin
+**/obj
+README.md
