@@ -1,37 +1,31 @@
 # Telegram Manager
 
-C# / .NET 10 Telegram bot for channel owners.
+C# / .NET 10 Telegram bot for Telegram channel owners.
 
-## Modules implemented (feature branch)
+## Current feature branch
 
-- User registration in PostgreSQL.
-- Owner-only channel linking using Telegram's native channel picker.
-- Checks that both owner and bot have suitable rights.
-- Persistent list of linked channels.
-- Advertising UI placeholder. Payments are not implemented.
+- MySQL / MariaDB database with user and channel tables.
+- Automatic user registration.
+- Native Telegram channel picker with ownership verification.
+- Bot permission validation and persistent channel listing.
+- Advertising and payments are not yet implemented.
 
-## Requirements
+## Configuration
 
-- .NET 10 SDK/runtime.
-- PostgreSQL with a separate database for this project.
-- `BOT_TOKEN` environment variable.
-- `DATABASE_URL` environment variable (Npgsql format, e.g. `Host=db.example;Port=5432;Database=telegram_manager;Username=telegram_manager;Password=YOUR_SECRET`).
+- `BOT_TOKEN` — Telegram Bot API token.
+- `DATABASE_URL` — MySqlConnector connection string, for example:
+  `Server=YOUR_DB_HOST;Port=3306;Database=telegram_manager;User ID=telegram_manager;Password=YOUR_SECRET;`
 
-Don't commit credentials or put them into chat messages. The bot automatically creates its initial database tables on startup; future changes should use migrations. Note: first startup requires database access and sufficient schema-creation permissions.
+Never commit a real token or password. Set values in Pterodactyl environment variables.
 
-### Run
+## Run locally
 
 ```sh
 dotnet run --project src/TelegramManager.Bot
 ```
 
-### Pterodactyl
+The application creates its initial tables on startup. Database and application accounts should have only the permissions they need.
 
-Provide `DATABASE_URL` as a protected egg/server environment variable (alongside `BOT_TOKEN`). Do not reinstall the production server until database configuration is ready. Pterodactyl install runs only when installing or reinstalling; updating the GitHub repository does not update running files.
+## Deployment
 
-## Next steps
-
-- Safer database migrations and audit trails.
-- Channel disconnect/settings and permission revalidation.
-- Advertising request workflows, scheduling and billing.
-- Safe deployment from GitHub Actions after build validation.
+The production bot currently runs separately on Pterodactyl. Do not deploy this branch until its CI build succeeds and the MariaDB connection is configured. Updating GitHub does not automatically update the running bot.
