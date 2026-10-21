@@ -37,7 +37,7 @@ public sealed class AdScheduler(Database database, ITelegramBotClient bot)
                     {
                         Console.Error.WriteLine($"Publication #{id} failed: {ex}");
                         await database.FinishPublishAsync(id, null, ex.Message.Length > 500 ? ex.Message[..500] : ex.Message, ct);
-                        await NotifyParticipantsAsync(id, $"❌ Заказ #{id}: публикация не удалась. Проверьте заказ.", ct);
+                        await database.EnqueueOrderNotificationAsync(id, $"❌ Заказ #{id}: публикация не удалась. Проверьте заказ.", ct);
                     }
                 }
                 foreach (var (id, channel, message) in await database.DueDeletionsAsync(ct))
@@ -46,13 +46,13 @@ public sealed class AdScheduler(Database database, ITelegramBotClient bot)
                     {
                         await bot.DeleteMessage(channel, message, ct);
                         await database.FinishDeletionAsync(id, null, ct);
-                        await NotifyParticipantsAsync(id, $"🗑 Заказ #{id}: срок размещения завершён, сообщение удалено.", ct);
+                        await database.EnqueueOrderNotificationAsync(id, $"🗑 Заказ #{id}: срок размещения завершён, сообщение удалено.", ct);
                     }
                     catch (Exception ex) when (ex is not OperationCanceledException)
                     {
                         Console.Error.WriteLine($"Deletion #{id} failed: {ex}");
                         await database.FinishDeletionAsync(id, ex.Message.Length > 500 ? ex.Message[..500] : ex.Message, ct);
-                        await NotifyParticipantsAsync(id, $"⚠️ Заказ #{id}: не удалось удалить публикацию. Требуется проверка.", ct);
+                        await database.EnqueueOrderNotificationAsync(id, $"⚠️ Заказ #{id}: не удалось удалить публикацию. Требуется проверка.", ct);
                     }
                 }
                 await DispatchNotificationsAsync(ct);
