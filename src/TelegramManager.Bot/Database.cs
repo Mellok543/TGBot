@@ -708,4 +708,19 @@ public sealed class Database(string connectionString) : IAsyncDisposable
         return await cmd.ExecuteNonQueryAsync(ct) == 1;
     }
 
+    public async Task<List<(long Id, string Channel, string Reason)>> GetOpenDisputesAsync(CancellationToken ct)
+    {
+        await using var cmd = _source.CreateCommand("""
+            SELECT a.id, c.title, COALESCE(a.dispute_reason, 'Не указана')
+            FROM ad_requests a JOIN channels c ON c.telegram_id=a.channel_id
+            WHERE a.status='Disputed' AND a.payout_status='Blocked'
+            ORDER BY a.disputed_at DESC LIMIT 30
+            """);
+        var items = new List<(long, string, string)>();
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+            items.Add((reader.GetInt64(0), reader.GetString(1), reader.GetString(2)));
+        return items;
+    }
+
 }
