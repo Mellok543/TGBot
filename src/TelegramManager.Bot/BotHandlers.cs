@@ -295,7 +295,7 @@ public sealed class BotHandlers(Database database)
             case "profile":
                 var summary = await database.GetProfileSummaryAsync(actor.Id, ct);
                 var profilePlan = await database.GetPlanAsync(actor.Id, ct);
-                var profileText = $"👤 Профиль\\nТариф: {(profilePlan.Pro ? "PRO" : "Бесплатный")}\\nКаналов: {summary.Channels}/{profilePlan.Limit}\\nЗаказов рекламы: {summary.Bought}\\nПродаж рекламы: {summary.Sold}\\nОпубликовано: {summary.Published}\\n\\nУчтено размещений: {summary.BookedRub:0.##} ₽ (не фактическая выручка)\\nПодтверждённый доход: {summary.EarnedStars} ⭐";
+                var profileText = $"👤 Профиль\nТариф: {(profilePlan.Pro ? "PRO" : "Бесплатный")}\nКаналов: {summary.Channels}/{profilePlan.Limit}\nЗаказов рекламы: {summary.Bought}\nПродаж рекламы: {summary.Sold}\nОпубликовано: {summary.Published}\n\nУчтено размещений: {summary.BookedRub:0.##} ₽ (не фактическая выручка)\nПодтверждённый доход: {summary.EarnedStars} ⭐";
                 await bot.EditMessageText(origin.Chat.Id, origin.MessageId, profileText,
                     replyMarkup: new InlineKeyboardMarkup(new[]
                     {
@@ -309,18 +309,18 @@ public sealed class BotHandlers(Database database)
                 var analyticsPlan = await database.GetPlanAsync(actor.Id, ct);
                 if (!analyticsPlan.Pro)
                 {
-                    await bot.EditMessageText(origin.Chat.Id, origin.MessageId, "📊 Детальная статистика по каждому каналу доступна в PRO (299 Stars / 30 дней).\\nБесплатная сводка доступна в профиле.", replyMarkup: Back(), cancellationToken: ct);
+                    await bot.EditMessageText(origin.Chat.Id, origin.MessageId, "📊 Детальная статистика по каждому каналу доступна в PRO (299 Stars / 30 дней).\nБесплатная сводка доступна в профиле.", replyMarkup: Back(), cancellationToken: ct);
                     break;
                 }
                 var channelAnalytics = await database.GetChannelAnalyticsAsync(actor.Id, ct);
                 var channelAnalyticsText = channelAnalytics.Count == 0 ? "Пока нет подключённых каналов." :
-                    "📊 Статистика каналов (всё время):\\n\\n" + string.Join("\\n\\n", channelAnalytics.Select(x => $"📺 {x.Channel}\\nРазмещений: {x.Orders}\\nСумма заказов: {x.BookedRub:0.##} ₽\\nУчтённый доход: {x.EarnedStars} ⭐"));
+                    "📊 Статистика каналов (всё время):\n\n" + string.Join("\n\n", channelAnalytics.Select(x => $"📺 {x.Channel}\nРазмещений: {x.Orders}\nСумма заказов: {x.BookedRub:0.##} ₽\nУчтённый доход: {x.EarnedStars} ⭐"));
                 await bot.EditMessageText(origin.Chat.Id, origin.MessageId, channelAnalyticsText, replyMarkup: Back(), cancellationToken: ct);
                 break;
             case "buyer_analytics":
                 var buyerAnalytics = await database.GetBuyerAnalyticsAsync(actor.Id, ct);
                 await bot.EditMessageText(origin.Chat.Id, origin.MessageId,
-                    $"🛒 Покупки рекламы\\nПодтверждённых заказов: {buyerAnalytics.Bought}\\nСумма заказов: {buyerAnalytics.BookedRub:0.##} ₽\\n\\nЭто стоимость заказов, не подтверждение оплаты.",
+                    $"🛒 Покупки рекламы\nПодтверждённых заказов: {buyerAnalytics.Bought}\nСумма заказов: {buyerAnalytics.BookedRub:0.##} ₽\n\nЭто стоимость заказов, не подтверждение оплаты.",
                     replyMarkup: Back(), cancellationToken: ct);
                 break;
             case "subscription_status":
