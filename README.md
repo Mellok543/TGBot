@@ -1,27 +1,31 @@
 # Telegram Manager
 
-Telegram bot for channel administrators, implemented in **C# / .NET 10**.
+C# / .NET 10 Telegram bot for Telegram channel owners.
 
-## Status
+## Current feature branch
 
-Early MVP skeleton: /start menu, placeholder sections for channel connection and advertising requests. No payments or database connection yet.
+- MySQL / MariaDB database with user and channel tables.
+- Automatic user registration.
+- Native Telegram channel picker with ownership verification.
+- Bot permission validation and persistent channel listing.
+- Advertising and payments are not yet implemented.
 
-## Local or VPS launch
+## Configuration
 
-1. Create a bot using @BotFather.
-2. Set the BOT_TOKEN environment variable (do not commit tokens).
-3. Run `dotnet run --project src/TelegramManager.Bot`.
+- `BOT_TOKEN` — Telegram Bot API token.
+- `DATABASE_URL` — MySqlConnector connection string, for example:
+  `Server=YOUR_DB_HOST;Port=3306;Database=telegram_manager;User ID=telegram_manager;Password=YOUR_SECRET;`
 
-## Build without a computer
+Never commit a real token or password. Set values in Pterodactyl environment variables.
 
-GitHub Actions builds and publishes the .NET project on every push. Go to **Actions → .NET build** to inspect results and download the build artifact.
+## Run locally
 
-## Roadmap
+```sh
+dotnet run --project src/TelegramManager.Bot
+```
 
-- Verify channel administrator rights before connecting a channel.
-- PostgreSQL storage for users, channels, and advertising requests.
-- Advertising booking and manual payment confirmation.
-- Background scheduled publication.
-- Paid subscriptions: later.
+The application creates its initial tables on startup. Database and application accounts should have only the permissions they need.
 
-Never put secrets in repository files.
+## Deployment
+
+The production bot currently runs separately on Pterodactyl. Do not deploy this branch until its CI build succeeds and the MariaDB connection is configured. Updating GitHub does not automatically update the running bot.
