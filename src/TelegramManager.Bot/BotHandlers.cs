@@ -436,11 +436,8 @@ public sealed class BotHandlers(Database database)
                     await bot.SendMessage(origin.Chat.Id, success ? $"Решение по #{resolvedId} сохранено. Выплата остаётся заблокированной до обработки провайдером." : "Спор уже закрыт или решение недопустимо.", cancellationToken: ct);
                     if (success)
                     {
-                        var participants = await database.GetOrderParticipantsAsync(resolvedId, ct);
-                        if (participants is { } users)
-                            foreach (var recipient in new[] { users.Owner, users.Advertiser }.Distinct())
-                                try { await bot.SendMessage(recipient, $"⚖️ По заказу #{resolvedId} вынесено решение: {decision}. Денежные операции не выполнялись.", cancellationToken: ct); }
-                                catch (Telegram.Bot.Exceptions.ApiRequestException ex) { Console.Error.WriteLine(ex.Message); }
+                        await database.EnqueueOrderNotificationAsync(resolvedId,
+                            $"⚖️ По заказу #{resolvedId} вынесено решение: {decision}. Денежные операции не выполнялись.", ct);
                     }
                 }
             }
@@ -769,12 +766,12 @@ public sealed class BotHandlers(Database database)
                     if (disputed is not null)
                     {
                         var other = disputed.Value.Owner == actor.Id ? disputed.Value.Advertiser : disputed.Value.Owner;
-                        try { await bot.SendMessage(other, $"⚖️ По заказу #{reasonOrderId} открыт спор: {reason}. Выплата заблокирована.", cancellationToken: ct); }
-                        catch (Telegram.Bot.Exceptions.ApiRequestException ex) { Console.Error.WriteLine(ex.Message); }
+                        await database.EnqueueNotificationToUserAsync(reasonOrderId, other,
+                            $"⚖️ По заказу #{reasonOrderId} открыт спор: {reason}. Выплата заблокирована.", ct);
                     }
                     if (long.TryParse(Environment.GetEnvironmentVariable("ADMIN_TELEGRAM_ID"), out var adminId))
-                        try { await bot.SendMessage(adminId, $"⚖️ Новый спор #{reasonOrderId}: {reason}. Откройте /admin → Спорные заказы.", cancellationToken: ct); }
-                        catch (Telegram.Bot.Exceptions.ApiRequestException ex) { Console.Error.WriteLine(ex.Message); }
+                        await database.EnqueueNotificationToUserAsync(reasonOrderId, adminId,
+                            $"⚖️ Новый спор #{reasonOrderId}: {reason}. Откройте /admin → Спорные заказы.", ct);
                 }
                 else await bot.SendMessage(origin.Chat.Id, "Не удалось открыть спор: заказ недоступен или спор уже открыт.", cancellationToken: ct);
                 break;
@@ -785,8 +782,8 @@ public sealed class BotHandlers(Database database)
                     await bot.SendMessage(origin.Chat.Id, $"🧪 Заказ #{testPaymentOrderId}: тестовая оплата подтверждена. Реальные деньги не списаны. Публикация запланирована.", cancellationToken: ct);
                     var testOrder = await database.GetAdRequestAsync(testPaymentOrderId, ct);
                     if (testOrder is not null)
-                        try { await bot.SendMessage(testOrder.Value.Owner, $"🧪 Заказ #{testPaymentOrderId} оплачен в тестовом режиме (без денег).", cancellationToken: ct); }
-                        catch (Telegram.Bot.Exceptions.ApiRequestException ex) { Console.Error.WriteLine(ex.Message); }
+                        await database.EnqueueNotificationToUserAsync(testPaymentOrderId, testOrder.Value.Owner,
+                            $"🧪 Заказ #{testPaymentOrderId} оплачен в тестовом режиме (без денег).", ct);
                 }
                 else await bot.SendMessage(origin.Chat.Id, "Тестовая оплата недоступна: проверьте статус заказа, время публикации и разрешение тестового аккаунта.", cancellationToken: ct);
                 break;
@@ -801,8 +798,8 @@ public sealed class BotHandlers(Database database)
                     await bot.EditMessageText(origin.Chat.Id, origin.MessageId, $"Заявка #{decisionId} отклонена.", cancellationToken: ct);
                     var rejected = await database.GetAdRequestAsync(decisionId, ct);
                     if (rejected is not null)
-                        try { await bot.SendMessage(rejected.Value.Advertiser, $"❌ Заявка #{decisionId} отклонена владельцем.", cancellationToken: ct); }
-                        catch (Telegram.Bot.Exceptions.ApiRequestException ex) { Console.Error.WriteLine(ex.Message); }
+                        await database.EnqueueNotificationToUserAsync(decisionId, rejected.Value.Advertiser,
+                            $"❌ Заявка #{decisionId} отклонена владельцем.", ct);
                 }
                 else await bot.SendMessage(origin.Chat.Id, "Заявка уже обработана.", cancellationToken: ct);
                 break;

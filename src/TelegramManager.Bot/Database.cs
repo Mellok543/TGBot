@@ -920,4 +920,16 @@ public sealed class Database(string connectionString) : IAsyncDisposable
         await cmd.ExecuteNonQueryAsync(ct);
     }
 
+    public async Task EnqueueNotificationToUserAsync(long orderId, long recipientId, string body, CancellationToken ct)
+    {
+        await using var cmd = _source.CreateCommand("""
+            INSERT IGNORE INTO notification_outbox(order_id,recipient_id,body)
+            SELECT id,@recipient,@body FROM ad_requests WHERE id=@id
+            """);
+        cmd.Parameters.Add(new MySqlParameter("@id", orderId));
+        cmd.Parameters.Add(new MySqlParameter("@recipient", recipientId));
+        cmd.Parameters.Add(new MySqlParameter("@body", body));
+        await cmd.ExecuteNonQueryAsync(ct);
+    }
+
 }
