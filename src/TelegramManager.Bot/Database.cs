@@ -220,7 +220,7 @@ public sealed class Database(string connectionString) : IAsyncDisposable
 
     public async Task<bool> SetChannelListedAsync(long id, long owner, bool listed, CancellationToken ct)
     {
-        await using var cmd = _source.CreateCommand("UPDATE channels SET is_listed=@listed WHERE telegram_id=@id AND connected_by=@owner");
+        await using var cmd = _source.CreateCommand("UPDATE channels c JOIN users u ON u.telegram_id=c.connected_by SET c.is_listed=@listed WHERE c.telegram_id=@id AND c.connected_by=@owner AND (@listed=FALSE OR u.subscription_until>UTC_TIMESTAMP() OR u.created_at>UTC_TIMESTAMP()-INTERVAL 30 DAY)");
         cmd.Parameters.Add(new MySqlParameter("@listed", listed));
         cmd.Parameters.Add(new MySqlParameter("@id", id));
         cmd.Parameters.Add(new MySqlParameter("@owner", owner));
@@ -239,7 +239,7 @@ public sealed class Database(string connectionString) : IAsyncDisposable
     {
         await using var cmd = _source.CreateCommand("""
             SELECT telegram_id, title, ad_price_rub, COALESCE(ad_description,''), ad_formats
-            FROM channels WHERE is_listed=TRUE ORDER BY connected_at DESC LIMIT 50
+            FROM channels c JOIN users u ON u.telegram_id=c.connected_by WHERE c.is_listed=TRUE AND (u.subscription_until>UTC_TIMESTAMP() OR u.created_at>UTC_TIMESTAMP()-INTERVAL 30 DAY) ORDER BY c.connected_at DESC LIMIT 50
             """);
         await using var reader = await cmd.ExecuteReaderAsync(ct);
         var items = new List<(long, string, decimal, string, string)>();
@@ -261,8 +261,8 @@ public sealed class Database(string connectionString) : IAsyncDisposable
     public async Task<List<(long Id, string Title, decimal Price)>> GetCategoryChannelsAsync(string category, CancellationToken ct)
     {
         await using var cmd = _source.CreateCommand("""
-            SELECT telegram_id, title, ad_price_rub FROM channels
-            WHERE is_listed=TRUE AND category=@category ORDER BY connected_at DESC LIMIT 50
+            SELECT telegram_id, title, ad_price_rub FROM channels c JOIN users u ON u.telegram_id=c.connected_by
+            WHERE c.is_listed=TRUE AND c.category=@category AND (u.subscription_until>UTC_TIMESTAMP() OR u.created_at>UTC_TIMESTAMP()-INTERVAL 30 DAY) ORDER BY c.connected_at DESC LIMIT 50
             """);
         cmd.Parameters.Add(new MySqlParameter("@category", category));
         await using var r = await cmd.ExecuteReaderAsync(ct);
@@ -278,7 +278,7 @@ public sealed class Database(string connectionString) : IAsyncDisposable
         await using var cmd = new MySqlCommand("""
             INSERT INTO ad_requests (channel_id, advertiser_id, owner_id, content_type, content_text, media_file_id, price_rub, status)
             SELECT telegram_id, @advertiser, connected_by, @type, @text, @file, ad_price_rub, 'Draft'
-            FROM channels WHERE telegram_id=@channel AND connected_by<>@advertiser
+            FROM channels c JOIN users u ON u.telegram_id=c.connected_by WHERE c.telegram_id=@channel AND c.connected_by<>@advertiser AND c.is_listed=TRUE AND (u.subscription_until>UTC_TIMESTAMP() OR u.created_at>UTC_TIMESTAMP()-INTERVAL 30 DAY)
             """, connection);
         cmd.Parameters.Add(new MySqlParameter("@advertiser", advertiserId));
         cmd.Parameters.Add(new MySqlParameter("@channel", channelId));
