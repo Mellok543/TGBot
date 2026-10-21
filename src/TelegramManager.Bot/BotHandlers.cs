@@ -684,8 +684,8 @@ public sealed class BotHandlers(Database database)
                     await bot.EditMessageText(origin.Chat.Id, origin.MessageId, $"Заявка #{confirmId}: размещение согласовано, ожидается оплата.", cancellationToken: ct);
                     var confirmed = await database.GetAdRequestAsync(confirmId, ct);
                     if (confirmed is not null)
-                        try { await bot.SendMessage(confirmed.Value.Advertiser, $"✅ Заявка #{confirmId}: владелец согласовал размещение. Оплата ещё не получена. Откройте заказ, чтобы продолжить.", cancellationToken: ct); }
-                        catch (Telegram.Bot.Exceptions.ApiRequestException ex) { Console.Error.WriteLine(ex.Message); }
+                        await database.EnqueueNotificationToUserAsync(confirmId, confirmed.Value.Advertiser,
+                            $"✅ Заявка #{confirmId}: владелец согласовал размещение. Оплата ещё не получена. Откройте заказ, чтобы продолжить.", ct);
                 }
                 else await bot.SendMessage(origin.Chat.Id, "Не удалось подтвердить: заявка недоступна или время уже занято.", cancellationToken: ct);
                 break;
