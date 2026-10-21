@@ -118,6 +118,7 @@ public sealed class BotHandlers(Database database)
         new[] { InlineKeyboardButton.WithCallbackData("📺 Мои каналы", "owner_home") },
         new[] { InlineKeyboardButton.WithCallbackData("🛒 Покупка рекламы", "buyer_home") },
         new[] { InlineKeyboardButton.WithCallbackData("📅 Мои размещения", "placements") },
+        new[] { InlineKeyboardButton.WithCallbackData("👤 Мой профиль", "profile") },
         new[] { InlineKeyboardButton.WithCallbackData("⚙️ Настройки", "profile_settings") }
     });
     private static InlineKeyboardMarkup ForRole(string? role) => Home();
@@ -291,11 +292,44 @@ public sealed class BotHandlers(Database database)
                     new[] { InlineKeyboardButton.WithCallbackData("⬅️ Главное меню", "home") }
                 }), cancellationToken: ct);
                 break;
+            case "profile":
+                var summary = await database.GetProfileSummaryAsync(actor.Id, ct);
+                var profilePlan = await database.GetPlanAsync(actor.Id, ct);
+                var profileText = $"👤 Профиль\\nТариф: {(profilePlan.Pro ? "PRO" : "Бесплатный")}\\nКаналов: {summary.Channels}/{profilePlan.Limit}\\nЗаказов рекламы: {summary.Bought}\\nПродаж рекламы: {summary.Sold}\\nОпубликовано: {summary.Published}\\n\\nУчтено размещений: {summary.BookedRub:0.##} ₽ (не фактическая выручка)\\nПодтверждённый доход: {summary.EarnedStars} ⭐";
+                await bot.EditMessageText(origin.Chat.Id, origin.MessageId, profileText,
+                    replyMarkup: new InlineKeyboardMarkup(new[]
+                    {
+                        new[] { InlineKeyboardButton.WithCallbackData("📊 Аналитика каналов · PRO", "channel_analytics") },
+                        new[] { InlineKeyboardButton.WithCallbackData("🛒 Аналитика покупок", "buyer_analytics") },
+                        new[] { InlineKeyboardButton.WithCallbackData("⭐ Мой тариф", "subscription_status") },
+                        new[] { InlineKeyboardButton.WithCallbackData("⬅️ Главное меню", "home") }
+                    }), cancellationToken: ct);
+                break;
+            case "channel_analytics":
+                var analyticsPlan = await database.GetPlanAsync(actor.Id, ct);
+                if (!analyticsPlan.Pro)
+                {
+                    await bot.EditMessageText(origin.Chat.Id, origin.MessageId, "📊 Детальная статистика по каждому каналу доступна в PRO (299 Stars / 30 дней).\\nБесплатная сводка доступна в профиле.", replyMarkup: Back(), cancellationToken: ct);
+                    break;
+                }
+                var channelAnalytics = await database.GetChannelAnalyticsAsync(actor.Id, ct);
+                var channelAnalyticsText = channelAnalytics.Count == 0 ? "Пока нет подключённых каналов." :
+                    "📊 Статистика каналов (всё время):\\n\\n" + string.Join("\\n\\n", channelAnalytics.Select(x => $"📺 {x.Channel}\\nРазмещений: {x.Orders}\\nСумма заказов: {x.BookedRub:0.##} ₽\\nУчтённый доход: {x.EarnedStars} ⭐"));
+                await bot.EditMessageText(origin.Chat.Id, origin.MessageId, channelAnalyticsText, replyMarkup: Back(), cancellationToken: ct);
+                break;
+            case "buyer_analytics":
+                var buyerAnalytics = await database.GetBuyerAnalyticsAsync(actor.Id, ct);
+                await bot.EditMessageText(origin.Chat.Id, origin.MessageId,
+                    $"🛒 Покупки рекламы\\nПодтверждённых заказов: {buyerAnalytics.Bought}\\nСумма заказов: {buyerAnalytics.BookedRub:0.##} ₽\\n\\nЭто стоимость заказов, не подтверждение оплаты.",
+                    replyMarkup: Back(), cancellationToken: ct);
+                break;
             case "subscription_status":
                 var plan = await database.GetPlanAsync(actor.Id, ct);
                 var planText = plan.Pro
                     ? $"⭐ PRO активен до {plan.ProEnds!.Value.Add(DisplayOffset):dd.MM.yyyy HH:mm} (UTC+3).\nЛимит: 10 каналов."
-                    : plan.TrialEnds > DateTime.UtcNow
+                    : plan.TrialEnds == DateTime.MaxValue
+                        ? "🎁 Бесплатные 30 дней начнутся после подключения первого канала. Лимит: 1 канал."
+                        : plan.TrialEnds > DateTime.UtcNow
                         ? $"🎁 Бесплатный период до {plan.TrialEnds.Add(DisplayOffset):dd.MM.yyyy HH:mm} (UTC+3).\nЛимит: 1 канал."
                         : "⏳ Бесплатные 30 дней закончились. Для новых продаж и подключения каналов необходим PRO — 299 Stars / 30 дней.\nОплата Stars пока не подключена.";
                 await bot.EditMessageText(origin.Chat.Id, origin.MessageId, planText,
