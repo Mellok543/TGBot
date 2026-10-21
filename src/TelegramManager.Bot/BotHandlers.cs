@@ -20,6 +20,7 @@ public sealed class BotHandlers(Database database)
         new[] { InlineKeyboardButton.WithCallbackData("🧪 Добавить тестовый аккаунт", "admin:teston") },
         new[] { InlineKeyboardButton.WithCallbackData("🧪 Убрать тестовый аккаунт", "admin:testoff") },
         new[] { InlineKeyboardButton.WithCallbackData("👥 Последние пользователи", "admin:users") },
+        new[] { InlineKeyboardButton.WithCallbackData("⚖️ Спорные заказы", "admin:disputes") },
         new[] { InlineKeyboardButton.WithCallbackData("⬅️ Главное меню", "home") }
     });
 
@@ -80,6 +81,9 @@ public sealed class BotHandlers(Database database)
             {
                 new[] { InlineKeyboardButton.WithCallbackData("📅 Предложить время", $"schedule:{a.Id}") }
             }), cancellationToken: ct);
+        if ((a.Owner == userId || a.Advertiser == userId) && a.Status is "Published" or "Deleted" or "DeleteFailed")
+            await bot.SendMessage(chatId, "⚖️ Обнаружили нарушение условий размещения? Откройте спор. Выплата будет заблокирована до проверки.",
+                replyMarkup: new InlineKeyboardMarkup(new[] { new[] { InlineKeyboardButton.WithCallbackData("⚖️ Открыть спор", $"dispute:{a.Id}") } }), cancellationToken: ct);
         if (a.Owner == userId && a.Status == "Pending")
             await bot.SendMessage(chatId, "Подтвердите заявку и получение оплаты — реклама автоматически выйдет в указанное время.", replyMarkup: new InlineKeyboardMarkup(new[]
             {
@@ -394,7 +398,14 @@ public sealed class BotHandlers(Database database)
                 return;
             }
             var action = data["admin:".Length..];
-            if (action == "users")
+            if (action == "disputes")
+            {
+                var disputes = await database.GetOpenDisputesAsync(ct);
+                var details = disputes.Count == 0 ? "Открытых споров нет." :
+                    "⚖️ Открытые споры:\n" + string.Join("\n", disputes.Select(x => $"#{x.Id} · {x.Channel} · {x.Reason}"));
+                await bot.EditMessageText(origin.Chat.Id, origin.MessageId, details, replyMarkup: AdminMenu(), cancellationToken: ct);
+            }
+            else if (action == "users")
             {
                 var users = await database.GetAdminUsersAsync(ct);
                 var text = users.Count == 0 ? "Нет пользователей." :
@@ -683,6 +694,33 @@ public sealed class BotHandlers(Database database)
                 var current = await database.IsChannelListedAsync(listingId, actor.Id, ct);
                 await database.SetChannelListedAsync(listingId, actor.Id, !current, ct);
                 await ShowSettingsAsync(bot, origin.Chat.Id, origin.MessageId, actor.Id, listingId, ct);
+                break;
+            case string disputeData when disputeData.StartsWith("dispute:") && long.TryParse(disputeData[8..], out var disputedOrderId):
+                await bot.SendMessage(origin.Chat.Id, $"Выберите причину спора по заказу #{disputedOrderId}:",
+                    replyMarkup: new InlineKeyboardMarkup(new[]
+                    {
+                        new[] { InlineKeyboardButton.WithCallbackData("Публикация удалена досрочно", $"disputereason:deleted:{disputedOrderId}") },
+                        new[] { InlineKeyboardButton.WithCallbackData("Нарушены условия размещения", $"disputereason:terms:{disputedOrderId}") }
+                    }), cancellationToken: ct);
+                break;
+            case string reasonData when reasonData.StartsWith("disputereason:"):
+                var reasonParts = reasonData.Split(':');
+                if (reasonParts.Length != 3 || !long.TryParse(reasonParts[2], out var reasonOrderId)) break;
+                var reason = reasonParts[1] switch
+                {
+                    "deleted" => "Реклама удалена до окончания срока",
+                    "terms" => "Нарушены условия размещения",
+                    _ => null
+                };
+                if (reason is null) break;
+                if (await database.OpenDisputeAsync(reasonOrderId, actor.Id, reason, ct))
+                {
+                    await bot.SendMessage(origin.Chat.Id, $"⚖️ Спор по заказу #{reasonOrderId} открыт. Выплата заблокирована до проверки.", cancellationToken: ct);
+                    if (long.TryParse(Environment.GetEnvironmentVariable("ADMIN_TELEGRAM_ID"), out var adminId))
+                        try { await bot.SendMessage(adminId, $"⚖️ Новый спор #{reasonOrderId}: {reason}. Откройте /admin → Спорные заказы.", cancellationToken: ct); }
+                        catch (Telegram.Bot.Exceptions.ApiRequestException ex) { Console.Error.WriteLine(ex.Message); }
+                }
+                else await bot.SendMessage(origin.Chat.Id, "Не удалось открыть спор: заказ недоступен или спор уже открыт.", cancellationToken: ct);
                 break;
             case string adData when adData.StartsWith("ad:") && long.TryParse(adData[3..], out var adId):
                 await ShowAdAsync(bot, origin.Chat.Id, actor.Id, adId, ct);
