@@ -373,7 +373,8 @@ public sealed class Database(string connectionString) : IAsyncDisposable
     {
         await using var cmd = _source.CreateCommand("SELECT selected_role FROM users WHERE telegram_id=@user");
         cmd.Parameters.Add(new MySqlParameter("@user", user));
-        return (string?)await cmd.ExecuteScalarAsync(ct);
+        var value = await cmd.ExecuteScalarAsync(ct);
+        return value is null or DBNull ? null : Convert.ToString(value);
     }
 
     public async Task SetRoleAsync(long user, string role, CancellationToken ct)
