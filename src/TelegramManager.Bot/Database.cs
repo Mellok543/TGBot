@@ -465,7 +465,8 @@ public sealed class Database(string connectionString) : IAsyncDisposable
         cmd.Parameters.Add(new MySqlParameter("@status", error is null ? "Deleted" : "DeleteFailed"));
         cmd.Parameters.Add(new MySqlParameter("@error", (object?)error ?? DBNull.Value));
         cmd.Parameters.Add(new MySqlParameter("@id", id));
-        await cmd.ExecuteNonQueryAsync(ct);
+        if (await cmd.ExecuteNonQueryAsync(ct) == 1)
+            await RecordOrderEventAsync(id, null, error is null ? "Deleted" : "DeleteFailed", error, ct);
     }
 
 
