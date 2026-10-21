@@ -30,6 +30,32 @@ public sealed class Database(string connectionString) : IAsyncDisposable
                 CONSTRAINT fk_channels_connected_by FOREIGN KEY (connected_by) REFERENCES users(telegram_id)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
             """,
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS subscription_until DATETIME NULL",
+            """
+            CREATE TABLE IF NOT EXISTS star_payments (
+                telegram_payment_charge_id VARCHAR(255) PRIMARY KEY,
+                user_id BIGINT NOT NULL,
+                purpose VARCHAR(32) NOT NULL,
+                amount_stars INT NOT NULL,
+                order_id BIGINT NULL,
+                created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                INDEX idx_star_payments_user (user_id),
+                INDEX idx_star_payments_order (order_id)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS owner_earnings (
+                id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+                order_id BIGINT NOT NULL,
+                owner_id BIGINT NOT NULL,
+                amount_stars INT NOT NULL,
+                platform_fee_stars INT NOT NULL,
+                state VARCHAR(24) NOT NULL DEFAULT 'pending',
+                created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE KEY uq_owner_earnings_order (order_id),
+                INDEX idx_owner_earnings_owner (owner_id, state)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+            """,
             "ALTER TABLE users ADD COLUMN IF NOT EXISTS selected_role VARCHAR(16) NULL",
             "ALTER TABLE channels ADD COLUMN IF NOT EXISTS ad_price_rub DECIMAL(10,2) NOT NULL DEFAULT 0",
             "ALTER TABLE channels ADD COLUMN IF NOT EXISTS ad_description TEXT NULL",
@@ -456,6 +482,54 @@ public sealed class Database(string connectionString) : IAsyncDisposable
         for (var slot = start; slot < start.AddDays(30); slot = slot.AddMinutes(30))
             if (!reserved.Contains(slot.Ticks)) return slot;
         return null;
+    }
+
+    public async Task<DateTime?> GetSubscriptionUntilAsync(long userId, CancellationToken ct)
+    {
+        await using var cmd = _source.CreateCommand("SELECT subscription_until FROM users WHERE telegram_id=@user");
+        cmd.Parameters.Add(new MySqlParameter("@user", userId));
+        var value = await cmd.ExecuteScalarAsync(ct);
+        return value is null or DBNull ? null : Convert.ToDateTime(value);
+    }
+
+    // Records are idempotent by Telegram charge ID. Never credit funds from callbacks alone.
+    public async Task<bool> RecordSubscriptionPaymentAsync(long userId, string chargeId, int stars, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(chargeId) || stars <= 0) return false;
+        await using var connection = await _source.OpenConnectionAsync(ct);
+        await using var tx = await connection.BeginTransactionAsync(ct);
+        await using var insert = new MySqlCommand("""
+            INSERT IGNORE INTO star_payments (telegram_payment_charge_id, user_id, purpose, amount_stars)
+            VALUES (@charge, @user, 'subscription', @stars)
+            """, connection, tx);
+        insert.Parameters.Add(new MySqlParameter("@charge", chargeId));
+        insert.Parameters.Add(new MySqlParameter("@user", userId));
+        insert.Parameters.Add(new MySqlParameter("@stars", stars));
+        if (await insert.ExecuteNonQueryAsync(ct) != 1) { await tx.RollbackAsync(ct); return false; }
+        await using var update = new MySqlCommand("""
+            UPDATE users SET subscription_until=DATE_ADD(
+                GREATEST(COALESCE(subscription_until, UTC_TIMESTAMP()), UTC_TIMESTAMP()),
+                INTERVAL 30 DAY
+            ) WHERE telegram_id=@user
+            """, connection, tx);
+        update.Parameters.Add(new MySqlParameter("@user", userId));
+        if (await update.ExecuteNonQueryAsync(ct) != 1) { await tx.RollbackAsync(ct); return false; }
+        await tx.CommitAsync(ct);
+        return true;
+    }
+
+    public async Task<(long Pending, long Available, long Paid)> GetOwnerEarningsAsync(long userId, CancellationToken ct)
+    {
+        await using var cmd = _source.CreateCommand("""
+            SELECT COALESCE(SUM(CASE WHEN state='pending' THEN amount_stars ELSE 0 END),0),
+                   COALESCE(SUM(CASE WHEN state='available' THEN amount_stars ELSE 0 END),0),
+                   COALESCE(SUM(CASE WHEN state='paid' THEN amount_stars ELSE 0 END),0)
+            FROM owner_earnings WHERE owner_id=@user
+            """);
+        cmd.Parameters.Add(new MySqlParameter("@user", userId));
+        await using var r = await cmd.ExecuteReaderAsync(ct);
+        if (!await r.ReadAsync(ct)) return (0, 0, 0);
+        return (r.GetInt64(0), r.GetInt64(1), r.GetInt64(2));
     }
 
     public ValueTask DisposeAsync() => _source.DisposeAsync();

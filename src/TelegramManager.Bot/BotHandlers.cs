@@ -126,6 +126,7 @@ public sealed class BotHandlers(Database database)
         new[] { InlineKeyboardButton.WithCallbackData("📺 Управление каналами", "channels") },
         new[] { InlineKeyboardButton.WithCallbackData("➕ Подключить канал", "connect") },
         new[] { InlineKeyboardButton.WithCallbackData("📥 Входящие заявки", "incoming") },
+        new[] { InlineKeyboardButton.WithCallbackData("💰 Доходы", "owner_earnings") },
         new[] { InlineKeyboardButton.WithCallbackData("⬅️ Главное меню", "home") }
     });
     private static InlineKeyboardMarkup BuyerHome() => new(new[]
@@ -290,6 +291,20 @@ public sealed class BotHandlers(Database database)
                     new[] { InlineKeyboardButton.WithCallbackData("⬅️ Главное меню", "home") }
                 }), cancellationToken: ct);
                 break;
+            case "subscription_status":
+                var subscriptionUntil = await database.GetSubscriptionUntilAsync(actor.Id, ct);
+                await bot.EditMessageText(origin.Chat.Id, origin.MessageId,
+                    subscriptionUntil is { } until && until > DateTime.UtcNow
+                        ? $"⭐ Подписка активна до {until.Add(DisplayOffset):dd.MM.yyyy HH:mm} (UTC+3)."
+                        : "⭐ Подписка не активна. Оплата Stars появится после настройки тарифа.",
+                    replyMarkup: Back(), cancellationToken: ct);
+                break;
+            case "owner_earnings":
+                var earnings = await database.GetOwnerEarningsAsync(actor.Id, ct);
+                await bot.EditMessageText(origin.Chat.Id, origin.MessageId,
+                    $"💰 Доходы (Stars)\nОжидают: {earnings.Pending}\nДоступны: {earnings.Available}\nВыплачены: {earnings.Paid}\n\nЭто внутренний учёт. Автоматические выплаты ещё не подключены.",
+                    replyMarkup: Back(), cancellationToken: ct);
+                break;
             case "clock":
                 var dbNow = await database.GetDatabaseUtcAsync(ct);
                 await bot.SendMessage(origin.Chat.Id, $"🕒 Время (UTC+3): {dbNow.Add(DisplayOffset):dd.MM.yyyy HH:mm:ss}\nВремя базы (UTC): {dbNow:dd.MM.yyyy HH:mm:ss}\nЕсли время заявки позже этих значений, публикация ещё не наступила.", cancellationToken: ct);
@@ -298,6 +313,7 @@ public sealed class BotHandlers(Database database)
                 await bot.EditMessageText(origin.Chat.Id, origin.MessageId, "⚙️ Настройки профиля", replyMarkup: new InlineKeyboardMarkup(new[]
                 {
                     new[] { InlineKeyboardButton.WithCallbackData("🕒 Текущее время", "clock") },
+                    new[] { InlineKeyboardButton.WithCallbackData("⭐ Подписка", "subscription_status") },
                     new[] { InlineKeyboardButton.WithCallbackData("⬅️ Назад", "home") }
                 }), cancellationToken: ct);
                 break;
