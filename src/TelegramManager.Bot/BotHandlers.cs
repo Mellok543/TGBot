@@ -66,7 +66,18 @@ public sealed class BotHandlers(Database database)
         var ad = await database.GetAdRequestAsync(requestId, ct);
         if (ad is null || (ad.Value.Owner != userId && ad.Value.Advertiser != userId)) return;
         var a = ad.Value;
-        await bot.SendMessage(chatId, $"Заявка #{a.Id} | {a.Channel}\nСтатус: {a.Status}\nЦена: {a.Price:0.##} ₽\nТип: {a.Type}\n{a.Text}", cancellationToken: ct);
+        var detail = await database.GetAdOrderDetailsAsync(a.Id, userId, ct);
+        var detailsText = detail is { } info
+            ? $"\nСоздан: {info.Created.Add(DisplayOffset):dd.MM.yyyy HH:mm} (UTC+3)" +
+              $"\nДата публикации: {(info.Scheduled is null ? "не выбрана" : info.Scheduled.Value.Add(DisplayOffset).ToString("dd.MM.yyyy HH:mm"))}" +
+              $"\nСрок: {(info.DurationHours is null ? "не установлен" : $"{info.DurationHours} ч")}" +
+              $"\nОплата: {info.Payment}{(info.Test ? " (тест, без списания)" : "")}" +
+              $"\nВыплата: {info.Payout}" +
+              $"\nОпубликовано: {(info.Published is null ? "нет" : info.Published.Value.Add(DisplayOffset).ToString("dd.MM.yyyy HH:mm"))}" +
+              (info.Dispute is null ? "" : $"\nСпор: {info.Dispute}") +
+              (info.Resolution is null ? "" : $"\nРешение: {info.Resolution}")
+            : "";
+        await bot.SendMessage(chatId, $"📋 Заказ #{a.Id} | {a.Channel}\nСтатус: {a.Status}\nЦена: {a.Price:0.##} ₽\nТип: {a.Type}\n{a.Text}{detailsText}", cancellationToken: ct);
         var status = await database.GetScheduleStatusAsync(a.Id, userId, ct);
         if (status is { } s && (s.Scheduled is not null || s.Error is not null || s.MessageId is not null))
             await bot.SendMessage(chatId, $"🕒 Публикация (UTC+3): {s.Scheduled?.Add(DisplayOffset):yyyy-MM-dd HH:mm}\nСтатус: {s.Status}\nОшибка: {s.Error ?? "нет"}\nID сообщения: {s.MessageId?.ToString() ?? "нет"}", cancellationToken: ct);
