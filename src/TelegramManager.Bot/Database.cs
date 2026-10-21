@@ -238,7 +238,7 @@ public sealed class Database(string connectionString) : IAsyncDisposable
     public async Task<List<(long Id, string Title, decimal Price, string Description, string Formats)>> GetCatalogAsync(CancellationToken ct)
     {
         await using var cmd = _source.CreateCommand("""
-            SELECT telegram_id, title, ad_price_rub, COALESCE(ad_description,''), ad_formats
+            SELECT c.telegram_id, c.title, c.ad_price_rub, COALESCE(c.ad_description,''), c.ad_formats
             FROM channels c JOIN users u ON u.telegram_id=c.connected_by WHERE c.is_listed=TRUE AND (u.subscription_until>UTC_TIMESTAMP() OR u.created_at>UTC_TIMESTAMP()-INTERVAL 30 DAY) ORDER BY c.connected_at DESC LIMIT 50
             """);
         await using var reader = await cmd.ExecuteReaderAsync(ct);
@@ -261,7 +261,7 @@ public sealed class Database(string connectionString) : IAsyncDisposable
     public async Task<List<(long Id, string Title, decimal Price)>> GetCategoryChannelsAsync(string category, CancellationToken ct)
     {
         await using var cmd = _source.CreateCommand("""
-            SELECT telegram_id, title, ad_price_rub FROM channels c JOIN users u ON u.telegram_id=c.connected_by
+            SELECT c.telegram_id, c.title, c.ad_price_rub FROM channels c JOIN users u ON u.telegram_id=c.connected_by
             WHERE c.is_listed=TRUE AND c.category=@category AND (u.subscription_until>UTC_TIMESTAMP() OR u.created_at>UTC_TIMESTAMP()-INTERVAL 30 DAY) ORDER BY c.connected_at DESC LIMIT 50
             """);
         cmd.Parameters.Add(new MySqlParameter("@category", category));
@@ -277,7 +277,7 @@ public sealed class Database(string connectionString) : IAsyncDisposable
         await using var connection = await _source.OpenConnectionAsync(ct);
         await using var cmd = new MySqlCommand("""
             INSERT INTO ad_requests (channel_id, advertiser_id, owner_id, content_type, content_text, media_file_id, price_rub, status)
-            SELECT telegram_id, @advertiser, connected_by, @type, @text, @file, ad_price_rub, 'Draft'
+            SELECT c.telegram_id, @advertiser, c.connected_by, @type, @text, @file, c.ad_price_rub, 'Draft'
             FROM channels c JOIN users u ON u.telegram_id=c.connected_by WHERE c.telegram_id=@channel AND c.connected_by<>@advertiser AND c.is_listed=TRUE AND (u.subscription_until>UTC_TIMESTAMP() OR u.created_at>UTC_TIMESTAMP()-INTERVAL 30 DAY)
             """, connection);
         cmd.Parameters.Add(new MySqlParameter("@advertiser", advertiserId));
