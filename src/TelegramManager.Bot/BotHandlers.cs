@@ -84,8 +84,11 @@ public sealed class BotHandlers(Database database)
         if ((a.Owner == userId || a.Advertiser == userId) && a.Status is "Published" or "Deleted" or "DeleteFailed")
             await bot.SendMessage(chatId, "⚖️ Обнаружили нарушение условий размещения? Откройте спор. Выплата будет заблокирована до проверки.",
                 replyMarkup: new InlineKeyboardMarkup(new[] { new[] { InlineKeyboardButton.WithCallbackData("⚖️ Открыть спор", $"dispute:{a.Id}") } }), cancellationToken: ct);
+        if (a.Advertiser == userId && a.Status == "AwaitingPayment")
+            await bot.SendMessage(chatId, $"💳 Заказ #{a.Id}: к оплате {a.Price:0.##} ₽. Реальная оплата пока недоступна. Тестовая оплата разрешена только тестовым аккаунтам.",
+                replyMarkup: new InlineKeyboardMarkup(new[] { new[] { InlineKeyboardButton.WithCallbackData("🧪 Тестовая оплата (без списания)", $"testpay:{a.Id}") } }), cancellationToken: ct);
         if (a.Owner == userId && a.Status == "Pending")
-            await bot.SendMessage(chatId, "Подтвердите заявку и получение оплаты — реклама автоматически выйдет в указанное время.", replyMarkup: new InlineKeyboardMarkup(new[]
+            await bot.SendMessage(chatId, "Подтвердите размещение. Рекламодатель затем должен оплатить заказ; подтверждение не считается оплатой.", replyMarkup: new InlineKeyboardMarkup(new[]
             {
                 new[] { InlineKeyboardButton.WithCallbackData("✅ Подтвердить размещение", $"confirm:0:{a.Id}") },
                 new[] { InlineKeyboardButton.WithCallbackData("❌ Отклонить", $"decision:Rejected:{a.Id}") }
@@ -658,10 +661,10 @@ public sealed class BotHandlers(Database database)
                 if (confirmParts.Length != 3 || !long.TryParse(confirmParts[2], out var confirmId) || !int.TryParse(confirmParts[1], out var hours) || hours != 0) break;
                 if (await database.ConfirmAsync(confirmId, actor.Id, null, ct))
                     {
-                    await bot.EditMessageText(origin.Chat.Id, origin.MessageId, $"Заявка #{confirmId}: оплата подтверждена, публикация запланирована.", cancellationToken: ct);
+                    await bot.EditMessageText(origin.Chat.Id, origin.MessageId, $"Заявка #{confirmId}: размещение согласовано, ожидается оплата.", cancellationToken: ct);
                     var confirmed = await database.GetAdRequestAsync(confirmId, ct);
                     if (confirmed is not null)
-                        try { await bot.SendMessage(confirmed.Value.Advertiser, $"✅ Заявка #{confirmId}: владелец подтвердил оплату. Реклама поставлена в очередь автоматической публикации.", cancellationToken: ct); }
+                        try { await bot.SendMessage(confirmed.Value.Advertiser, $"✅ Заявка #{confirmId}: владелец согласовал размещение. Оплата ещё не получена. Откройте заказ, чтобы продолжить.", cancellationToken: ct); }
                         catch (Telegram.Bot.Exceptions.ApiRequestException ex) { Console.Error.WriteLine(ex.Message); }
                 }
                 else await bot.SendMessage(origin.Chat.Id, "Не удалось подтвердить: заявка недоступна или время уже занято.", cancellationToken: ct);
@@ -744,6 +747,17 @@ public sealed class BotHandlers(Database database)
                         catch (Telegram.Bot.Exceptions.ApiRequestException ex) { Console.Error.WriteLine(ex.Message); }
                 }
                 else await bot.SendMessage(origin.Chat.Id, "Не удалось открыть спор: заказ недоступен или спор уже открыт.", cancellationToken: ct);
+                break;
+            case string testPaymentData when testPaymentData.StartsWith("testpay:") && long.TryParse(testPaymentData[8..], out var testPaymentOrderId):
+                if (await database.CompleteTestCheckoutAsync(testPaymentOrderId, actor.Id, ct))
+                {
+                    await bot.SendMessage(origin.Chat.Id, $"🧪 Заказ #{testPaymentOrderId}: тестовая оплата подтверждена. Реальные деньги не списаны. Публикация запланирована.", cancellationToken: ct);
+                    var testOrder = await database.GetAdRequestAsync(testPaymentOrderId, ct);
+                    if (testOrder is not null)
+                        try { await bot.SendMessage(testOrder.Value.Owner, $"🧪 Заказ #{testPaymentOrderId} оплачен в тестовом режиме (без денег).", cancellationToken: ct); }
+                        catch (Telegram.Bot.Exceptions.ApiRequestException ex) { Console.Error.WriteLine(ex.Message); }
+                }
+                else await bot.SendMessage(origin.Chat.Id, "Тестовая оплата недоступна: проверьте статус заказа, время публикации и разрешение тестового аккаунта.", cancellationToken: ct);
                 break;
             case string adData when adData.StartsWith("ad:") && long.TryParse(adData[3..], out var adId):
                 await ShowAdAsync(bot, origin.Chat.Id, actor.Id, adId, ct);
