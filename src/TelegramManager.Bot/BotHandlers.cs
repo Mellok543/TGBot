@@ -77,10 +77,19 @@ public sealed class BotHandlers(Database database)
     }
 
 
+    private static readonly (string Key, string Name)[] Categories =
+    {
+        ("news", "📰 Новости"), ("tech", "💻 Технологии"), ("games", "🎮 Игры"),
+        ("business", "💼 Бизнес"), ("education", "📚 Образование"),
+        ("entertainment", "🎭 Развлечения"), ("lifestyle", "🌿 Образ жизни"),
+        ("sport", "⚽ Спорт"), ("other", "📦 Другое")
+    };
+
     private static InlineKeyboardMarkup SettingsKeyboard(long id) => new(new[]
     {
         new[] { InlineKeyboardButton.WithCallbackData("💰 Цена", $"edit:price:{id}"), InlineKeyboardButton.WithCallbackData("📝 Описание", $"edit:description:{id}") },
         new[] { InlineKeyboardButton.WithCallbackData("📦 Форматы", $"edit:formats:{id}") },
+        new[] { InlineKeyboardButton.WithCallbackData("🏷 Категория", $"setcategory:{id}") },
         new[] { InlineKeyboardButton.WithCallbackData("🌐 В каталоге: вкл/выкл", $"listing:{id}") },
         new[] { InlineKeyboardButton.WithCallbackData("⬅️ Мои каналы", "channels") }
     });
@@ -418,10 +427,29 @@ public sealed class BotHandlers(Database database)
                 else await bot.SendMessage(origin.Chat.Id, "Не удалось подтвердить: заявка недоступна или время уже занято.", cancellationToken: ct);
                 break;
             case "catalog":
-                var catalog = await database.GetCatalogAsync(ct);
-                var catalogRows = catalog.Select(x => new[] { InlineKeyboardButton.WithCallbackData($"{x.Title} · {x.Price:0.##} ₽", $"offer:{x.Id}") }).ToList();
-                catalogRows.Add(new[] { InlineKeyboardButton.WithCallbackData("⬅️ Назад", "home") });
-                await bot.EditMessageText(origin.Chat.Id, origin.MessageId, catalog.Count == 0 ? "В каталоге пока нет каналов." : "📣 Каталог каналов (до 50):", replyMarkup: new InlineKeyboardMarkup(catalogRows), cancellationToken: ct);
+                var categoryRows = Categories.Select(x => new[] { InlineKeyboardButton.WithCallbackData(x.Name, $"browsecategory:{x.Key}") }).ToList();
+                categoryRows.Add(new[] { InlineKeyboardButton.WithCallbackData("⬅️ Назад", "home") });
+                await bot.EditMessageText(origin.Chat.Id, origin.MessageId, "📣 Выберите категорию каналов:", replyMarkup: new InlineKeyboardMarkup(categoryRows), cancellationToken: ct);
+                break;
+            case string categoryData when categoryData.StartsWith("browsecategory:"):
+                var browseKey = categoryData["browsecategory:".Length..];
+                if (!Categories.Any(x => x.Key == browseKey)) break;
+                var categoryChannels = await database.GetCategoryChannelsAsync(browseKey, ct);
+                var categoryChannelRows = categoryChannels.Select(x => new[] { InlineKeyboardButton.WithCallbackData($"📺 {x.Title} · {x.Price:0.##} ₽", $"offer:{x.Id}") }).ToList();
+                categoryChannelRows.Add(new[] { InlineKeyboardButton.WithCallbackData("⬅️ Категории", "catalog") });
+                await bot.EditMessageText(origin.Chat.Id, origin.MessageId, categoryChannels.Count == 0 ? "В этой категории пока нет каналов." : $"📣 {Categories.First(x => x.Key == browseKey).Name}:", replyMarkup: new InlineKeyboardMarkup(categoryChannelRows), cancellationToken: ct);
+                break;
+            case string setCategoryData when setCategoryData.StartsWith("setcategory:") && long.TryParse(setCategoryData["setcategory:".Length..], out var categoryChannelId):
+                if (await database.GetChannelSettingsAsync(categoryChannelId, actor.Id, ct) is null) break;
+                var chooseCategoryRows = Categories.Select(x => new[] { InlineKeyboardButton.WithCallbackData(x.Name, $"savecategory:{categoryChannelId}:{x.Key}") }).ToList();
+                chooseCategoryRows.Add(new[] { InlineKeyboardButton.WithCallbackData("⬅️ Назад", $"settings:{categoryChannelId}") });
+                await bot.EditMessageText(origin.Chat.Id, origin.MessageId, "🏷 Выберите категорию вашего канала:", replyMarkup: new InlineKeyboardMarkup(chooseCategoryRows), cancellationToken: ct);
+                break;
+            case string saveCategoryData when saveCategoryData.StartsWith("savecategory:"):
+                var saveParts = data.Split(':');
+                if (saveParts.Length != 3 || !long.TryParse(saveParts[1], out var saveChannelId)) break;
+                if (!await database.SetChannelCategoryAsync(saveChannelId, actor.Id, saveParts[2], ct)) break;
+                await ShowSettingsAsync(bot, origin.Chat.Id, origin.MessageId, actor.Id, saveChannelId, ct);
                 break;
             case "incoming":
             case "outgoing":
