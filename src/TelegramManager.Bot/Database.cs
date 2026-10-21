@@ -582,5 +582,51 @@ public sealed class Database(string connectionString) : IAsyncDisposable
         return (r.GetInt64(0), r.GetInt64(1), r.GetInt64(2));
     }
 
+    public async Task<(long Bought, long Sold, long Published, long Channels, decimal BookedRub, long EarnedStars)> GetProfileSummaryAsync(long userId, CancellationToken ct)
+    {
+        await using var cmd = _source.CreateCommand("""
+            SELECT
+              (SELECT COUNT(*) FROM ad_requests WHERE advertiser_id=@user AND status<>'Draft'),
+              (SELECT COUNT(*) FROM ad_requests WHERE owner_id=@user AND status IN ('Scheduled','Publishing','Published','Deleted')),
+              (SELECT COUNT(*) FROM ad_requests WHERE owner_id=@user AND published_at IS NOT NULL),
+              (SELECT COUNT(*) FROM channels WHERE connected_by=@user),
+              (SELECT COALESCE(SUM(price_rub),0) FROM ad_requests WHERE owner_id=@user AND status IN ('Scheduled','Publishing','Published','Deleted')),
+              (SELECT COALESCE(SUM(amount_stars),0) FROM owner_earnings WHERE owner_id=@user AND state IN ('available','paid'))
+            """);
+        cmd.Parameters.Add(new MySqlParameter("@user", userId));
+        await using var r = await cmd.ExecuteReaderAsync(ct);
+        if (!await r.ReadAsync(ct)) return (0,0,0,0,0,0);
+        return (r.GetInt64(0),r.GetInt64(1),r.GetInt64(2),r.GetInt64(3),r.GetDecimal(4),r.GetInt64(5));
+    }
+
+    public async Task<List<(string Channel, long Orders, decimal BookedRub, long EarnedStars)>> GetChannelAnalyticsAsync(long userId, CancellationToken ct)
+    {
+        await using var cmd = _source.CreateCommand("""
+            SELECT c.title,
+                (SELECT COUNT(*) FROM ad_requests a WHERE a.channel_id=c.telegram_id AND a.status IN ('Scheduled','Publishing','Published','Deleted')),
+                (SELECT COALESCE(SUM(a.price_rub),0) FROM ad_requests a WHERE a.channel_id=c.telegram_id AND a.status IN ('Scheduled','Publishing','Published','Deleted')),
+                (SELECT COALESCE(SUM(e.amount_stars),0) FROM owner_earnings e JOIN ad_requests a ON a.id=e.order_id
+                 WHERE a.channel_id=c.telegram_id AND e.state IN ('available','paid'))
+            FROM channels c WHERE c.connected_by=@user ORDER BY c.title LIMIT 10
+            """);
+        cmd.Parameters.Add(new MySqlParameter("@user", userId));
+        await using var r = await cmd.ExecuteReaderAsync(ct);
+        var rows = new List<(string, long, decimal, long)>();
+        while (await r.ReadAsync(ct)) rows.Add((r.GetString(0),r.GetInt64(1),r.GetDecimal(2),r.GetInt64(3)));
+        return rows;
+    }
+
+    public async Task<(long Bought, decimal BookedRub)> GetBuyerAnalyticsAsync(long userId, CancellationToken ct)
+    {
+        await using var cmd = _source.CreateCommand("""
+            SELECT COUNT(*),COALESCE(SUM(price_rub),0) FROM ad_requests
+            WHERE advertiser_id=@user AND status IN ('Scheduled','Publishing','Published','Deleted')
+            """);
+        cmd.Parameters.Add(new MySqlParameter("@user", userId));
+        await using var r = await cmd.ExecuteReaderAsync(ct);
+        if (!await r.ReadAsync(ct)) return (0,0);
+        return (r.GetInt64(0),r.GetDecimal(1));
+    }
+
     public ValueTask DisposeAsync() => _source.DisposeAsync();
 }
