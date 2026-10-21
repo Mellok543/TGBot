@@ -398,12 +398,35 @@ public sealed class BotHandlers(Database database)
                 return;
             }
             var action = data["admin:".Length..];
-            if (action == "disputes")
+            if (action == "back")
+                await bot.EditMessageText(origin.Chat.Id, origin.MessageId, "Администрирование", replyMarkup: AdminMenu(), cancellationToken: ct);
+            else if (action.StartsWith("dispute:") && long.TryParse(action[8..], out var reviewId))
+            {
+                await bot.SendMessage(origin.Chat.Id, $"⚖️ Решение по спору #{reviewId}. Решение только фиксируется, денежные операции не выполняются.",
+                    replyMarkup: new InlineKeyboardMarkup(new[]
+                    {
+                        new[] { InlineKeyboardButton.WithCallbackData("↩️ Рекомендовать возврат", $"admin:resolve:refund:{reviewId}") },
+                        new[] { InlineKeyboardButton.WithCallbackData("✅ Рекомендовать выплату", $"admin:resolve:payout:{reviewId}") }
+                    }), cancellationToken: ct);
+            }
+            else if (action.StartsWith("resolve:"))
+            {
+                var parts = action.Split(':');
+                if (parts.Length == 3 && long.TryParse(parts[2], out var resolvedId))
+                {
+                    var decision = parts[1] switch { "refund" => "RefundRecommended", "payout" => "PayoutRecommended", _ => "" };
+                    var success = await database.ResolveDisputeAsync(resolvedId, actor.Id, decision, ct);
+                    await bot.SendMessage(origin.Chat.Id, success ? $"Решение по #{resolvedId} сохранено. Выплата остаётся заблокированной до обработки провайдером." : "Спор уже закрыт или решение недопустимо.", cancellationToken: ct);
+                }
+            }
+            else if (action == "disputes")
             {
                 var disputes = await database.GetOpenDisputesAsync(ct);
                 var details = disputes.Count == 0 ? "Открытых споров нет." :
                     "⚖️ Открытые споры:\n" + string.Join("\n", disputes.Select(x => $"#{x.Id} · {x.Channel} · {x.Reason}"));
-                await bot.EditMessageText(origin.Chat.Id, origin.MessageId, details, replyMarkup: AdminMenu(), cancellationToken: ct);
+                var rows = disputes.Select(x => new[] { InlineKeyboardButton.WithCallbackData($"⚖️ Рассмотреть #{x.Id}", $"admin:dispute:{x.Id}") }).ToList();
+                rows.Add(new[] { InlineKeyboardButton.WithCallbackData("⬅️ Админ-меню", "admin:back") });
+                await bot.EditMessageText(origin.Chat.Id, origin.MessageId, details, replyMarkup: new InlineKeyboardMarkup(rows), cancellationToken: ct);
             }
             else if (action == "users")
             {
