@@ -53,7 +53,13 @@ public sealed class Database(string connectionString) : IAsyncDisposable
                 FOREIGN KEY (advertiser_id) REFERENCES users(telegram_id),
                 FOREIGN KEY (owner_id) REFERENCES users(telegram_id)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
-            """
+            """,
+            "ALTER TABLE ad_requests ADD COLUMN IF NOT EXISTS scheduled_at DATETIME NULL",
+            "ALTER TABLE ad_requests ADD COLUMN IF NOT EXISTS paid_confirmed BOOLEAN NOT NULL DEFAULT FALSE",
+            "ALTER TABLE ad_requests ADD COLUMN IF NOT EXISTS published_message_id INT NULL",
+            "ALTER TABLE ad_requests ADD COLUMN IF NOT EXISTS published_at DATETIME NULL",
+            "ALTER TABLE ad_requests ADD COLUMN IF NOT EXISTS delete_after_hours INT NULL",
+            "ALTER TABLE ad_requests ADD COLUMN IF NOT EXISTS last_error VARCHAR(512) NULL"
         })
         {
             await using var cmd = new MySqlCommand(sql, connection);
@@ -232,6 +238,106 @@ public sealed class Database(string connectionString) : IAsyncDisposable
         while (await reader.ReadAsync(ct))
             list.Add((reader.GetInt64(0), reader.GetString(1), reader.GetString(2)));
         return list;
+    }
+
+
+    public async Task<bool> ProposeAsync(long id, long advertiser, DateTime at, CancellationToken ct)
+    {
+        await using var cmd = _source.CreateCommand("UPDATE ad_requests SET status='AwaitingConfirmation', scheduled_at=@at WHERE id=@id AND advertiser_id=@user AND status='Approved'");
+        cmd.Parameters.Add(new MySqlParameter("@at", at));
+        cmd.Parameters.Add(new MySqlParameter("@id", id));
+        cmd.Parameters.Add(new MySqlParameter("@user", advertiser));
+        return await cmd.ExecuteNonQueryAsync(ct) == 1;
+    }
+
+    public async Task<bool> ConfirmAsync(long id, long owner, int? hours, CancellationToken ct)
+    {
+        await using var connection = await _source.OpenConnectionAsync(ct);
+        await using var tx = await connection.BeginTransactionAsync(ct);
+        long channel;
+        DateTime at;
+        await using (var get = new MySqlCommand("SELECT channel_id, scheduled_at FROM ad_requests WHERE id=@id AND owner_id=@owner AND status='AwaitingConfirmation' FOR UPDATE", connection, tx))
+        {
+            get.Parameters.Add(new MySqlParameter("@id", id));
+            get.Parameters.Add(new MySqlParameter("@owner", owner));
+            await using var r = await get.ExecuteReaderAsync(ct);
+            if (!await r.ReadAsync(ct)) return false;
+            channel = r.GetInt64(0);
+            at = r.GetDateTime(1);
+        }
+        await using (var locked = new MySqlCommand("SELECT telegram_id FROM channels WHERE telegram_id=@channel FOR UPDATE", connection, tx))
+        {
+            locked.Parameters.Add(new MySqlParameter("@channel", channel));
+            await locked.ExecuteScalarAsync(ct);
+        }
+        await using (var check = new MySqlCommand("SELECT COUNT(*) FROM ad_requests WHERE channel_id=@channel AND id<>@id AND scheduled_at=@at AND status IN ('Scheduled','Publishing','Published')", connection, tx))
+        {
+            check.Parameters.Add(new MySqlParameter("@channel", channel));
+            check.Parameters.Add(new MySqlParameter("@id", id));
+            check.Parameters.Add(new MySqlParameter("@at", at));
+            if (Convert.ToInt64(await check.ExecuteScalarAsync(ct)) > 0) return false;
+        }
+        await using (var cmd = new MySqlCommand("UPDATE ad_requests SET status='Scheduled', paid_confirmed=TRUE, delete_after_hours=@hours WHERE id=@id AND owner_id=@owner AND status='AwaitingConfirmation'", connection, tx))
+        {
+            cmd.Parameters.Add(new MySqlParameter("@id", id));
+            cmd.Parameters.Add(new MySqlParameter("@owner", owner));
+            cmd.Parameters.Add(new MySqlParameter("@hours", (object?)hours ?? DBNull.Value));
+            if (await cmd.ExecuteNonQueryAsync(ct) != 1) return false;
+        }
+        await tx.CommitAsync(ct);
+        return true;
+    }
+
+    public async Task<List<long>> DueAsync(CancellationToken ct)
+    {
+        await using var cmd = _source.CreateCommand("SELECT id FROM ad_requests WHERE status='Scheduled' AND paid_confirmed=TRUE AND scheduled_at<=UTC_TIMESTAMP() LIMIT 20");
+        await using var r = await cmd.ExecuteReaderAsync(ct);
+        var ids = new List<long>();
+        while (await r.ReadAsync(ct)) ids.Add(r.GetInt64(0));
+        return ids;
+    }
+
+    public async Task<(long Channel, string Type, string? Text, string? File)?> ClaimAsync(long id, CancellationToken ct)
+    {
+        await using var connection = await _source.OpenConnectionAsync(ct);
+        await using (var cmd = new MySqlCommand("UPDATE ad_requests SET status='Publishing' WHERE id=@id AND status='Scheduled' AND paid_confirmed=TRUE AND scheduled_at<=UTC_TIMESTAMP()", connection))
+        {
+            cmd.Parameters.Add(new MySqlParameter("@id", id));
+            if (await cmd.ExecuteNonQueryAsync(ct) != 1) return null;
+        }
+        await using var get = new MySqlCommand("SELECT channel_id, content_type, content_text, media_file_id FROM ad_requests WHERE id=@id", connection);
+        get.Parameters.Add(new MySqlParameter("@id", id));
+        await using var r = await get.ExecuteReaderAsync(ct);
+        if (!await r.ReadAsync(ct)) return null;
+        return (r.GetInt64(0), r.GetString(1), r.IsDBNull(2) ? null : r.GetString(2), r.IsDBNull(3) ? null : r.GetString(3));
+    }
+
+    public async Task FinishPublishAsync(long id, int? messageId, string? error, CancellationToken ct)
+    {
+        await using var cmd = _source.CreateCommand("UPDATE ad_requests SET status=@status, published_message_id=@msg, published_at=IF(@msg IS NULL,NULL,UTC_TIMESTAMP()), last_error=@error WHERE id=@id AND status='Publishing'");
+        cmd.Parameters.Add(new MySqlParameter("@status", messageId is null ? "PublishFailed" : "Published"));
+        cmd.Parameters.Add(new MySqlParameter("@msg", (object?)messageId ?? DBNull.Value));
+        cmd.Parameters.Add(new MySqlParameter("@error", (object?)error ?? DBNull.Value));
+        cmd.Parameters.Add(new MySqlParameter("@id", id));
+        await cmd.ExecuteNonQueryAsync(ct);
+    }
+
+    public async Task<List<(long Id, long Channel, int Message)>> DueDeletionsAsync(CancellationToken ct)
+    {
+        await using var cmd = _source.CreateCommand("SELECT id, channel_id, published_message_id FROM ad_requests WHERE status='Published' AND delete_after_hours IS NOT NULL AND DATE_ADD(published_at, INTERVAL delete_after_hours HOUR)<=UTC_TIMESTAMP() LIMIT 20");
+        await using var r = await cmd.ExecuteReaderAsync(ct);
+        var list = new List<(long, long, int)>();
+        while (await r.ReadAsync(ct)) list.Add((r.GetInt64(0), r.GetInt64(1), r.GetInt32(2)));
+        return list;
+    }
+
+    public async Task FinishDeletionAsync(long id, string? error, CancellationToken ct)
+    {
+        await using var cmd = _source.CreateCommand("UPDATE ad_requests SET status=@status, last_error=@error WHERE id=@id AND status='Published'");
+        cmd.Parameters.Add(new MySqlParameter("@status", error is null ? "Deleted" : "DeleteFailed"));
+        cmd.Parameters.Add(new MySqlParameter("@error", (object?)error ?? DBNull.Value));
+        cmd.Parameters.Add(new MySqlParameter("@id", id));
+        await cmd.ExecuteNonQueryAsync(ct);
     }
 
     public ValueTask DisposeAsync() => _source.DisposeAsync();
