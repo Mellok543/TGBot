@@ -35,6 +35,7 @@ public sealed class Database(string connectionString) : IAsyncDisposable
             "ALTER TABLE channels ADD COLUMN IF NOT EXISTS ad_description TEXT NULL",
             "ALTER TABLE channels ADD COLUMN IF NOT EXISTS ad_formats VARCHAR(255) NOT NULL DEFAULT 'Пост'",
             "ALTER TABLE channels ADD COLUMN IF NOT EXISTS is_listed BOOLEAN NOT NULL DEFAULT FALSE",
+            "ALTER TABLE channels ADD COLUMN IF NOT EXISTS category VARCHAR(32) NOT NULL DEFAULT 'other'",
             """
             CREATE TABLE IF NOT EXISTS ad_requests (
                 id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
@@ -182,12 +183,36 @@ public sealed class Database(string connectionString) : IAsyncDisposable
         return items;
     }
 
+    public async Task<bool> SetChannelCategoryAsync(long channelId, long ownerId, string category, CancellationToken ct)
+    {
+        if (!new[] { "news", "tech", "games", "business", "education", "entertainment", "lifestyle", "sport", "other" }.Contains(category)) return false;
+        await using var cmd = _source.CreateCommand("UPDATE channels SET category=@category WHERE telegram_id=@id AND connected_by=@owner");
+        cmd.Parameters.Add(new MySqlParameter("@category", category));
+        cmd.Parameters.Add(new MySqlParameter("@id", channelId));
+        cmd.Parameters.Add(new MySqlParameter("@owner", ownerId));
+        return await cmd.ExecuteNonQueryAsync(ct) > 0;
+    }
+
+    public async Task<List<(long Id, string Title, decimal Price)>> GetCategoryChannelsAsync(string category, CancellationToken ct)
+    {
+        await using var cmd = _source.CreateCommand("""
+            SELECT telegram_id, title, ad_price_rub FROM channels
+            WHERE is_listed=TRUE AND category=@category ORDER BY connected_at DESC LIMIT 50
+            """);
+        cmd.Parameters.Add(new MySqlParameter("@category", category));
+        await using var r = await cmd.ExecuteReaderAsync(ct);
+        var items = new List<(long, string, decimal)>();
+        while (await r.ReadAsync(ct))
+            items.Add((r.GetInt64(0), r.GetString(1), r.GetDecimal(2)));
+        return items;
+    }
+
     public async Task<long?> CreateAdRequestAsync(long channelId, long advertiserId, string type, string? text, string? fileId, CancellationToken ct)
     {
         await using var connection = await _source.OpenConnectionAsync(ct);
         await using var cmd = new MySqlCommand("""
-            INSERT INTO ad_requests (channel_id, advertiser_id, owner_id, content_type, content_text, media_file_id, price_rub)
-            SELECT telegram_id, @advertiser, connected_by, @type, @text, @file, ad_price_rub
+            INSERT INTO ad_requests (channel_id, advertiser_id, owner_id, content_type, content_text, media_file_id, price_rub, status)
+            SELECT telegram_id, @advertiser, connected_by, @type, @text, @file, ad_price_rub, 'Draft'
             FROM channels WHERE telegram_id=@channel AND connected_by<>@advertiser
             """, connection);
         cmd.Parameters.Add(new MySqlParameter("@advertiser", advertiserId));
@@ -244,7 +269,7 @@ public sealed class Database(string connectionString) : IAsyncDisposable
 
     public async Task<bool> ProposeAsync(long id, long advertiser, DateTime at, CancellationToken ct)
     {
-        await using var cmd = _source.CreateCommand("UPDATE ad_requests SET status='AwaitingConfirmation', scheduled_at=@at WHERE id=@id AND advertiser_id=@user AND status='Approved'");
+        await using var cmd = _source.CreateCommand("UPDATE ad_requests SET status='Pending', scheduled_at=@at WHERE id=@id AND advertiser_id=@user AND status='Draft'");
         cmd.Parameters.Add(new MySqlParameter("@at", at));
         cmd.Parameters.Add(new MySqlParameter("@id", id));
         cmd.Parameters.Add(new MySqlParameter("@user", advertiser));
@@ -257,7 +282,7 @@ public sealed class Database(string connectionString) : IAsyncDisposable
         await using var tx = await connection.BeginTransactionAsync(ct);
         long channel;
         DateTime at;
-        await using (var get = new MySqlCommand("SELECT channel_id, scheduled_at FROM ad_requests WHERE id=@id AND owner_id=@owner AND status='AwaitingConfirmation' FOR UPDATE", connection, tx))
+        await using (var get = new MySqlCommand("SELECT channel_id, scheduled_at FROM ad_requests WHERE id=@id AND owner_id=@owner AND status='Pending' AND scheduled_at IS NOT NULL FOR UPDATE", connection, tx))
         {
             get.Parameters.Add(new MySqlParameter("@id", id));
             get.Parameters.Add(new MySqlParameter("@owner", owner));
@@ -271,14 +296,14 @@ public sealed class Database(string connectionString) : IAsyncDisposable
             locked.Parameters.Add(new MySqlParameter("@channel", channel));
             await locked.ExecuteScalarAsync(ct);
         }
-        await using (var check = new MySqlCommand("SELECT COUNT(*) FROM ad_requests WHERE channel_id=@channel AND id<>@id AND scheduled_at=@at AND status IN ('Scheduled','Publishing','Published')", connection, tx))
+        await using (var check = new MySqlCommand("SELECT COUNT(*) FROM ad_requests WHERE channel_id=@channel AND id<>@id AND scheduled_at=@at AND status IN ('Pending','Scheduled','Publishing','Published')", connection, tx))
         {
             check.Parameters.Add(new MySqlParameter("@channel", channel));
             check.Parameters.Add(new MySqlParameter("@id", id));
             check.Parameters.Add(new MySqlParameter("@at", at));
             if (Convert.ToInt64(await check.ExecuteScalarAsync(ct)) > 0) return false;
         }
-        await using (var cmd = new MySqlCommand("UPDATE ad_requests SET status='Scheduled', paid_confirmed=TRUE, delete_after_hours=@hours WHERE id=@id AND owner_id=@owner AND status='AwaitingConfirmation'", connection, tx))
+        await using (var cmd = new MySqlCommand("UPDATE ad_requests SET status='Scheduled', paid_confirmed=TRUE, delete_after_hours=@hours WHERE id=@id AND owner_id=@owner AND status='Pending' AND scheduled_at>UTC_TIMESTAMP()", connection, tx))
         {
             cmd.Parameters.Add(new MySqlParameter("@id", id));
             cmd.Parameters.Add(new MySqlParameter("@owner", owner));
@@ -420,7 +445,7 @@ public sealed class Database(string connectionString) : IAsyncDisposable
         await using var occupied = _source.CreateCommand("""
             SELECT scheduled_at FROM ad_requests
             WHERE channel_id=@channel AND scheduled_at>=@start AND scheduled_at<@end
-            AND status IN ('AwaitingConfirmation','Scheduled','Publishing','Published')
+            AND status IN ('Pending','Scheduled','Publishing','Published')
             """);
         occupied.Parameters.Add(new MySqlParameter("@channel", channel));
         occupied.Parameters.Add(new MySqlParameter("@start", start));
