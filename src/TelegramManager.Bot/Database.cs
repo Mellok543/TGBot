@@ -373,7 +373,8 @@ public sealed class Database(string connectionString) : IAsyncDisposable
     {
         await using var cmd = _source.CreateCommand("SELECT selected_role FROM users WHERE telegram_id=@user");
         cmd.Parameters.Add(new MySqlParameter("@user", user));
-        return (string?)await cmd.ExecuteScalarAsync(ct);
+        var value = await cmd.ExecuteScalarAsync(ct);
+        return value is null or DBNull ? null : Convert.ToString(value);
     }
 
     public async Task SetRoleAsync(long user, string role, CancellationToken ct)
@@ -398,6 +399,38 @@ public sealed class Database(string connectionString) : IAsyncDisposable
         var result = new List<(long, string, decimal)>();
         while (await r.ReadAsync(ct)) result.Add((r.GetInt64(0), r.GetString(1), r.GetDecimal(2)));
         return result;
+    }
+
+
+    public async Task<DateTime> GetDatabaseUtcAsync(CancellationToken ct)
+    {
+        await using var cmd = _source.CreateCommand("SELECT UTC_TIMESTAMP()");
+        return Convert.ToDateTime(await cmd.ExecuteScalarAsync(ct));
+    }
+
+    public async Task<DateTime?> FindNextFreeAsync(long requestId, DateTime startUtc, CancellationToken ct)
+    {
+        await using var cmd = _source.CreateCommand("""
+            SELECT r.channel_id FROM ad_requests r WHERE r.id=@id AND r.status='Approved'
+            """);
+        cmd.Parameters.Add(new MySqlParameter("@id", requestId));
+        var channel = await cmd.ExecuteScalarAsync(ct);
+        if (channel is null) return null;
+        var start = new DateTime(((startUtc.Ticks + TimeSpan.TicksPerMinute * 30 - 1) / (TimeSpan.TicksPerMinute * 30)) * (TimeSpan.TicksPerMinute * 30), DateTimeKind.Utc);
+        await using var occupied = _source.CreateCommand("""
+            SELECT scheduled_at FROM ad_requests
+            WHERE channel_id=@channel AND scheduled_at>=@start AND scheduled_at<@end
+            AND status IN ('AwaitingConfirmation','Scheduled','Publishing','Published')
+            """);
+        occupied.Parameters.Add(new MySqlParameter("@channel", channel));
+        occupied.Parameters.Add(new MySqlParameter("@start", start));
+        occupied.Parameters.Add(new MySqlParameter("@end", start.AddDays(30)));
+        var reserved = new HashSet<long>();
+        await using (var r = await occupied.ExecuteReaderAsync(ct))
+            while (await r.ReadAsync(ct)) reserved.Add(r.GetDateTime(0).Ticks);
+        for (var slot = start; slot < start.AddDays(30); slot = slot.AddMinutes(30))
+            if (!reserved.Contains(slot.Ticks)) return slot;
+        return null;
     }
 
     public ValueTask DisposeAsync() => _source.DisposeAsync();
