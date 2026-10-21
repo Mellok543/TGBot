@@ -82,14 +82,16 @@ public sealed class BotHandlers(Database database)
         new[] { InlineKeyboardButton.WithCallbackData("📺 Мои каналы", "channels") },
         new[] { InlineKeyboardButton.WithCallbackData("➕ Подключить канал", "connect") },
         new[] { InlineKeyboardButton.WithCallbackData("📥 Входящие заявки", "incoming") },
-        new[] { InlineKeyboardButton.WithCallbackData("🔁 Сменить роль", "home") }
+        new[] { InlineKeyboardButton.WithCallbackData("⚙️ Настройки", "profile_settings") }
     });
     private static InlineKeyboardMarkup BuyerHome() => new(new[]
     {
         new[] { InlineKeyboardButton.WithCallbackData("📤 Мои заявки", "outgoing") },
+        new[] { InlineKeyboardButton.WithCallbackData("⭐ Мои каналы", "buyer_channels") },
         new[] { InlineKeyboardButton.WithCallbackData("🔁 Сменить роль", "home") }
     });
     private static InlineKeyboardMarkup Home() => RolePicker();
+    private static InlineKeyboardMarkup ForRole(string? role) => role == "owner" ? OwnerHome() : role == "buyer" ? BuyerHome() : RolePicker();
     private static InlineKeyboardMarkup Back() => new(new[]
     {
         new[] { InlineKeyboardButton.WithCallbackData("⬅️ Главное меню", "home") }
@@ -107,12 +109,17 @@ public sealed class BotHandlers(Database database)
             if (message.From is not { } user || message.Chat.Type != ChatType.Private) return;
             await database.RegisterAsync(user.Id, user.Username, user.FirstName + (user.LastName is null ? "" : " " + user.LastName), ct);
 
+            if (message.Text?.StartsWith("/menu", StringComparison.Ordinal) == true)
+            {
+                await bot.SendMessage(message.Chat.Id, "Главное меню:", replyMarkup: ForRole(await database.GetRoleAsync(user.Id, ct)), cancellationToken: ct);
+                return;
+            }
             if (message.Text?.StartsWith("/cancel", StringComparison.Ordinal) == true)
             {
                 _pending.TryRemove(user.Id, out _);
                 _pendingAds.TryRemove(user.Id, out _);
                 _pendingSchedules.TryRemove(user.Id, out _);
-                await bot.SendMessage(message.Chat.Id, "Действие отменено.", replyMarkup: Home(), cancellationToken: ct);
+                await bot.SendMessage(message.Chat.Id, "Действие отменено.", replyMarkup: ForRole(await database.GetRoleAsync(user.Id, ct)), cancellationToken: ct);
                 return;
             }
 
@@ -230,7 +237,7 @@ public sealed class BotHandlers(Database database)
                 {
                     await ShowOfferAsync(bot, message.Chat.Id, null, directId, ct);
                 }
-                else await bot.SendMessage(message.Chat.Id, "Telegram Manager\nВыберите, как хотите использовать бота:", replyMarkup: RolePicker(), cancellationToken: ct);
+                else await bot.SendMessage(message.Chat.Id, "Telegram Manager\nГлавное меню:", replyMarkup: ForRole(await database.GetRoleAsync(user.Id, ct)), cancellationToken: ct);
             }
             else if (message.Text?.StartsWith("/cancel", StringComparison.Ordinal) == true)
                 await bot.SendMessage(message.Chat.Id, "Действие отменено.", replyMarkup: Home(), cancellationToken: ct);
@@ -249,13 +256,31 @@ public sealed class BotHandlers(Database database)
         switch (data)
         {
             case "owner_home":
+                await database.SetRoleAsync(actor.Id, "owner", ct);
                 await bot.EditMessageText(origin.Chat.Id, origin.MessageId, "📺 Панель владельца каналов", replyMarkup: OwnerHome(), cancellationToken: ct);
                 break;
             case "buyer_home":
+                await database.SetRoleAsync(actor.Id, "buyer", ct);
                 await bot.EditMessageText(origin.Chat.Id, origin.MessageId, "📣 Кабинет рекламодателя. Для заказа рекламы перейдите по ссылке, предоставленной каналом.", replyMarkup: BuyerHome(), cancellationToken: ct);
                 break;
             case "home":
-                await bot.EditMessageText(origin.Chat.Id, origin.MessageId, "Telegram Manager\nУправление вашими Telegram-каналами.", replyMarkup: Home(), cancellationToken: ct);
+                await bot.EditMessageText(origin.Chat.Id, origin.MessageId, "Telegram Manager", replyMarkup: ForRole(await database.GetRoleAsync(actor.Id, ct)), cancellationToken: ct);
+                break;
+            case "profile_settings":
+                await bot.EditMessageText(origin.Chat.Id, origin.MessageId, "⚙️ Настройки профиля", replyMarkup: new InlineKeyboardMarkup(new[]
+                {
+                    new[] { InlineKeyboardButton.WithCallbackData("🔁 Сменить роль", "change_role") },
+                    new[] { InlineKeyboardButton.WithCallbackData("⬅️ Назад", "home") }
+                }), cancellationToken: ct);
+                break;
+            case "change_role":
+                await bot.EditMessageText(origin.Chat.Id, origin.MessageId, "Выберите роль:", replyMarkup: RolePicker(), cancellationToken: ct);
+                break;
+            case "buyer_channels":
+                var previous = await database.GetPreviouslyOrderedChannelsAsync(actor.Id, ct);
+                var previousRows = previous.Select(x => new[] { InlineKeyboardButton.WithCallbackData($"📺 {x.Title} · {x.Price:0.##} ₽", $"offer:{x.Id}") }).ToList();
+                previousRows.Add(new[] { InlineKeyboardButton.WithCallbackData("⬅️ Назад", "buyer_home") });
+                await bot.EditMessageText(origin.Chat.Id, origin.MessageId, previous.Count == 0 ? "Вы ещё не заказывали рекламу. Откройте ссылку от владельца канала." : "⭐ Каналы, в которых вы заказывали рекламу:", replyMarkup: new InlineKeyboardMarkup(previousRows), cancellationToken: ct);
                 break;
             case "connect":
                 await bot.EditMessageText(origin.Chat.Id, origin.MessageId,
