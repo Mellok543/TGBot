@@ -29,7 +29,7 @@ public sealed class Database(string connectionString) : IAsyncDisposable
                 INDEX idx_channels_connected_by (connected_by),
                 CONSTRAINT fk_channels_connected_by FOREIGN KEY (connected_by) REFERENCES users(telegram_id)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
-            """
+            """,
             "ALTER TABLE channels ADD COLUMN IF NOT EXISTS ad_price_rub DECIMAL(10,2) NOT NULL DEFAULT 0",
             "ALTER TABLE channels ADD COLUMN IF NOT EXISTS ad_description TEXT NULL",
             "ALTER TABLE channels ADD COLUMN IF NOT EXISTS ad_formats VARCHAR(255) NOT NULL DEFAULT 'Пост'"
