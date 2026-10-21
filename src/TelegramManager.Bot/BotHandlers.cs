@@ -153,6 +153,35 @@ public sealed class BotHandlers(Database database)
             if (message.From is not { } user || message.Chat.Type != ChatType.Private) return;
             await database.RegisterAsync(user.Id, user.Username, user.FirstName + (user.LastName is null ? "" : " " + user.LastName), ct);
 
+            // ADMIN_TELEGRAM_ID must be a numeric Telegram user ID, never a username.
+            var adminConfigured = long.TryParse(Environment.GetEnvironmentVariable("ADMIN_TELEGRAM_ID"), out var adminId);
+            if (message.Text?.StartsWith("/grantpro ", StringComparison.OrdinalIgnoreCase) == true ||
+                message.Text?.StartsWith("/revokepro ", StringComparison.OrdinalIgnoreCase) == true)
+            {
+                if (!adminConfigured || user.Id != adminId)
+                {
+                    await bot.SendMessage(message.Chat.Id, "Недостаточно прав.", cancellationToken: ct);
+                    return;
+                }
+                var args = message.Text.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+                if (args[0].Equals("/grantpro", StringComparison.OrdinalIgnoreCase) &&
+                    args.Length == 3 && long.TryParse(args[1], out var target) &&
+                    int.TryParse(args[2], out var days) && days is >= 1 and <= 3650)
+                {
+                    var granted = await database.GrantProAsync(target, days, ct);
+                    await bot.SendMessage(message.Chat.Id, granted ? $"PRO выдан пользователю {target} на {days} дней." : "Пользователь не найден. Он должен сначала запустить бота.", cancellationToken: ct);
+                    return;
+                }
+                if (args[0].Equals("/revokepro", StringComparison.OrdinalIgnoreCase) &&
+                    args.Length == 2 && long.TryParse(args[1], out var revokeId))
+                {
+                    var revoked = await database.RevokeGrantedProAsync(revokeId, ct);
+                    await bot.SendMessage(message.Chat.Id, revoked ? "Выданный вручную PRO отозван. Оплаченная подписка не затронута." : "Пользователь не найден.", cancellationToken: ct);
+                    return;
+                }
+                await bot.SendMessage(message.Chat.Id, "Использование: /grantpro TELEGRAM_ID ДНИ или /revokepro TELEGRAM_ID", cancellationToken: ct);
+                return;
+            }
             if (message.Text?.StartsWith("/menu", StringComparison.Ordinal) == true)
             {
                 await bot.SendMessage(message.Chat.Id, "Главное меню:", replyMarkup: Home(), cancellationToken: ct);
