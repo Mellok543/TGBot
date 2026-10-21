@@ -44,11 +44,6 @@ public sealed class BotHandlers(Database database)
         try
         {
             await ShowAdAsync(bot, ad.Value.Owner, ad.Value.Owner, requestId, ct);
-            await bot.SendMessage(ad.Value.Owner, $"📅 Заявка #{requestId}: {utc.Add(DisplayOffset):dd.MM.yyyy HH:mm} (UTC+3). Проверьте материал и подтвердите оплату и размещение:", replyMarkup: new InlineKeyboardMarkup(new[]
-            {
-                new[] { InlineKeyboardButton.WithCallbackData("✅ Подтвердить размещение", $"confirm:0:{requestId}") },
-                new[] { InlineKeyboardButton.WithCallbackData("❌ Отклонить", $"decision:Rejected:{requestId}") }
-            }), cancellationToken: ct);
         }
         catch (Telegram.Bot.Exceptions.ApiRequestException ex) { Console.Error.WriteLine(ex); }
     }
@@ -167,24 +162,10 @@ public sealed class BotHandlers(Database database)
                 if (!DateTime.TryParseExact(input, "yyyy-MM-dd HH:mm", System.Globalization.CultureInfo.InvariantCulture,
                     System.Globalization.DateTimeStyles.None, out var at) || at.Add(-DisplayOffset) <= DateTime.UtcNow.AddMinutes(2) || at.Add(-DisplayOffset) > DateTime.UtcNow.AddDays(90))
                 {
-                    await bot.SendMessage(message.Chat.Id, "Формат: 2026-11-15 14:30 (UTC). Время от 2 минут до 90 дней вперёд.", cancellationToken: ct);
+                    await bot.SendMessage(message.Chat.Id, "Формат: 2026-11-15 14:30 (UTC+3). Время от 2 минут до 90 дней вперёд.", cancellationToken: ct);
                     return;
                 }
-                if (!await database.ProposeAsync(scheduleId, user.Id, at.Add(-DisplayOffset), ct))
-                {
-                    await bot.SendMessage(message.Chat.Id, "Заявка недоступна для планирования.", cancellationToken: ct);
-                    return;
-                }
-                await bot.SendMessage(message.Chat.Id, $"Время {at:yyyy-MM-dd HH:mm} (UTC+3) предложено владельцу.", cancellationToken: ct);
-                var scheduled = await database.GetAdRequestAsync(scheduleId, ct);
-                if (scheduled is not null)
-                    try { await bot.SendMessage(scheduled.Value.Owner, $"📅 Заявка #{scheduleId}: предложено {at:yyyy-MM-dd HH:mm} (UTC+3). Подтвердите оплату и срок размещения:", replyMarkup: new InlineKeyboardMarkup(new[]
-                    {
-                        new[] { InlineKeyboardButton.WithCallbackData("✅ Оплачено · оставить пост", $"confirm:0:{scheduleId}") },
-                        new[] { InlineKeyboardButton.WithCallbackData("✅ Оплачено · удалить через 24 ч", $"confirm:24:{scheduleId}") },
-                        new[] { InlineKeyboardButton.WithCallbackData("✅ Оплачено · удалить через 48 ч", $"confirm:48:{scheduleId}") }
-                    }), cancellationToken: ct); }
-                    catch (Telegram.Bot.Exceptions.ApiRequestException ex) { Console.Error.WriteLine(ex.Message); }
+                await ProposeBookingAsync(bot, message.Chat.Id, user.Id, scheduleId, at.Add(-DisplayOffset), ct);
                 return;
             }
             if (_pendingAds.TryRemove(user.Id, out var adChannelId))
