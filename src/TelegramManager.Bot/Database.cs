@@ -32,6 +32,7 @@ public sealed class Database(string connectionString) : IAsyncDisposable
             """,
             "ALTER TABLE users ADD COLUMN IF NOT EXISTS subscription_until DATETIME NULL",
             "ALTER TABLE users ADD COLUMN IF NOT EXISTS first_channel_at DATETIME NULL",
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS pro_granted_until DATETIME NULL",
             """
             CREATE TABLE IF NOT EXISTS star_payments (
                 telegram_payment_charge_id VARCHAR(255) PRIMARY KEY,
@@ -118,7 +119,7 @@ public sealed class Database(string connectionString) : IAsyncDisposable
         await using var connection = await _source.OpenConnectionAsync(ct);
         await using var tx = await connection.BeginTransactionAsync(ct);
         await using var access = new MySqlCommand("""
-            SELECT first_channel_at, subscription_until FROM users WHERE telegram_id=@user FOR UPDATE
+            SELECT first_channel_at, COALESCE(GREATEST(subscription_until,pro_granted_until),subscription_until,pro_granted_until) FROM users WHERE telegram_id=@user FOR UPDATE
             """, connection, tx);
         access.Parameters.Add(new MySqlParameter("@user", userId));
         DateTime created;
@@ -164,7 +165,7 @@ public sealed class Database(string connectionString) : IAsyncDisposable
 
     public async Task<(bool Pro, DateTime TrialEnds, DateTime? ProEnds, int Limit)> GetPlanAsync(long userId, CancellationToken ct)
     {
-        await using var cmd = _source.CreateCommand("SELECT first_channel_at, subscription_until FROM users WHERE telegram_id=@user");
+        await using var cmd = _source.CreateCommand("SELECT first_channel_at, COALESCE(GREATEST(subscription_until,pro_granted_until),subscription_until,pro_granted_until) FROM users WHERE telegram_id=@user");
         cmd.Parameters.Add(new MySqlParameter("@user", userId));
         await using var r = await cmd.ExecuteReaderAsync(ct);
         if (!await r.ReadAsync(ct)) throw new InvalidOperationException("Профиль не найден.");
@@ -231,7 +232,7 @@ public sealed class Database(string connectionString) : IAsyncDisposable
 
     public async Task<bool> SetChannelListedAsync(long id, long owner, bool listed, CancellationToken ct)
     {
-        await using var cmd = _source.CreateCommand("UPDATE channels c JOIN users u ON u.telegram_id=c.connected_by SET c.is_listed=@listed WHERE c.telegram_id=@id AND c.connected_by=@owner AND (@listed=FALSE OR u.subscription_until>UTC_TIMESTAMP() OR (u.first_channel_at IS NULL OR u.first_channel_at>UTC_TIMESTAMP()-INTERVAL 30 DAY))");
+        await using var cmd = _source.CreateCommand("UPDATE channels c JOIN users u ON u.telegram_id=c.connected_by SET c.is_listed=@listed WHERE c.telegram_id=@id AND c.connected_by=@owner AND (@listed=FALSE OR (u.subscription_until>UTC_TIMESTAMP() OR u.pro_granted_until>UTC_TIMESTAMP()) OR (u.first_channel_at IS NULL OR u.first_channel_at>UTC_TIMESTAMP()-INTERVAL 30 DAY))");
         cmd.Parameters.Add(new MySqlParameter("@listed", listed));
         cmd.Parameters.Add(new MySqlParameter("@id", id));
         cmd.Parameters.Add(new MySqlParameter("@owner", owner));
@@ -250,7 +251,7 @@ public sealed class Database(string connectionString) : IAsyncDisposable
     {
         await using var cmd = _source.CreateCommand("""
             SELECT c.telegram_id, c.title, c.ad_price_rub, COALESCE(c.ad_description,''), c.ad_formats
-            FROM channels c JOIN users u ON u.telegram_id=c.connected_by WHERE c.is_listed=TRUE AND (u.subscription_until>UTC_TIMESTAMP() OR u.created_at>UTC_TIMESTAMP()-INTERVAL 30 DAY) ORDER BY c.connected_at DESC LIMIT 50
+            FROM channels c JOIN users u ON u.telegram_id=c.connected_by WHERE c.is_listed=TRUE AND ((u.subscription_until>UTC_TIMESTAMP() OR u.pro_granted_until>UTC_TIMESTAMP()) OR u.created_at>UTC_TIMESTAMP()-INTERVAL 30 DAY) ORDER BY c.connected_at DESC LIMIT 50
             """);
         await using var reader = await cmd.ExecuteReaderAsync(ct);
         var items = new List<(long, string, decimal, string, string)>();
@@ -273,7 +274,7 @@ public sealed class Database(string connectionString) : IAsyncDisposable
     {
         await using var cmd = _source.CreateCommand("""
             SELECT c.telegram_id, c.title, c.ad_price_rub FROM channels c JOIN users u ON u.telegram_id=c.connected_by
-            WHERE c.is_listed=TRUE AND c.category=@category AND (u.subscription_until>UTC_TIMESTAMP() OR u.created_at>UTC_TIMESTAMP()-INTERVAL 30 DAY) ORDER BY c.connected_at DESC LIMIT 50
+            WHERE c.is_listed=TRUE AND c.category=@category AND ((u.subscription_until>UTC_TIMESTAMP() OR u.pro_granted_until>UTC_TIMESTAMP()) OR u.created_at>UTC_TIMESTAMP()-INTERVAL 30 DAY) ORDER BY c.connected_at DESC LIMIT 50
             """);
         cmd.Parameters.Add(new MySqlParameter("@category", category));
         await using var r = await cmd.ExecuteReaderAsync(ct);
@@ -289,7 +290,7 @@ public sealed class Database(string connectionString) : IAsyncDisposable
         await using var cmd = new MySqlCommand("""
             INSERT INTO ad_requests (channel_id, advertiser_id, owner_id, content_type, content_text, media_file_id, price_rub, status)
             SELECT c.telegram_id, @advertiser, c.connected_by, @type, @text, @file, c.ad_price_rub, 'Draft'
-            FROM channels c JOIN users u ON u.telegram_id=c.connected_by WHERE c.telegram_id=@channel AND c.connected_by<>@advertiser AND c.is_listed=TRUE AND (u.subscription_until>UTC_TIMESTAMP() OR u.created_at>UTC_TIMESTAMP()-INTERVAL 30 DAY)
+            FROM channels c JOIN users u ON u.telegram_id=c.connected_by WHERE c.telegram_id=@channel AND c.connected_by<>@advertiser AND c.is_listed=TRUE AND ((u.subscription_until>UTC_TIMESTAMP() OR u.pro_granted_until>UTC_TIMESTAMP()) OR u.created_at>UTC_TIMESTAMP()-INTERVAL 30 DAY)
             """, connection);
         cmd.Parameters.Add(new MySqlParameter("@advertiser", advertiserId));
         cmd.Parameters.Add(new MySqlParameter("@channel", channelId));
@@ -626,6 +627,26 @@ public sealed class Database(string connectionString) : IAsyncDisposable
         await using var r = await cmd.ExecuteReaderAsync(ct);
         if (!await r.ReadAsync(ct)) return (0,0);
         return (r.GetInt64(0),r.GetDecimal(1));
+    }
+
+    public async Task<bool> GrantProAsync(long userId, int days, CancellationToken ct)
+    {
+        if (days < 1 || days > 3650) return false;
+        await using var cmd = _source.CreateCommand("""
+            UPDATE users SET pro_granted_until=DATE_ADD(
+                GREATEST(UTC_TIMESTAMP(), COALESCE(pro_granted_until,UTC_TIMESTAMP())),
+                INTERVAL @days DAY) WHERE telegram_id=@user
+            """);
+        cmd.Parameters.Add(new MySqlParameter("@days", days));
+        cmd.Parameters.Add(new MySqlParameter("@user", userId));
+        return await cmd.ExecuteNonQueryAsync(ct) == 1;
+    }
+
+    public async Task<bool> RevokeGrantedProAsync(long userId, CancellationToken ct)
+    {
+        await using var cmd = _source.CreateCommand("UPDATE users SET pro_granted_until=NULL WHERE telegram_id=@user");
+        cmd.Parameters.Add(new MySqlParameter("@user", userId));
+        return await cmd.ExecuteNonQueryAsync(ct) == 1;
     }
 
     public ValueTask DisposeAsync() => _source.DisposeAsync();
