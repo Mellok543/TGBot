@@ -31,7 +31,7 @@ public sealed class AdScheduler(Database database, ITelegramBotClient bot)
                         };
                         await database.FinishPublishAsync(id, posted.MessageId, null, ct);
                         Console.WriteLine($"Ad #{id} published successfully, message #{posted.MessageId}");
-                        await database.EnqueueOrderNotificationAsync(id, $"✅ Заказ #{id}: реклама опубликована.", ct);
+                        await TryQueueNotificationAsync(id, $"✅ Заказ #{id}: реклама опубликована.", ct);
                     }
                     catch (Exception ex) when (ex is not OperationCanceledException)
                     {
@@ -86,4 +86,14 @@ public sealed class AdScheduler(Database database, ITelegramBotClient bot)
             }
         }
     }
+    // Notification failures must not change the already-completed publication/deletion state.
+    private async Task TryQueueNotificationAsync(long orderId, string message, CancellationToken ct)
+    {
+        try { await database.EnqueueOrderNotificationAsync(orderId, message, ct); }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            Console.Error.WriteLine($"Unable to enqueue notification for order #{orderId}: {ex}");
+        }
+    }
+
 }
