@@ -547,7 +547,7 @@ public sealed class Database(string connectionString) : IAsyncDisposable
     // Records are idempotent by Telegram charge ID. Never credit funds from callbacks alone.
     public async Task<bool> RecordSubscriptionPaymentAsync(long userId, string chargeId, int stars, CancellationToken ct)
     {
-        if (string.IsNullOrWhiteSpace(chargeId) || stars <= 0) return false;
+        if (string.IsNullOrWhiteSpace(chargeId) || stars != 299) return false;
         await using var connection = await _source.OpenConnectionAsync(ct);
         await using var tx = await connection.BeginTransactionAsync(ct);
         await using var insert = new MySqlCommand("""
@@ -560,7 +560,7 @@ public sealed class Database(string connectionString) : IAsyncDisposable
         if (await insert.ExecuteNonQueryAsync(ct) != 1) { await tx.RollbackAsync(ct); return false; }
         await using var update = new MySqlCommand("""
             UPDATE users SET subscription_until=DATE_ADD(
-                UTC_TIMESTAMP(),
+                GREATEST(COALESCE(subscription_until, UTC_TIMESTAMP()), UTC_TIMESTAMP()),
                 INTERVAL 30 DAY
             ) WHERE telegram_id=@user
             """, connection, tx);
