@@ -101,6 +101,9 @@ public sealed class Database(string connectionString) : IAsyncDisposable
             "ALTER TABLE ad_requests ADD COLUMN IF NOT EXISTS disputed_at DATETIME NULL",
             "ALTER TABLE ad_requests ADD COLUMN IF NOT EXISTS placement_verified_at DATETIME NULL",
             "ALTER TABLE ad_requests ADD COLUMN IF NOT EXISTS payout_eligible_at DATETIME NULL",
+            "ALTER TABLE ad_requests ADD COLUMN IF NOT EXISTS dispute_resolution VARCHAR(32) NULL",
+            "ALTER TABLE ad_requests ADD COLUMN IF NOT EXISTS dispute_resolved_at DATETIME NULL",
+            "ALTER TABLE ad_requests ADD COLUMN IF NOT EXISTS dispute_resolved_by BIGINT NULL",
             "CREATE INDEX IF NOT EXISTS idx_ad_requests_payout ON ad_requests (payout_status, status)"
         })
         {
@@ -721,6 +724,23 @@ public sealed class Database(string connectionString) : IAsyncDisposable
         while (await reader.ReadAsync(ct))
             items.Add((reader.GetInt64(0), reader.GetString(1), reader.GetString(2)));
         return items;
+    }
+
+    // Admin decision is only a recorded recommendation; no funds are moved.
+    public async Task<bool> ResolveDisputeAsync(long orderId, long adminId, string decision, CancellationToken ct)
+    {
+        if (decision is not ("RefundRecommended" or "PayoutRecommended")) return false;
+        await using var cmd = _source.CreateCommand("""
+            UPDATE ad_requests
+            SET status='DisputeResolved', payout_status='Blocked',
+                dispute_resolution=@decision, dispute_resolved_at=UTC_TIMESTAMP(),
+                dispute_resolved_by=@admin
+            WHERE id=@id AND status='Disputed' AND payout_status='Blocked'
+            """);
+        cmd.Parameters.Add(new MySqlParameter("@id", orderId));
+        cmd.Parameters.Add(new MySqlParameter("@admin", adminId));
+        cmd.Parameters.Add(new MySqlParameter("@decision", decision));
+        return await cmd.ExecuteNonQueryAsync(ct) == 1;
     }
 
 }
