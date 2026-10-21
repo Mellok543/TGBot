@@ -78,6 +78,9 @@ public sealed class BotHandlers(Database database)
               (info.Resolution is null ? "" : $"\nРешение: {info.Resolution}")
             : "";
         await bot.SendMessage(chatId, $"📋 Заказ #{a.Id} | {a.Channel}\nСтатус: {a.Status}\nЦена: {a.Price:0.##} ₽\nТип: {a.Type}\n{a.Text}{detailsText}", cancellationToken: ct);
+        var history = await database.GetOrderHistoryAsync(a.Id, userId, ct);
+        if (history.Count > 0)
+            await bot.SendMessage(chatId, "📜 История заказа (UTC+3):\n" + string.Join("\n", history.Select(e => $"{e.At.Add(DisplayOffset):dd.MM HH:mm} · {e.Event}" + (e.Details is null ? "" : $" · {e.Details}"))), cancellationToken: ct);
         var status = await database.GetScheduleStatusAsync(a.Id, userId, ct);
         if (status is { } s && (s.Scheduled is not null || s.Error is not null || s.MessageId is not null))
             await bot.SendMessage(chatId, $"🕒 Публикация (UTC+3): {s.Scheduled?.Add(DisplayOffset):yyyy-MM-dd HH:mm}\nСтатус: {s.Status}\nОшибка: {s.Error ?? "нет"}\nID сообщения: {s.MessageId?.ToString() ?? "нет"}", cancellationToken: ct);
@@ -672,6 +675,7 @@ public sealed class BotHandlers(Database database)
                 if (confirmParts.Length != 3 || !long.TryParse(confirmParts[2], out var confirmId) || !int.TryParse(confirmParts[1], out var hours) || hours != 0) break;
                 if (await database.ConfirmAsync(confirmId, actor.Id, null, ct))
                     {
+                    await database.RecordOrderEventAsync(confirmId, actor.Id, "PlacementApproved", "Ожидается оплата", ct);
                     await bot.EditMessageText(origin.Chat.Id, origin.MessageId, $"Заявка #{confirmId}: размещение согласовано, ожидается оплата.", cancellationToken: ct);
                     var confirmed = await database.GetAdRequestAsync(confirmId, ct);
                     if (confirmed is not null)
@@ -762,6 +766,7 @@ public sealed class BotHandlers(Database database)
             case string testPaymentData when testPaymentData.StartsWith("testpay:") && long.TryParse(testPaymentData[8..], out var testPaymentOrderId):
                 if (await database.CompleteTestCheckoutAsync(testPaymentOrderId, actor.Id, ct))
                 {
+                    await database.RecordOrderEventAsync(testPaymentOrderId, actor.Id, "TestPayment", "Без списания денег", ct);
                     await bot.SendMessage(origin.Chat.Id, $"🧪 Заказ #{testPaymentOrderId}: тестовая оплата подтверждена. Реальные деньги не списаны. Публикация запланирована.", cancellationToken: ct);
                     var testOrder = await database.GetAdRequestAsync(testPaymentOrderId, ct);
                     if (testOrder is not null)
