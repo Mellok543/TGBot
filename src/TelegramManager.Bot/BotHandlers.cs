@@ -119,7 +119,12 @@ public sealed class BotHandlers(Database database)
                 await bot.SendMessage(message.Chat.Id, $"Время {at:yyyy-MM-dd HH:mm} UTC предложено владельцу.", cancellationToken: ct);
                 var scheduled = await database.GetAdRequestAsync(scheduleId, ct);
                 if (scheduled is not null)
-                    try { await bot.SendMessage(scheduled.Value.Owner, $"📅 Заявка #{scheduleId}: предложено {at:yyyy-MM-dd HH:mm} UTC. Откройте входящие заявки и подтвердите получение оплаты."); }
+                    try { await bot.SendMessage(scheduled.Value.Owner, $"📅 Заявка #{scheduleId}: предложено {at:yyyy-MM-dd HH:mm} UTC. Подтвердите оплату и срок размещения:", replyMarkup: new InlineKeyboardMarkup(new[]
+                    {
+                        new[] { InlineKeyboardButton.WithCallbackData("✅ Оплачено · оставить пост", $"confirm:0:{scheduleId}") },
+                        new[] { InlineKeyboardButton.WithCallbackData("✅ Оплачено · удалить через 24 ч", $"confirm:24:{scheduleId}") },
+                        new[] { InlineKeyboardButton.WithCallbackData("✅ Оплачено · удалить через 48 ч", $"confirm:48:{scheduleId}") }
+                    }), cancellationToken: ct); }
                     catch (Telegram.Bot.Exceptions.ApiRequestException ex) { Console.Error.WriteLine(ex.Message); }
                 return;
             }
@@ -292,7 +297,13 @@ public sealed class BotHandlers(Database database)
                 var confirmParts = data.Split(':');
                 if (confirmParts.Length != 3 || !long.TryParse(confirmParts[2], out var confirmId) || !int.TryParse(confirmParts[1], out var hours) || hours is not (0 or 24 or 48)) break;
                 if (await database.ConfirmAsync(confirmId, actor.Id, hours == 0 ? null : hours, ct))
+                    {
                     await bot.EditMessageText(origin.Chat.Id, origin.MessageId, $"Заявка #{confirmId}: оплата подтверждена, публикация запланирована.", cancellationToken: ct);
+                    var confirmed = await database.GetAdRequestAsync(confirmId, ct);
+                    if (confirmed is not null)
+                        try { await bot.SendMessage(confirmed.Value.Advertiser, $"✅ Заявка #{confirmId}: владелец подтвердил оплату. Реклама поставлена в очередь автоматической публикации.", cancellationToken: ct); }
+                        catch (Telegram.Bot.Exceptions.ApiRequestException ex) { Console.Error.WriteLine(ex.Message); }
+                }
                 else await bot.SendMessage(origin.Chat.Id, "Не удалось подтвердить: заявка недоступна или время уже занято.", cancellationToken: ct);
                 break;
             case "catalog":
@@ -347,7 +358,13 @@ public sealed class BotHandlers(Database database)
                     var decided = await database.GetAdRequestAsync(decisionId, ct);
                     if (decided is not null)
                     {
-                        try { await bot.SendMessage(decided.Value.Advertiser, $"Заявка #{decisionId} в «{decided.Value.Channel}»: {decided.Value.Status}.", cancellationToken: ct); }
+                        try
+                        {
+                            await bot.SendMessage(decided.Value.Advertiser, $"Заявка #{decisionId} в «{decided.Value.Channel}»: {decided.Value.Status}.", replyMarkup:
+                                decided.Value.Status == "Approved"
+                                    ? new InlineKeyboardMarkup(new[] { new[] { InlineKeyboardButton.WithCallbackData("📅 Выбрать время публикации", $"schedule:{decisionId}") } })
+                                    : null, cancellationToken: ct);
+                        }
                         catch (Telegram.Bot.Exceptions.ApiRequestException ex) { Console.Error.WriteLine($"Cannot notify advertiser: {ex.Message}"); }
                     }
                 }
