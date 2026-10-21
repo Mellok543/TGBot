@@ -31,11 +31,13 @@ public sealed class AdScheduler(Database database, ITelegramBotClient bot)
                         };
                         await database.FinishPublishAsync(id, posted.MessageId, null, ct);
                         Console.WriteLine($"Ad #{id} published successfully, message #{posted.MessageId}");
+                        await NotifyParticipantsAsync(id, $"✅ Заказ #{id}: реклама опубликована.", ct);
                     }
                     catch (Exception ex) when (ex is not OperationCanceledException)
                     {
                         Console.Error.WriteLine($"Publication #{id} failed: {ex}");
                         await database.FinishPublishAsync(id, null, ex.Message.Length > 500 ? ex.Message[..500] : ex.Message, ct);
+                        await NotifyParticipantsAsync(id, $"❌ Заказ #{id}: публикация не удалась. Проверьте заказ.", ct);
                     }
                 }
                 foreach (var (id, channel, message) in await database.DueDeletionsAsync(ct))
@@ -44,11 +46,13 @@ public sealed class AdScheduler(Database database, ITelegramBotClient bot)
                     {
                         await bot.DeleteMessage(channel, message, ct);
                         await database.FinishDeletionAsync(id, null, ct);
+                        await NotifyParticipantsAsync(id, $"🗑 Заказ #{id}: срок размещения завершён, сообщение удалено.", ct);
                     }
                     catch (Exception ex) when (ex is not OperationCanceledException)
                     {
                         Console.Error.WriteLine($"Deletion #{id} failed: {ex}");
                         await database.FinishDeletionAsync(id, ex.Message.Length > 500 ? ex.Message[..500] : ex.Message, ct);
+                        await NotifyParticipantsAsync(id, $"⚠️ Заказ #{id}: не удалось удалить публикацию. Требуется проверка.", ct);
                     }
                 }
             }
@@ -58,5 +62,13 @@ public sealed class AdScheduler(Database database, ITelegramBotClient bot)
             }
             if (!await timer.WaitForNextTickAsync(ct)) break;
         }
+    }
+    private async Task NotifyParticipantsAsync(long orderId, string message, CancellationToken ct)
+    {
+        var participants = await database.GetOrderParticipantsAsync(orderId, ct);
+        if (participants is null) return;
+        foreach (var recipient in new[] { participants.Value.Owner, participants.Value.Advertiser }.Distinct())
+            try { await bot.SendMessage(recipient, message, cancellationToken: ct); }
+            catch (Telegram.Bot.Exceptions.ApiRequestException ex) { Console.Error.WriteLine($"Notification to {recipient} failed: {ex.Message}"); }
     }
 }
