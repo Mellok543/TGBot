@@ -446,7 +446,8 @@ public sealed class Database(string connectionString) : IAsyncDisposable
         cmd.Parameters.Add(new MySqlParameter("@msg", (object?)messageId ?? DBNull.Value));
         cmd.Parameters.Add(new MySqlParameter("@error", (object?)error ?? DBNull.Value));
         cmd.Parameters.Add(new MySqlParameter("@id", id));
-        await cmd.ExecuteNonQueryAsync(ct);
+        if (await cmd.ExecuteNonQueryAsync(ct) == 1)
+            await RecordOrderEventAsync(id, null, messageId is null ? "PublishFailed" : "Published", error, ct);
     }
 
     public async Task<List<(long Id, long Channel, int Message)>> DueDeletionsAsync(CancellationToken ct)
