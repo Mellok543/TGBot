@@ -7,6 +7,7 @@ public sealed class AdScheduler(Database database, ITelegramBotClient bot)
 {
     public async Task RunAsync(CancellationToken ct)
     {
+        Console.WriteLine("AdScheduler started; checking scheduled posts every 15 seconds (UTC).");
         using var timer = new PeriodicTimer(TimeSpan.FromSeconds(15));
         while (!ct.IsCancellationRequested)
         {
@@ -16,6 +17,7 @@ public sealed class AdScheduler(Database database, ITelegramBotClient bot)
                 {
                     var ad = await database.ClaimAsync(id, ct);
                     if (ad is null) continue;
+                    Console.WriteLine($"Publishing ad #{id} to channel {ad.Value.Channel} at {DateTime.UtcNow:O}");
                     try
                     {
                         var a = ad.Value;
@@ -28,6 +30,7 @@ public sealed class AdScheduler(Database database, ITelegramBotClient bot)
                             _ => throw new InvalidOperationException("Unsupported ad format")
                         };
                         await database.FinishPublishAsync(id, posted.MessageId, null, ct);
+                        Console.WriteLine($"Ad #{id} published successfully, message #{posted.MessageId}");
                     }
                     catch (Exception ex) when (ex is not OperationCanceledException)
                     {

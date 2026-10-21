@@ -187,7 +187,7 @@ public sealed class Database(string connectionString) : IAsyncDisposable
         await using var cmd = new MySqlCommand("""
             INSERT INTO ad_requests (channel_id, advertiser_id, owner_id, content_type, content_text, media_file_id, price_rub)
             SELECT telegram_id, @advertiser, connected_by, @type, @text, @file, ad_price_rub
-            FROM channels WHERE telegram_id=@channel AND is_listed=TRUE AND connected_by<>@advertiser
+            FROM channels WHERE telegram_id=@channel AND connected_by<>@advertiser
             """, connection);
         cmd.Parameters.Add(new MySqlParameter("@advertiser", advertiserId));
         cmd.Parameters.Add(new MySqlParameter("@channel", channelId));
@@ -338,6 +338,33 @@ public sealed class Database(string connectionString) : IAsyncDisposable
         cmd.Parameters.Add(new MySqlParameter("@error", (object?)error ?? DBNull.Value));
         cmd.Parameters.Add(new MySqlParameter("@id", id));
         await cmd.ExecuteNonQueryAsync(ct);
+    }
+
+
+    public async Task<(long Id, string Title, decimal Price, string Description, string Formats)?> GetPublicChannelAsync(long id, CancellationToken ct)
+    {
+        await using var cmd = _source.CreateCommand("""
+            SELECT telegram_id, title, ad_price_rub, COALESCE(ad_description,''), ad_formats
+            FROM channels WHERE telegram_id=@id
+            """);
+        cmd.Parameters.Add(new MySqlParameter("@id", id));
+        await using var r = await cmd.ExecuteReaderAsync(ct);
+        if (!await r.ReadAsync(ct)) return null;
+        return (r.GetInt64(0), r.GetString(1), r.GetDecimal(2), r.GetString(3), r.GetString(4));
+    }
+
+    public async Task<(string Status, DateTime? Scheduled, string? Error, int? MessageId)?> GetScheduleStatusAsync(long id, long user, CancellationToken ct)
+    {
+        await using var cmd = _source.CreateCommand("""
+            SELECT status, scheduled_at, last_error, published_message_id FROM ad_requests
+            WHERE id=@id AND (owner_id=@user OR advertiser_id=@user)
+            """);
+        cmd.Parameters.Add(new MySqlParameter("@id", id));
+        cmd.Parameters.Add(new MySqlParameter("@user", user));
+        await using var r = await cmd.ExecuteReaderAsync(ct);
+        if (!await r.ReadAsync(ct)) return null;
+        return (r.GetString(0), r.IsDBNull(1) ? null : r.GetDateTime(1),
+            r.IsDBNull(2) ? null : r.GetString(2), r.IsDBNull(3) ? null : r.GetInt32(3));
     }
 
     public ValueTask DisposeAsync() => _source.DisposeAsync();
