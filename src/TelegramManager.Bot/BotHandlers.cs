@@ -8,11 +8,33 @@ namespace TelegramManager.Bot;
 public sealed class BotHandlers(Database database)
 {
     private readonly System.Collections.Concurrent.ConcurrentDictionary<long, (long ChannelId, string Field)> _pending = new();
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<long, long> _pendingAds = new();
+
+    private async Task ShowAdAsync(ITelegramBotClient bot, long chatId, long userId, long requestId, CancellationToken ct)
+    {
+        var ad = await database.GetAdRequestAsync(requestId, ct);
+        if (ad is null || (ad.Value.Owner != userId && ad.Value.Advertiser != userId)) return;
+        var a = ad.Value;
+        await bot.SendMessage(chatId, $"Заявка #{a.Id} | {a.Channel}\nСтатус: {a.Status}\nЦена: {a.Price:0.##} ₽\nТип: {a.Type}\n{a.Text}", cancellationToken: ct);
+        if (a.Type == "photo" && a.File is not null)
+            await bot.SendPhoto(chatId, InputFile.FromFileId(a.File), caption: a.Text, cancellationToken: ct);
+        else if (a.Type == "video" && a.File is not null)
+            await bot.SendVideo(chatId, InputFile.FromFileId(a.File), caption: a.Text, cancellationToken: ct);
+        else if (a.Type == "document" && a.File is not null)
+            await bot.SendDocument(chatId, InputFile.FromFileId(a.File), caption: a.Text, cancellationToken: ct);
+        if (a.Owner == userId && a.Status == "Pending")
+            await bot.SendMessage(chatId, "Решение по заявке:", replyMarkup: new InlineKeyboardMarkup(new[]
+            {
+                new[] { InlineKeyboardButton.WithCallbackData("✅ Одобрить", $"decision:Approved:{a.Id}"), InlineKeyboardButton.WithCallbackData("❌ Отклонить", $"decision:Rejected:{a.Id}") }
+            }), cancellationToken: ct);
+    }
+
 
     private static InlineKeyboardMarkup SettingsKeyboard(long id) => new(new[]
     {
         new[] { InlineKeyboardButton.WithCallbackData("💰 Цена", $"edit:price:{id}"), InlineKeyboardButton.WithCallbackData("📝 Описание", $"edit:description:{id}") },
         new[] { InlineKeyboardButton.WithCallbackData("📦 Форматы", $"edit:formats:{id}") },
+        new[] { InlineKeyboardButton.WithCallbackData("🌐 В каталоге: вкл/выкл", $"listing:{id}") },
         new[] { InlineKeyboardButton.WithCallbackData("⬅️ Мои каналы", "channels") }
     });
 
@@ -24,7 +46,8 @@ public sealed class BotHandlers(Database database)
             await bot.SendMessage(chatId, "Канал не найден или у вас нет доступа.", cancellationToken: ct);
             return;
         }
-        var text = $"⚙️ {settings.Value.Title}\n\n💰 Цена рекламы: {settings.Value.Price:0.##} ₽\n📝 Описание: {(string.IsNullOrWhiteSpace(settings.Value.Description) ? "Не задано" : settings.Value.Description)}\n📦 Форматы: {settings.Value.Formats}";
+        var listed = await database.IsChannelListedAsync(channelId, userId, ct);
+        var text = $"⚙️ {settings.Value.Title}\n\n💰 Цена рекламы: {settings.Value.Price:0.##} ₽\n📝 Описание: {(string.IsNullOrWhiteSpace(settings.Value.Description) ? "Не задано" : settings.Value.Description)}\n📦 Форматы: {settings.Value.Formats}\n🌐 Каталог: {(listed ? "Включён" : "Выключен")}";
         if (messageId is int id)
             await bot.EditMessageText(chatId, id, text, replyMarkup: SettingsKeyboard(channelId), cancellationToken: ct);
         else
@@ -35,7 +58,9 @@ public sealed class BotHandlers(Database database)
     {
         new[] { InlineKeyboardButton.WithCallbackData("📺 Мои каналы", "channels") },
         new[] { InlineKeyboardButton.WithCallbackData("➕ Подключить канал", "connect") },
-        new[] { InlineKeyboardButton.WithCallbackData("📣 Реклама", "ads") },
+        new[] { InlineKeyboardButton.WithCallbackData("📣 Каталог рекламы", "catalog") },
+        new[] { InlineKeyboardButton.WithCallbackData("📥 Входящие заявки", "incoming") },
+        new[] { InlineKeyboardButton.WithCallbackData("📤 Мои заявки", "outgoing") },
         new[] { InlineKeyboardButton.WithCallbackData("ℹ️ О сервисе", "about") }
     });
     private static InlineKeyboardMarkup Back() => new(new[]
@@ -58,7 +83,47 @@ public sealed class BotHandlers(Database database)
             if (message.Text?.StartsWith("/cancel", StringComparison.Ordinal) == true)
             {
                 _pending.TryRemove(user.Id, out _);
+                _pendingAds.TryRemove(user.Id, out _);
                 await bot.SendMessage(message.Chat.Id, "Действие отменено.", replyMarkup: Home(), cancellationToken: ct);
+                return;
+            }
+
+            if (_pendingAds.TryRemove(user.Id, out var adChannelId))
+            {
+                var type = message.Photo?.Length > 0 ? "photo" : message.Video is not null ? "video" : message.Document is not null ? "document" : message.Text is not null ? "text" : "";
+                var body = message.Caption ?? message.Text;
+                var file = type switch
+                {
+                    "photo" => message.Photo![^1].FileId,
+                    "video" => message.Video!.FileId,
+                    "document" => message.Document!.FileId,
+                    _ => null
+                };
+                if (type == "" || (type == "text" && string.IsNullOrWhiteSpace(body)) || (body?.Length ?? 0) > 1000)
+                {
+                    await bot.SendMessage(message.Chat.Id, "Поддерживаются текст, фото, видео или документ. Подпись — до 1000 символов. Попробуйте заказать снова.", cancellationToken: ct);
+                    return;
+                }
+                var requestId = await database.CreateAdRequestAsync(adChannelId, user.Id, type, body, file, ct);
+                if (requestId is null)
+                {
+                    await bot.SendMessage(message.Chat.Id, "Не удалось создать заявку: канал недоступен или принадлежит вам.", cancellationToken: ct);
+                    return;
+                }
+                var ad = await database.GetAdRequestAsync(requestId.Value, ct);
+                await bot.SendMessage(message.Chat.Id, $"Заявка #{requestId} отправлена владельцу канала. Ожидайте решения.", replyMarkup: Home(), cancellationToken: ct);
+                if (ad is not null)
+                {
+                    try
+                    {
+                        await bot.SendMessage(ad.Value.Owner, $"📥 Новая рекламная заявка #{requestId} в «{ad.Value.Channel}».", cancellationToken: ct);
+                        await ShowAdAsync(bot, ad.Value.Owner, ad.Value.Owner, requestId.Value, ct);
+                    }
+                    catch (Telegram.Bot.Exceptions.ApiRequestException ex)
+                    {
+                        Console.Error.WriteLine($"Cannot notify owner {ad.Value.Owner} for request {requestId}: {ex.Message}");
+                    }
+                }
                 return;
             }
 
@@ -181,6 +246,64 @@ public sealed class BotHandlers(Database database)
                     _ => "Введите доступные форматы рекламы (до 255 символов)."
                 };
                 await bot.SendMessage(origin.Chat.Id, prompt + "\nДля отмены: /cancel", cancellationToken: ct);
+                break;
+            case "catalog":
+                var catalog = await database.GetCatalogAsync(ct);
+                var catalogRows = catalog.Select(x => new[] { InlineKeyboardButton.WithCallbackData($"{x.Title} · {x.Price:0.##} ₽", $"offer:{x.Id}") }).ToList();
+                catalogRows.Add(new[] { InlineKeyboardButton.WithCallbackData("⬅️ Назад", "home") });
+                await bot.EditMessageText(origin.Chat.Id, origin.MessageId, catalog.Count == 0 ? "В каталоге пока нет каналов." : "📣 Каталог каналов (до 50):", replyMarkup: new InlineKeyboardMarkup(catalogRows), cancellationToken: ct);
+                break;
+            case "incoming":
+            case "outgoing":
+                var owned = data == "incoming";
+                var requests = await database.GetMyAdRequestsAsync(actor.Id, owned, ct);
+                var requestRows = requests.Select(x => new[] { InlineKeyboardButton.WithCallbackData($"#{x.Id} · {x.Channel} · {x.Status}", $"ad:{x.Id}") }).ToList();
+                requestRows.Add(new[] { InlineKeyboardButton.WithCallbackData("⬅️ Назад", "home") });
+                await bot.EditMessageText(origin.Chat.Id, origin.MessageId, requests.Count == 0 ? "Заявок пока нет." : (owned ? "📥 Входящие заявки:" : "📤 Мои заявки:"), replyMarkup: new InlineKeyboardMarkup(requestRows), cancellationToken: ct);
+                break;
+            case string offerData when offerData.StartsWith("offer:") && long.TryParse(offerData[6..], out var offerId):
+                var offers = await database.GetCatalogAsync(ct);
+                var offer = offers.FirstOrDefault(x => x.Id == offerId);
+                if (offer.Id == 0) break;
+                await bot.EditMessageText(origin.Chat.Id, origin.MessageId, $"📺 {offer.Title}\n💰 {offer.Price:0.##} ₽\n📝 {offer.Description}\n📦 {offer.Formats}", replyMarkup: new InlineKeyboardMarkup(new[]
+                {
+                    new[] { InlineKeyboardButton.WithCallbackData("📝 Заказать рекламу", $"order:{offerId}") },
+                    new[] { InlineKeyboardButton.WithCallbackData("⬅️ Каталог", "catalog") }
+                }), cancellationToken: ct);
+                break;
+            case string orderData when orderData.StartsWith("order:") && long.TryParse(orderData[6..], out var orderId):
+                if (!(await database.GetCatalogAsync(ct)).Any(x => x.Id == orderId))
+                {
+                    await bot.SendMessage(origin.Chat.Id, "Канал больше не доступен.", cancellationToken: ct);
+                    break;
+                }
+                _pendingAds[actor.Id] = orderId;
+                _pending.TryRemove(actor.Id, out _);
+                await bot.SendMessage(origin.Chat.Id, "Отправьте рекламный пост одним сообщением: текст, фото, видео или документ. Для отмены /cancel.", cancellationToken: ct);
+                break;
+            case string listingData when listingData.StartsWith("listing:") && long.TryParse(listingData[8..], out var listingId):
+                if (await database.GetChannelSettingsAsync(listingId, actor.Id, ct) is null) break;
+                var current = await database.IsChannelListedAsync(listingId, actor.Id, ct);
+                await database.SetChannelListedAsync(listingId, actor.Id, !current, ct);
+                await ShowSettingsAsync(bot, origin.Chat.Id, origin.MessageId, actor.Id, listingId, ct);
+                break;
+            case string adData when adData.StartsWith("ad:") && long.TryParse(adData[3..], out var adId):
+                await ShowAdAsync(bot, origin.Chat.Id, actor.Id, adId, ct);
+                break;
+            case string decisionData when decisionData.StartsWith("decision:"):
+                var decisionParts = data.Split(':');
+                if (decisionParts.Length != 3 || !long.TryParse(decisionParts[2], out var decisionId)) break;
+                if (await database.DecideAdRequestAsync(decisionId, actor.Id, decisionParts[1], ct))
+                {
+                    await bot.EditMessageText(origin.Chat.Id, origin.MessageId, $"Заявка #{decisionId}: {decisionParts[1]}.", cancellationToken: ct);
+                    var decided = await database.GetAdRequestAsync(decisionId, ct);
+                    if (decided is not null)
+                    {
+                        try { await bot.SendMessage(decided.Value.Advertiser, $"Заявка #{decisionId} в «{decided.Value.Channel}»: {decided.Value.Status}.", cancellationToken: ct); }
+                        catch (Telegram.Bot.Exceptions.ApiRequestException ex) { Console.Error.WriteLine($"Cannot notify advertiser: {ex.Message}"); }
+                    }
+                }
+                else await bot.SendMessage(origin.Chat.Id, "Заявка уже обработана или недоступна.", cancellationToken: ct);
                 break;
             case "ads":
                 await bot.EditMessageText(origin.Chat.Id, origin.MessageId, "Рекламные заявки появятся в следующем этапе.", replyMarkup: Back(), cancellationToken: ct);
