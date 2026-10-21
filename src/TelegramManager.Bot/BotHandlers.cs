@@ -155,7 +155,7 @@ public sealed class BotHandlers(Database database)
 
             if (message.Text?.StartsWith("/menu", StringComparison.Ordinal) == true)
             {
-                await bot.SendMessage(message.Chat.Id, "Главное меню:", replyMarkup: ForRole(await database.GetRoleAsync(user.Id, ct)), cancellationToken: ct);
+                await bot.SendMessage(message.Chat.Id, "Главное меню:", replyMarkup: Home(), cancellationToken: ct);
                 return;
             }
             if (message.Text?.StartsWith("/cancel", StringComparison.Ordinal) == true)
@@ -281,7 +281,7 @@ public sealed class BotHandlers(Database database)
                 {
                     await ShowOfferAsync(bot, message.Chat.Id, null, directId, ct);
                 }
-                else await bot.SendMessage(message.Chat.Id, "Telegram Manager\nГлавное меню:", replyMarkup: ForRole(await database.GetRoleAsync(user.Id, ct)), cancellationToken: ct);
+                else await bot.SendMessage(message.Chat.Id, "Telegram Manager\nГлавное меню:", replyMarkup: Home(), cancellationToken: ct);
             }
             else if (message.Text?.StartsWith("/cancel", StringComparison.Ordinal) == true)
                 await bot.SendMessage(message.Chat.Id, "Действие отменено.", replyMarkup: Home(), cancellationToken: ct);
@@ -308,7 +308,7 @@ public sealed class BotHandlers(Database database)
                 await bot.EditMessageText(origin.Chat.Id, origin.MessageId, "📣 Кабинет рекламодателя. Для заказа рекламы перейдите по ссылке, предоставленной каналом.", replyMarkup: BuyerHome(), cancellationToken: ct);
                 break;
             case "home":
-                await bot.EditMessageText(origin.Chat.Id, origin.MessageId, "Telegram Manager", replyMarkup: ForRole(await database.GetRoleAsync(actor.Id, ct)), cancellationToken: ct);
+                await bot.EditMessageText(origin.Chat.Id, origin.MessageId, "Telegram Manager", replyMarkup: Home(), cancellationToken: ct);
                 break;
             case "placements":
                 await bot.EditMessageText(origin.Chat.Id, origin.MessageId, "📅 Мои размещения", replyMarkup: new InlineKeyboardMarkup(new[]
