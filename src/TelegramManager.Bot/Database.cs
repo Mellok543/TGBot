@@ -760,4 +760,27 @@ public sealed class Database(string connectionString) : IAsyncDisposable
         return await cmd.ExecuteNonQueryAsync(ct) == 1;
     }
 
+    public async Task<(DateTime Created, DateTime? Scheduled, DateTime? Published, int? DurationHours,
+        string Payment, string Payout, bool Test, string? Dispute, string? Resolution, int? MessageId)?>
+        GetAdOrderDetailsAsync(long orderId, long userId, CancellationToken ct)
+    {
+        await using var cmd = _source.CreateCommand("""
+            SELECT created_at, scheduled_at, published_at, delete_after_hours,
+                   payment_status, payout_status, is_test_order, dispute_reason,
+                   dispute_resolution, published_message_id
+            FROM ad_requests WHERE id=@id AND (advertiser_id=@user OR owner_id=@user)
+            """);
+        cmd.Parameters.Add(new MySqlParameter("@id", orderId));
+        cmd.Parameters.Add(new MySqlParameter("@user", userId));
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        if (!await reader.ReadAsync(ct)) return null;
+        return (reader.GetDateTime(0), reader.IsDBNull(1) ? null : reader.GetDateTime(1),
+            reader.IsDBNull(2) ? null : reader.GetDateTime(2),
+            reader.IsDBNull(3) ? null : reader.GetInt32(3),
+            reader.GetString(4), reader.GetString(5), reader.GetBoolean(6),
+            reader.IsDBNull(7) ? null : reader.GetString(7),
+            reader.IsDBNull(8) ? null : reader.GetString(8),
+            reader.IsDBNull(9) ? null : reader.GetInt32(9));
+    }
+
 }
