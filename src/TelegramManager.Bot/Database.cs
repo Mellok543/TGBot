@@ -30,6 +30,7 @@ public sealed class Database(string connectionString) : IAsyncDisposable
                 CONSTRAINT fk_channels_connected_by FOREIGN KEY (connected_by) REFERENCES users(telegram_id)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
             """,
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS selected_role VARCHAR(16) NULL",
             "ALTER TABLE channels ADD COLUMN IF NOT EXISTS ad_price_rub DECIMAL(10,2) NOT NULL DEFAULT 0",
             "ALTER TABLE channels ADD COLUMN IF NOT EXISTS ad_description TEXT NULL",
             "ALTER TABLE channels ADD COLUMN IF NOT EXISTS ad_formats VARCHAR(255) NOT NULL DEFAULT 'Пост'",
@@ -187,7 +188,7 @@ public sealed class Database(string connectionString) : IAsyncDisposable
         await using var cmd = new MySqlCommand("""
             INSERT INTO ad_requests (channel_id, advertiser_id, owner_id, content_type, content_text, media_file_id, price_rub)
             SELECT telegram_id, @advertiser, connected_by, @type, @text, @file, ad_price_rub
-            FROM channels WHERE telegram_id=@channel AND is_listed=TRUE AND connected_by<>@advertiser
+            FROM channels WHERE telegram_id=@channel AND connected_by<>@advertiser
             """, connection);
         cmd.Parameters.Add(new MySqlParameter("@advertiser", advertiserId));
         cmd.Parameters.Add(new MySqlParameter("@channel", channelId));
@@ -338,6 +339,65 @@ public sealed class Database(string connectionString) : IAsyncDisposable
         cmd.Parameters.Add(new MySqlParameter("@error", (object?)error ?? DBNull.Value));
         cmd.Parameters.Add(new MySqlParameter("@id", id));
         await cmd.ExecuteNonQueryAsync(ct);
+    }
+
+
+    public async Task<(long Id, string Title, decimal Price, string Description, string Formats)?> GetPublicChannelAsync(long id, CancellationToken ct)
+    {
+        await using var cmd = _source.CreateCommand("""
+            SELECT telegram_id, title, ad_price_rub, COALESCE(ad_description,''), ad_formats
+            FROM channels WHERE telegram_id=@id
+            """);
+        cmd.Parameters.Add(new MySqlParameter("@id", id));
+        await using var r = await cmd.ExecuteReaderAsync(ct);
+        if (!await r.ReadAsync(ct)) return null;
+        return (r.GetInt64(0), r.GetString(1), r.GetDecimal(2), r.GetString(3), r.GetString(4));
+    }
+
+    public async Task<(string Status, DateTime? Scheduled, string? Error, int? MessageId)?> GetScheduleStatusAsync(long id, long user, CancellationToken ct)
+    {
+        await using var cmd = _source.CreateCommand("""
+            SELECT status, scheduled_at, last_error, published_message_id FROM ad_requests
+            WHERE id=@id AND (owner_id=@user OR advertiser_id=@user)
+            """);
+        cmd.Parameters.Add(new MySqlParameter("@id", id));
+        cmd.Parameters.Add(new MySqlParameter("@user", user));
+        await using var r = await cmd.ExecuteReaderAsync(ct);
+        if (!await r.ReadAsync(ct)) return null;
+        return (r.GetString(0), r.IsDBNull(1) ? null : r.GetDateTime(1),
+            r.IsDBNull(2) ? null : r.GetString(2), r.IsDBNull(3) ? null : r.GetInt32(3));
+    }
+
+
+    public async Task<string?> GetRoleAsync(long user, CancellationToken ct)
+    {
+        await using var cmd = _source.CreateCommand("SELECT selected_role FROM users WHERE telegram_id=@user");
+        cmd.Parameters.Add(new MySqlParameter("@user", user));
+        return (string?)await cmd.ExecuteScalarAsync(ct);
+    }
+
+    public async Task SetRoleAsync(long user, string role, CancellationToken ct)
+    {
+        if (role is not ("owner" or "buyer")) throw new ArgumentOutOfRangeException(nameof(role));
+        await using var cmd = _source.CreateCommand("UPDATE users SET selected_role=@role WHERE telegram_id=@user");
+        cmd.Parameters.Add(new MySqlParameter("@role", role));
+        cmd.Parameters.Add(new MySqlParameter("@user", user));
+        await cmd.ExecuteNonQueryAsync(ct);
+    }
+
+    public async Task<List<(long Id, string Title, decimal Price)>> GetPreviouslyOrderedChannelsAsync(long user, CancellationToken ct)
+    {
+        await using var cmd = _source.CreateCommand("""
+            SELECT c.telegram_id, c.title, c.ad_price_rub FROM channels c
+            JOIN (SELECT channel_id, MAX(created_at) AS last_order FROM ad_requests
+                  WHERE advertiser_id=@user GROUP BY channel_id) a ON a.channel_id=c.telegram_id
+            ORDER BY a.last_order DESC LIMIT 50
+            """);
+        cmd.Parameters.Add(new MySqlParameter("@user", user));
+        await using var r = await cmd.ExecuteReaderAsync(ct);
+        var result = new List<(long, string, decimal)>();
+        while (await r.ReadAsync(ct)) result.Add((r.GetInt64(0), r.GetString(1), r.GetDecimal(2)));
+        return result;
     }
 
     public ValueTask DisposeAsync() => _source.DisposeAsync();
