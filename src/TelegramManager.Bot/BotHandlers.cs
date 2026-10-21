@@ -11,6 +11,48 @@ public sealed class BotHandlers(Database database)
     private readonly System.Collections.Concurrent.ConcurrentDictionary<long, long> _pendingAds = new();
     private readonly System.Collections.Concurrent.ConcurrentDictionary<long, long> _pendingSchedules = new();
 
+
+    private async Task ShowBookingDaysAsync(ITelegramBotClient bot, long chatId, long requestId, CancellationToken ct)
+    {
+        var now = await database.GetDatabaseUtcAsync(ct);
+        var rows = Enumerable.Range(0, 7).Select(i =>
+        {
+            var day = now.Date.AddDays(i);
+            return new[] { InlineKeyboardButton.WithCallbackData(day.ToString("ddd dd.MM", new System.Globalization.CultureInfo("ru-RU")), $"day:{requestId}:{day:yyyyMMdd}") };
+        }).ToList();
+        rows.Add(new[] { InlineKeyboardButton.WithCallbackData("⚡ Ближайшее свободное время", $"nextslot:{requestId}") });
+        rows.Add(new[] { InlineKeyboardButton.WithCallbackData("✍️ Ввести дату вручную", $"manualslot:{requestId}") });
+        await bot.SendMessage(chatId, $"🕒 Сейчас в базе: {now:dd.MM.yyyy HH:mm:ss} UTC\nВыберите день публикации:", replyMarkup: new InlineKeyboardMarkup(rows), cancellationToken: ct);
+    }
+
+    private async Task ProposeBookingAsync(ITelegramBotClient bot, long chatId, long advertiser, long requestId, DateTime utc, CancellationToken ct)
+    {
+        var now = await database.GetDatabaseUtcAsync(ct);
+        if (utc <= now.AddMinutes(2) || utc > now.AddDays(90))
+        {
+            await bot.SendMessage(chatId, "Время уже прошло или выходит за пределы 90 дней. Выберите другой слот.", cancellationToken: ct);
+            return;
+        }
+        if (!await database.ProposeAsync(requestId, advertiser, utc, ct))
+        {
+            await bot.SendMessage(chatId, "Заявка недоступна для бронирования.", cancellationToken: ct);
+            return;
+        }
+        await bot.SendMessage(chatId, $"Предложено {utc:dd.MM.yyyy HH:mm} UTC. Ожидайте подтверждения оплаты владельцем.", cancellationToken: ct);
+        var ad = await database.GetAdRequestAsync(requestId, ct);
+        if (ad is null) return;
+        try
+        {
+            await bot.SendMessage(ad.Value.Owner, $"📅 Заявка #{requestId}: {utc:dd.MM.yyyy HH:mm} UTC. Подтвердите получение оплаты:", replyMarkup: new InlineKeyboardMarkup(new[]
+            {
+                new[] { InlineKeyboardButton.WithCallbackData("✅ Оплачено · оставить", $"confirm:0:{requestId}") },
+                new[] { InlineKeyboardButton.WithCallbackData("✅ Оплачено · удалить через 24 ч", $"confirm:24:{requestId}") },
+                new[] { InlineKeyboardButton.WithCallbackData("✅ Оплачено · удалить через 48 ч", $"confirm:48:{requestId}") }
+            }), cancellationToken: ct);
+        }
+        catch (Telegram.Bot.Exceptions.ApiRequestException ex) { Console.Error.WriteLine(ex); }
+    }
+
     private async Task ShowAdAsync(ITelegramBotClient bot, long chatId, long userId, long requestId, CancellationToken ct)
     {
         var ad = await database.GetAdRequestAsync(requestId, ct);
@@ -342,8 +384,48 @@ public sealed class BotHandlers(Database database)
             case string scheduleData when scheduleData.StartsWith("schedule:") && long.TryParse(scheduleData[9..], out var scheduleId):
                 var scheduling = await database.GetAdRequestAsync(scheduleId, ct);
                 if (scheduling is null || scheduling.Value.Advertiser != actor.Id || scheduling.Value.Status != "Approved") break;
-                _pendingSchedules[actor.Id] = scheduleId;
-                await bot.SendMessage(origin.Chat.Id, "Введите дату и время UTC в формате ГГГГ-ММ-ДД ЧЧ:ММ (например 2026-11-15 14:30). Отмена: /cancel.", cancellationToken: ct);
+                await ShowBookingDaysAsync(bot, origin.Chat.Id, scheduleId, ct);
+                break;
+            case string nextData when nextData.StartsWith("nextslot:") && long.TryParse(nextData[9..], out var nextId):
+                var nextAd = await database.GetAdRequestAsync(nextId, ct);
+                if (nextAd is null || nextAd.Value.Advertiser != actor.Id || nextAd.Value.Status != "Approved") break;
+                var nextTime = await database.FindNextFreeAsync(nextId, (await database.GetDatabaseUtcAsync(ct)).AddMinutes(5), ct);
+                if (nextTime is null) await bot.SendMessage(origin.Chat.Id, "Свободных слотов на ближайшие 30 дней не найдено.", cancellationToken: ct);
+                else await ProposeBookingAsync(bot, origin.Chat.Id, actor.Id, nextId, nextTime.Value, ct);
+                break;
+            case string manualData when manualData.StartsWith("manualslot:") && long.TryParse(manualData[11..], out var manualId):
+                var manualAd = await database.GetAdRequestAsync(manualId, ct);
+                if (manualAd is null || manualAd.Value.Advertiser != actor.Id || manualAd.Value.Status != "Approved") break;
+                _pendingSchedules[actor.Id] = manualId;
+                await bot.SendMessage(origin.Chat.Id, "Введите дату и время UTC: ГГГГ-ММ-ДД ЧЧ:ММ. Отмена: /cancel.", cancellationToken: ct);
+                break;
+            case string dayData when dayData.StartsWith("day:"):
+                var dayParts = data.Split(':');
+                if (dayParts.Length != 3 || !long.TryParse(dayParts[1], out var dayId) ||
+                    !DateTime.TryParseExact(dayParts[2], "yyyyMMdd", System.Globalization.CultureInfo.InvariantCulture,
+                        System.Globalization.DateTimeStyles.None, out var chosenDay)) break;
+                var dayAd = await database.GetAdRequestAsync(dayId, ct);
+                if (dayAd is null || dayAd.Value.Advertiser != actor.Id || dayAd.Value.Status != "Approved") break;
+                var utcNow = await database.GetDatabaseUtcAsync(ct);
+                if (chosenDay.Date < utcNow.Date || chosenDay.Date > utcNow.Date.AddDays(7)) break;
+                var timeRows = new List<InlineKeyboardButton[]>();
+                foreach (var hour in new[] { 9, 12, 15, 18, 21 })
+                {
+                    var time = chosenDay.Date.AddHours(hour);
+                    if (time <= utcNow.AddMinutes(2)) continue;
+                    timeRows.Add(new[] { InlineKeyboardButton.WithCallbackData($"{hour:00}:00 UTC", $"slot:{dayId}:{time:yyyyMMddHHmm}") });
+                }
+                timeRows.Add(new[] { InlineKeyboardButton.WithCallbackData("⬅️ Другой день", $"schedule:{dayId}") });
+                await bot.SendMessage(origin.Chat.Id, $"📅 {chosenDay:dd.MM.yyyy}. Выберите время (UTC):", replyMarkup: new InlineKeyboardMarkup(timeRows), cancellationToken: ct);
+                break;
+            case string slotData when slotData.StartsWith("slot:"):
+                var slotParts = data.Split(':');
+                if (slotParts.Length != 3 || !long.TryParse(slotParts[1], out var slotId) ||
+                    !DateTime.TryParseExact(slotParts[2], "yyyyMMddHHmm", System.Globalization.CultureInfo.InvariantCulture,
+                        System.Globalization.DateTimeStyles.None, out var slotAt)) break;
+                var slotAd = await database.GetAdRequestAsync(slotId, ct);
+                if (slotAd is null || slotAd.Value.Advertiser != actor.Id || slotAd.Value.Status != "Approved") break;
+                await ProposeBookingAsync(bot, origin.Chat.Id, actor.Id, slotId, slotAt, ct);
                 break;
             case string confirmData when confirmData.StartsWith("confirm:"):
                 var confirmParts = data.Split(':');
