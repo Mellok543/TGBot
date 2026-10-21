@@ -105,7 +105,19 @@ public sealed class Database(string connectionString) : IAsyncDisposable
             "ALTER TABLE ad_requests ADD COLUMN IF NOT EXISTS dispute_resolution VARCHAR(32) NULL",
             "ALTER TABLE ad_requests ADD COLUMN IF NOT EXISTS dispute_resolved_at DATETIME NULL",
             "ALTER TABLE ad_requests ADD COLUMN IF NOT EXISTS dispute_resolved_by BIGINT NULL",
-            "CREATE INDEX IF NOT EXISTS idx_ad_requests_payout ON ad_requests (payout_status, status)"
+            "CREATE INDEX IF NOT EXISTS idx_ad_requests_payout ON ad_requests (payout_status, status)",
+            """
+            CREATE TABLE IF NOT EXISTS ad_order_events (
+                id BIGINT AUTO_INCREMENT PRIMARY KEY,
+                order_id BIGINT NOT NULL,
+                actor_id BIGINT NULL,
+                event_type VARCHAR(40) NOT NULL,
+                details VARCHAR(512) NULL,
+                created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                INDEX idx_order_events_order (order_id, id),
+                FOREIGN KEY (order_id) REFERENCES ad_requests(id)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+            """
         })
         {
             await using var cmd = new MySqlCommand(sql, connection);
@@ -781,6 +793,36 @@ public sealed class Database(string connectionString) : IAsyncDisposable
             reader.IsDBNull(7) ? null : reader.GetString(7),
             reader.IsDBNull(8) ? null : reader.GetString(8),
             reader.IsDBNull(9) ? null : reader.GetInt32(9));
+    }
+
+    public async Task RecordOrderEventAsync(long orderId, long? actorId, string eventType, string? details, CancellationToken ct)
+    {
+        await using var cmd = _source.CreateCommand("""
+            INSERT INTO ad_order_events(order_id,actor_id,event_type,details)
+            VALUES (@order,@actor,@type,@details)
+            """);
+        cmd.Parameters.Add(new MySqlParameter("@order", orderId));
+        cmd.Parameters.Add(new MySqlParameter("@actor", (object?)actorId ?? DBNull.Value));
+        cmd.Parameters.Add(new MySqlParameter("@type", eventType));
+        cmd.Parameters.Add(new MySqlParameter("@details", (object?)details ?? DBNull.Value));
+        await cmd.ExecuteNonQueryAsync(ct);
+    }
+
+    public async Task<List<(DateTime At, string Event, string? Details)>> GetOrderHistoryAsync(long orderId, long userId, CancellationToken ct)
+    {
+        await using var cmd = _source.CreateCommand("""
+            SELECT e.created_at, e.event_type, e.details
+            FROM ad_order_events e JOIN ad_requests a ON a.id=e.order_id
+            WHERE e.order_id=@order AND (a.owner_id=@user OR a.advertiser_id=@user)
+            ORDER BY e.id DESC LIMIT 25
+            """);
+        cmd.Parameters.Add(new MySqlParameter("@order", orderId));
+        cmd.Parameters.Add(new MySqlParameter("@user", userId));
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        var events = new List<(DateTime, string, string?)>();
+        while (await reader.ReadAsync(ct))
+            events.Add((reader.GetDateTime(0), reader.GetString(1), reader.IsDBNull(2) ? null : reader.GetString(2)));
+        return events;
     }
 
 }
