@@ -875,6 +875,13 @@ public sealed class Database(string connectionString) : IAsyncDisposable
 
     public async Task<List<(long Id,long Recipient,string Body)>> ClaimNotificationsAsync(CancellationToken ct)
     {
+        await using (var recover = _source.CreateCommand("""
+            UPDATE notification_outbox
+            SET state=IF(attempts>=8,'Failed','Pending'),
+                next_attempt_at=UTC_TIMESTAMP()
+            WHERE state='Sending' AND next_attempt_at<DATE_SUB(UTC_TIMESTAMP(), INTERVAL 5 MINUTE)
+            """))
+            await recover.ExecuteNonQueryAsync(ct);
         await using var cmd = _source.CreateCommand("""
             SELECT id,recipient_id,body FROM notification_outbox
             WHERE state='Pending' AND next_attempt_at<=UTC_TIMESTAMP()
@@ -889,7 +896,7 @@ public sealed class Database(string connectionString) : IAsyncDisposable
     public async Task<bool> TryClaimNotificationAsync(long id, CancellationToken ct)
     {
         await using var cmd = _source.CreateCommand("""
-            UPDATE notification_outbox SET state='Sending',attempts=attempts+1
+            UPDATE notification_outbox SET state='Sending',attempts=attempts+1, next_attempt_at=UTC_TIMESTAMP()
             WHERE id=@id AND state='Pending' AND next_attempt_at<=UTC_TIMESTAMP()
             """);
         cmd.Parameters.Add(new MySqlParameter("@id", id));
