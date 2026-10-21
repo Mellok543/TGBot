@@ -107,6 +107,22 @@ public sealed class Database(string connectionString) : IAsyncDisposable
             "ALTER TABLE ad_requests ADD COLUMN IF NOT EXISTS dispute_resolved_by BIGINT NULL",
             "CREATE INDEX IF NOT EXISTS idx_ad_requests_payout ON ad_requests (payout_status, status)",
             """
+            CREATE TABLE IF NOT EXISTS notification_outbox (
+                id BIGINT AUTO_INCREMENT PRIMARY KEY,
+                order_id BIGINT NOT NULL,
+                recipient_id BIGINT NOT NULL,
+                body VARCHAR(1024) NOT NULL,
+                state VARCHAR(16) NOT NULL DEFAULT 'Pending',
+                attempts INT NOT NULL DEFAULT 0,
+                next_attempt_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                last_error VARCHAR(512) NULL,
+                created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE KEY uq_notification_order_recipient_body (order_id,recipient_id,body(160)),
+                INDEX idx_notification_due (state,next_attempt_at),
+                FOREIGN KEY (order_id) REFERENCES ad_requests(id)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+            """,
+            """
             CREATE TABLE IF NOT EXISTS ad_order_events (
                 id BIGINT AUTO_INCREMENT PRIMARY KEY,
                 order_id BIGINT NOT NULL,
@@ -841,6 +857,60 @@ public sealed class Database(string connectionString) : IAsyncDisposable
         cmd.Parameters.Add(new MySqlParameter("@id", id));
         await using var reader = await cmd.ExecuteReaderAsync(ct);
         return await reader.ReadAsync(ct) ? (reader.GetInt64(0),reader.GetInt64(1)) : null;
+    }
+
+    public async Task EnqueueOrderNotificationAsync(long orderId, string body, CancellationToken ct)
+    {
+        await using var cmd = _source.CreateCommand("""
+            INSERT IGNORE INTO notification_outbox(order_id,recipient_id,body)
+            SELECT a.id, u.telegram_id, @body FROM ad_requests a
+            JOIN (SELECT a1.owner_id AS telegram_id FROM ad_requests a1 WHERE a1.id=@id
+                  UNION SELECT a2.advertiser_id FROM ad_requests a2 WHERE a2.id=@id) u
+            WHERE a.id=@id
+            """);
+        cmd.Parameters.Add(new MySqlParameter("@id", orderId));
+        cmd.Parameters.Add(new MySqlParameter("@body", body));
+        await cmd.ExecuteNonQueryAsync(ct);
+    }
+
+    public async Task<List<(long Id,long Recipient,string Body)>> ClaimNotificationsAsync(CancellationToken ct)
+    {
+        await using var cmd = _source.CreateCommand("""
+            SELECT id,recipient_id,body FROM notification_outbox
+            WHERE state='Pending' AND next_attempt_at<=UTC_TIMESTAMP()
+            ORDER BY id LIMIT 20
+            """);
+        var items = new List<(long,long,string)>();
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct)) items.Add((reader.GetInt64(0),reader.GetInt64(1),reader.GetString(2)));
+        return items;
+    }
+
+    public async Task<bool> TryClaimNotificationAsync(long id, CancellationToken ct)
+    {
+        await using var cmd = _source.CreateCommand("""
+            UPDATE notification_outbox SET state='Sending',attempts=attempts+1
+            WHERE id=@id AND state='Pending' AND next_attempt_at<=UTC_TIMESTAMP()
+            """);
+        cmd.Parameters.Add(new MySqlParameter("@id", id));
+        return await cmd.ExecuteNonQueryAsync(ct)==1;
+    }
+
+    public async Task CompleteNotificationAsync(long id, string? error, bool permanent, CancellationToken ct)
+    {
+        await using var cmd = _source.CreateCommand("""
+            UPDATE notification_outbox
+            SET state=CASE WHEN @error IS NULL THEN 'Sent'
+                           WHEN @permanent=TRUE OR attempts>=8 THEN 'Failed'
+                           ELSE 'Pending' END,
+                last_error=@error,
+                next_attempt_at=DATE_ADD(UTC_TIMESTAMP(), INTERVAL LEAST(3600,POW(2,LEAST(attempts,10))*15) SECOND)
+            WHERE id=@id AND state='Sending'
+            """);
+        cmd.Parameters.Add(new MySqlParameter("@id", id));
+        cmd.Parameters.Add(new MySqlParameter("@error", (object?)error ?? DBNull.Value));
+        cmd.Parameters.Add(new MySqlParameter("@permanent", permanent));
+        await cmd.ExecuteNonQueryAsync(ct);
     }
 
 }
