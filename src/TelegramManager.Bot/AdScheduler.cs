@@ -31,7 +31,7 @@ public sealed class AdScheduler(Database database, ITelegramBotClient bot)
                         };
                         await database.FinishPublishAsync(id, posted.MessageId, null, ct);
                         Console.WriteLine($"Ad #{id} published successfully, message #{posted.MessageId}");
-                        await NotifyParticipantsAsync(id, $"✅ Заказ #{id}: реклама опубликована.", ct);
+                        await database.EnqueueOrderNotificationAsync(id, $"✅ Заказ #{id}: реклама опубликована.", ct);
                     }
                     catch (Exception ex) when (ex is not OperationCanceledException)
                     {
@@ -55,6 +55,7 @@ public sealed class AdScheduler(Database database, ITelegramBotClient bot)
                         await NotifyParticipantsAsync(id, $"⚠️ Заказ #{id}: не удалось удалить публикацию. Требуется проверка.", ct);
                     }
                 }
+                await DispatchNotificationsAsync(ct);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
@@ -63,12 +64,26 @@ public sealed class AdScheduler(Database database, ITelegramBotClient bot)
             if (!await timer.WaitForNextTickAsync(ct)) break;
         }
     }
-    private async Task NotifyParticipantsAsync(long orderId, string message, CancellationToken ct)
+
+    private async Task DispatchNotificationsAsync(CancellationToken ct)
     {
-        var participants = await database.GetOrderParticipantsAsync(orderId, ct);
-        if (participants is null) return;
-        foreach (var recipient in new[] { participants.Value.Owner, participants.Value.Advertiser }.Distinct())
-            try { await bot.SendMessage(recipient, message, cancellationToken: ct); }
-            catch (Telegram.Bot.Exceptions.ApiRequestException ex) { Console.Error.WriteLine($"Notification to {recipient} failed: {ex.Message}"); }
+        foreach (var item in await database.ClaimNotificationsAsync(ct))
+        {
+            if (!await database.TryClaimNotificationAsync(item.Id, ct)) continue;
+            try
+            {
+                await bot.SendMessage(item.Recipient, item.Body, cancellationToken: ct);
+                await database.CompleteNotificationAsync(item.Id, null, false, ct);
+            }
+            catch (Telegram.Bot.Exceptions.ApiRequestException ex)
+            {
+                var permanent = ex.ErrorCode is 400 or 403;
+                await database.CompleteNotificationAsync(item.Id, ex.Message.Length > 500 ? ex.Message[..500] : ex.Message, permanent, ct);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                await database.CompleteNotificationAsync(item.Id, ex.Message.Length > 500 ? ex.Message[..500] : ex.Message, false, ct);
+            }
+        }
     }
 }
