@@ -292,11 +292,13 @@ public sealed class BotHandlers(Database database)
                 }), cancellationToken: ct);
                 break;
             case "subscription_status":
-                var subscriptionUntil = await database.GetSubscriptionUntilAsync(actor.Id, ct);
-                await bot.EditMessageText(origin.Chat.Id, origin.MessageId,
-                    subscriptionUntil is { } until && until > DateTime.UtcNow
-                        ? $"⭐ Подписка активна до {until.Add(DisplayOffset):dd.MM.yyyy HH:mm} (UTC+3)."
-                        : "⭐ Подписка не активна. Оплата Stars появится после настройки тарифа.",
+                var plan = await database.GetPlanAsync(actor.Id, ct);
+                var planText = plan.Pro
+                    ? $"⭐ PRO активен до {plan.ProEnds!.Value.Add(DisplayOffset):dd.MM.yyyy HH:mm} (UTC+3).\nЛимит: 10 каналов."
+                    : plan.TrialEnds > DateTime.UtcNow
+                        ? $"🎁 Бесплатный период до {plan.TrialEnds.Add(DisplayOffset):dd.MM.yyyy HH:mm} (UTC+3).\nЛимит: 1 канал."
+                        : "⏳ Бесплатные 30 дней закончились. Для новых продаж и подключения каналов необходим PRO — 299 Stars / 30 дней.\nОплата Stars пока не подключена.";
+                await bot.EditMessageText(origin.Chat.Id, origin.MessageId, planText,
                     replyMarkup: Back(), cancellationToken: ct);
                 break;
             case "owner_earnings":
