@@ -932,4 +932,35 @@ public sealed class Database(string connectionString) : IAsyncDisposable
         await cmd.ExecuteNonQueryAsync(ct);
     }
 
+    public async Task<(long Pending, long Sending, long Failed, long StuckPublishing, long DeleteFailures)> GetOperationsSummaryAsync(CancellationToken ct)
+    {
+        await using var cmd = _source.CreateCommand("""
+            SELECT
+                (SELECT COUNT(*) FROM notification_outbox WHERE state='Pending'),
+                (SELECT COUNT(*) FROM notification_outbox WHERE state='Sending'),
+                (SELECT COUNT(*) FROM notification_outbox WHERE state='Failed'),
+                (SELECT COUNT(*) FROM ad_requests WHERE status='Publishing' AND updated_at<DATE_SUB(UTC_TIMESTAMP(),INTERVAL 5 MINUTE)),
+                (SELECT COUNT(*) FROM ad_requests WHERE status='DeleteFailed' OR (last_error IS NOT NULL AND status IN ('Disputed','DisputeResolved')))
+            """);
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        if (!await reader.ReadAsync(ct)) return default;
+        return (reader.GetInt64(0),reader.GetInt64(1),reader.GetInt64(2),reader.GetInt64(3),reader.GetInt64(4));
+    }
+
+    public async Task<List<(long Id, string Status, string? Error)>> GetOrdersNeedingAttentionAsync(CancellationToken ct)
+    {
+        await using var cmd = _source.CreateCommand("""
+            SELECT id,status,last_error FROM ad_requests
+            WHERE status IN ('PublishFailed','DeleteFailed')
+               OR (status='Publishing' AND updated_at<DATE_SUB(UTC_TIMESTAMP(),INTERVAL 5 MINUTE))
+               OR (status IN ('Disputed','DisputeResolved') AND last_error IS NOT NULL)
+            ORDER BY updated_at DESC LIMIT 15
+            """);
+        var result = new List<(long,string,string?)>();
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+            result.Add((reader.GetInt64(0),reader.GetString(1),reader.IsDBNull(2)?null:reader.GetString(2)));
+        return result;
+    }
+
 }
