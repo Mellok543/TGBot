@@ -434,6 +434,14 @@ public sealed class BotHandlers(Database database)
                     var decision = parts[1] switch { "refund" => "RefundRecommended", "payout" => "PayoutRecommended", _ => "" };
                     var success = await database.ResolveDisputeAsync(resolvedId, actor.Id, decision, ct);
                     await bot.SendMessage(origin.Chat.Id, success ? $"Решение по #{resolvedId} сохранено. Выплата остаётся заблокированной до обработки провайдером." : "Спор уже закрыт или решение недопустимо.", cancellationToken: ct);
+                    if (success)
+                    {
+                        var participants = await database.GetOrderParticipantsAsync(resolvedId, ct);
+                        if (participants is { } users)
+                            foreach (var recipient in new[] { users.Owner, users.Advertiser }.Distinct())
+                                try { await bot.SendMessage(recipient, $"⚖️ По заказу #{resolvedId} вынесено решение: {decision}. Денежные операции не выполнялись.", cancellationToken: ct); }
+                                catch (Telegram.Bot.Exceptions.ApiRequestException ex) { Console.Error.WriteLine(ex.Message); }
+                    }
                 }
             }
             else if (action == "disputes")
@@ -757,6 +765,13 @@ public sealed class BotHandlers(Database database)
                 if (await database.OpenDisputeAsync(reasonOrderId, actor.Id, reason, ct))
                 {
                     await bot.SendMessage(origin.Chat.Id, $"⚖️ Спор по заказу #{reasonOrderId} открыт. Выплата заблокирована до проверки.", cancellationToken: ct);
+                    var disputed = await database.GetAdRequestAsync(reasonOrderId, ct);
+                    if (disputed is not null)
+                    {
+                        var other = disputed.Value.Owner == actor.Id ? disputed.Value.Advertiser : disputed.Value.Owner;
+                        try { await bot.SendMessage(other, $"⚖️ По заказу #{reasonOrderId} открыт спор: {reason}. Выплата заблокирована.", cancellationToken: ct); }
+                        catch (Telegram.Bot.Exceptions.ApiRequestException ex) { Console.Error.WriteLine(ex.Message); }
+                    }
                     if (long.TryParse(Environment.GetEnvironmentVariable("ADMIN_TELEGRAM_ID"), out var adminId))
                         try { await bot.SendMessage(adminId, $"⚖️ Новый спор #{reasonOrderId}: {reason}. Откройте /admin → Спорные заказы.", cancellationToken: ct); }
                         catch (Telegram.Bot.Exceptions.ApiRequestException ex) { Console.Error.WriteLine(ex.Message); }

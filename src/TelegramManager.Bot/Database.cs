@@ -322,7 +322,9 @@ public sealed class Database(string connectionString) : IAsyncDisposable
         cmd.Parameters.Add(new MySqlParameter("@text", (object?)text ?? DBNull.Value));
         cmd.Parameters.Add(new MySqlParameter("@file", (object?)fileId ?? DBNull.Value));
         if (await cmd.ExecuteNonQueryAsync(ct) != 1) return null;
-        return cmd.LastInsertedId;
+        var createdId = cmd.LastInsertedId;
+        await RecordOrderEventAsync(createdId, advertiserId, "Created", "Заявка создана", ct);
+        return createdId;
     }
 
     public async Task<(long Id, long Owner, long Advertiser, string Channel, string Status, decimal Price, string Type, string? Text, string? File)?> GetAdRequestAsync(long id, CancellationToken ct)
@@ -374,7 +376,9 @@ public sealed class Database(string connectionString) : IAsyncDisposable
         cmd.Parameters.Add(new MySqlParameter("@at", at));
         cmd.Parameters.Add(new MySqlParameter("@id", id));
         cmd.Parameters.Add(new MySqlParameter("@user", advertiser));
-        return await cmd.ExecuteNonQueryAsync(ct) == 1;
+        var updated = await cmd.ExecuteNonQueryAsync(ct) == 1;
+        if (updated) await RecordOrderEventAsync(id, advertiser, "TimeProposed", at.ToString("yyyy-MM-dd HH:mm") + " UTC", ct);
+        return updated;
     }
 
     public async Task<bool> ConfirmAsync(long id, long owner, int? hours, CancellationToken ct)
@@ -711,7 +715,9 @@ public sealed class Database(string connectionString) : IAsyncDisposable
         cmd.Parameters.Add(new MySqlParameter("@id", orderId));
         cmd.Parameters.Add(new MySqlParameter("@actor", actorId));
         cmd.Parameters.Add(new MySqlParameter("@reason", reason.Length > 512 ? reason[..512] : reason));
-        return await cmd.ExecuteNonQueryAsync(ct) == 1;
+        var updated = await cmd.ExecuteNonQueryAsync(ct) == 1;
+        if (updated) await RecordOrderEventAsync(orderId, actorId, "DisputeOpened", reason, ct);
+        return updated;
     }
 
     public async Task<bool> MarkPlacementVerifiedAsync(long orderId, CancellationToken ct)
@@ -755,7 +761,9 @@ public sealed class Database(string connectionString) : IAsyncDisposable
         cmd.Parameters.Add(new MySqlParameter("@id", orderId));
         cmd.Parameters.Add(new MySqlParameter("@admin", adminId));
         cmd.Parameters.Add(new MySqlParameter("@decision", decision));
-        return await cmd.ExecuteNonQueryAsync(ct) == 1;
+        var updated = await cmd.ExecuteNonQueryAsync(ct) == 1;
+        if (updated) await RecordOrderEventAsync(orderId, adminId, "DisputeResolved", decision, ct);
+        return updated;
     }
 
     // A test checkout is restricted to allowlisted accounts and never represents actual revenue.
@@ -825,6 +833,14 @@ public sealed class Database(string connectionString) : IAsyncDisposable
         while (await reader.ReadAsync(ct))
             events.Add((reader.GetDateTime(0), reader.GetString(1), reader.IsDBNull(2) ? null : reader.GetString(2)));
         return events;
+    }
+
+    public async Task<(long Owner, long Advertiser)?> GetOrderParticipantsAsync(long id, CancellationToken ct)
+    {
+        await using var cmd = _source.CreateCommand("SELECT owner_id,advertiser_id FROM ad_requests WHERE id=@id");
+        cmd.Parameters.Add(new MySqlParameter("@id", id));
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        return await reader.ReadAsync(ct) ? (reader.GetInt64(0),reader.GetInt64(1)) : null;
     }
 
 }
