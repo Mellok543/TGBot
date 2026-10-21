@@ -110,18 +110,57 @@ public sealed class Database(string connectionString) : IAsyncDisposable
 
     public async Task SaveChannelAsync(long channelId, string title, string? username, long userId, CancellationToken ct)
     {
-        await using var cmd = _source.CreateCommand("""
+        await using var connection = await _source.OpenConnectionAsync(ct);
+        await using var tx = await connection.BeginTransactionAsync(ct);
+        await using var access = new MySqlCommand("""
+            SELECT created_at, subscription_until FROM users WHERE telegram_id=@user FOR UPDATE
+            """, connection, tx);
+        access.Parameters.Add(new MySqlParameter("@user", userId));
+        DateTime created;
+        DateTime? subscribed;
+        await using (var reader = await access.ExecuteReaderAsync(ct))
+        {
+            if (!await reader.ReadAsync(ct)) throw new InvalidOperationException("Профиль пользователя не найден.");
+            created = reader.GetDateTime(0);
+            subscribed = reader.IsDBNull(1) ? null : reader.GetDateTime(1);
+        }
+        var pro = subscribed is { } expiry && expiry > DateTime.UtcNow;
+        var trial = created.AddDays(30) > DateTime.UtcNow;
+        if (!pro && !trial)
+            throw new InvalidOperationException("Бесплатные 30 дней закончились. Для подключения каналов требуется PRO (299 Stars / 30 дней).");
+        await using var count = new MySqlCommand("SELECT COUNT(*) FROM channels WHERE connected_by=@user", connection, tx);
+        count.Parameters.Add(new MySqlParameter("@user", userId));
+        var existingCount = Convert.ToInt32(await count.ExecuteScalarAsync(ct));
+        await using var existing = new MySqlCommand("SELECT connected_by FROM channels WHERE telegram_id=@channel FOR UPDATE", connection, tx);
+        existing.Parameters.Add(new MySqlParameter("@channel", channelId));
+        var existingOwner = await existing.ExecuteScalarAsync(ct);
+        if (existingOwner is not null && Convert.ToInt64(existingOwner) != userId)
+            throw new InvalidOperationException("Канал уже подключён другим владельцем.");
+        if (existingOwner is null && existingCount >= (pro ? 10 : 1))
+            throw new InvalidOperationException(pro ? "Лимит PRO — 10 каналов." : "В бесплатной версии доступен только один канал. Для 10 каналов подключите PRO.");
+        await using var cmd = new MySqlCommand("""
             INSERT INTO channels (telegram_id, title, username, connected_by)
             VALUES (@channelId, @title, @username, @userId)
-            ON DUPLICATE KEY UPDATE
-                title=VALUES(title), username=VALUES(username),
-                connected_by=VALUES(connected_by), connected_at=CURRENT_TIMESTAMP
-            """);
+            ON DUPLICATE KEY UPDATE title=VALUES(title), username=VALUES(username)
+            """, connection, tx);
         cmd.Parameters.Add(new MySqlParameter("@channelId", channelId));
         cmd.Parameters.Add(new MySqlParameter("@title", title.Length > 255 ? title[..255] : title));
         cmd.Parameters.Add(new MySqlParameter("@username", (object?)username ?? DBNull.Value));
         cmd.Parameters.Add(new MySqlParameter("@userId", userId));
         await cmd.ExecuteNonQueryAsync(ct);
+        await tx.CommitAsync(ct);
+    }
+
+    public async Task<(bool Pro, DateTime TrialEnds, DateTime? ProEnds, int Limit)> GetPlanAsync(long userId, CancellationToken ct)
+    {
+        await using var cmd = _source.CreateCommand("SELECT created_at, subscription_until FROM users WHERE telegram_id=@user");
+        cmd.Parameters.Add(new MySqlParameter("@user", userId));
+        await using var r = await cmd.ExecuteReaderAsync(ct);
+        if (!await r.ReadAsync(ct)) throw new InvalidOperationException("Профиль не найден.");
+        var created = r.GetDateTime(0);
+        DateTime? expires = r.IsDBNull(1) ? null : r.GetDateTime(1);
+        var pro = expires is { } at && at > DateTime.UtcNow;
+        return (pro, created.AddDays(30), expires, pro ? 10 : 1);
     }
 
     public async Task<List<(long Id, string Title, string? Username)>> GetChannelsAsync(long ownerId, CancellationToken ct)
