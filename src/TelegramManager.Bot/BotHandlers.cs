@@ -10,6 +10,17 @@ public sealed class BotHandlers(Database database)
     private readonly System.Collections.Concurrent.ConcurrentDictionary<long, (long ChannelId, string Field)> _pending = new();
     private readonly System.Collections.Concurrent.ConcurrentDictionary<long, long> _pendingAds = new();
     private readonly System.Collections.Concurrent.ConcurrentDictionary<long, long> _pendingSchedules = new();
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<long, string> _adminPending = new();
+    private static bool IsAdmin(long id) => long.TryParse(Environment.GetEnvironmentVariable("ADMIN_TELEGRAM_ID"), out var admin) && id == admin;
+    private static InlineKeyboardMarkup AdminMenu() => new(new[]
+    {
+        new[] { InlineKeyboardButton.WithCallbackData("⭐ Выдать PRO", "admin:grant") },
+        new[] { InlineKeyboardButton.WithCallbackData("🚫 Отозвать выданный PRO", "admin:revoke") },
+        new[] { InlineKeyboardButton.WithCallbackData("🧪 Добавить тестовый аккаунт", "admin:teston") },
+        new[] { InlineKeyboardButton.WithCallbackData("🧪 Убрать тестовый аккаунт", "admin:testoff") },
+        new[] { InlineKeyboardButton.WithCallbackData("👥 Последние пользователи", "admin:users") },
+        new[] { InlineKeyboardButton.WithCallbackData("⬅️ Главное меню", "home") }
+    });
 
 
     private async Task ShowBookingDaysAsync(ITelegramBotClient bot, long chatId, long requestId, CancellationToken ct)
@@ -182,6 +193,46 @@ public sealed class BotHandlers(Database database)
                 await bot.SendMessage(message.Chat.Id, "Использование: /grantpro TELEGRAM_ID ДНИ или /revokepro TELEGRAM_ID", cancellationToken: ct);
                 return;
             }
+            if (message.Text?.Equals("/admin", StringComparison.OrdinalIgnoreCase) == true)
+            {
+                if (!IsAdmin(user.Id)) { await bot.SendMessage(message.Chat.Id, "Недостаточно прав.", cancellationToken: ct); return; }
+                await bot.SendMessage(message.Chat.Id, "🛡 Панель администратора", replyMarkup: AdminMenu(), cancellationToken: ct);
+                return;
+            }
+            if (_adminPending.TryRemove(user.Id, out var adminAction))
+            {
+                if (!IsAdmin(user.Id)) return;
+                var parts = (message.Text ?? "").Split(' ', StringSplitOptions.RemoveEmptyEntries);
+                if (parts.Length == 0 || !long.TryParse(parts[0], out var targetId))
+                {
+                    await bot.SendMessage(message.Chat.Id, "Неверный Telegram ID. Откройте /admin и повторите.", cancellationToken: ct);
+                    return;
+                }
+                bool ok;
+                switch (adminAction)
+                {
+                    case "grant":
+                        if (parts.Length != 2 || !int.TryParse(parts[1], out var days) || days is < 1 or > 3650)
+                        {
+                            await bot.SendMessage(message.Chat.Id, "Введите Telegram ID и срок в днях, например: 123456789 30", cancellationToken: ct);
+                            return;
+                        }
+                        ok = await database.GrantProAsync(targetId, days, ct);
+                        break;
+                    case "revoke":
+                        ok = await database.RevokeGrantedProAsync(targetId, ct);
+                        break;
+                    case "teston":
+                    case "testoff":
+                        ok = await database.SetTestAccountAsync(targetId, adminAction == "teston", ct);
+                        break;
+                    default: return;
+                }
+                await bot.SendMessage(message.Chat.Id,
+                    ok ? "Изменения сохранены." : "Аккаунт не найден. Пользователь должен сначала открыть бота.",
+                    replyMarkup: AdminMenu(), cancellationToken: ct);
+                return;
+            }
             if (message.Text?.StartsWith("/menu", StringComparison.Ordinal) == true)
             {
                 await bot.SendMessage(message.Chat.Id, "Главное меню:", replyMarkup: Home(), cancellationToken: ct);
@@ -192,6 +243,7 @@ public sealed class BotHandlers(Database database)
                 _pending.TryRemove(user.Id, out _);
                 _pendingAds.TryRemove(user.Id, out _);
                 _pendingSchedules.TryRemove(user.Id, out _);
+                _adminPending.TryRemove(user.Id, out _);
                 await bot.SendMessage(message.Chat.Id, "Действие отменено.", replyMarkup: ForRole(await database.GetRoleAsync(user.Id, ct)), cancellationToken: ct);
                 return;
             }
@@ -300,6 +352,31 @@ public sealed class BotHandlers(Database database)
         await database.RegisterAsync(actor.Id, actor.Username, actor.FirstName + (actor.LastName is null ? "" : " " + actor.LastName), ct);
 
         var data = query.Data ?? "";
+        if (data.StartsWith("admin:", StringComparison.Ordinal))
+        {
+            if (!IsAdmin(actor.Id))
+            {
+                await bot.AnswerCallbackQuery(query.Id, "Недостаточно прав.", showAlert: true, cancellationToken: ct);
+                return;
+            }
+            var action = data["admin:".Length..];
+            if (action == "users")
+            {
+                var users = await database.GetAdminUsersAsync(ct);
+                var text = users.Count == 0 ? "Нет пользователей." :
+                    "👥 Последние пользователи:\n" + string.Join("\n", users.Select(x => $"{x.Id} · {x.Name} {(x.Test ? "🧪" : "")}"));
+                await bot.EditMessageText(origin.Chat.Id, origin.MessageId, text, replyMarkup: AdminMenu(), cancellationToken: ct);
+            }
+            else if (action is "grant" or "revoke" or "teston" or "testoff")
+            {
+                _adminPending[actor.Id] = action;
+                var prompt = action == "grant" ? "Введите Telegram ID и количество дней через пробел (например: 123456789 30)." :
+                    "Введите числовой Telegram ID пользователя.";
+                await bot.SendMessage(origin.Chat.Id, prompt + "\n/cancel — отмена", cancellationToken: ct);
+            }
+            await bot.AnswerCallbackQuery(query.Id, cancellationToken: ct);
+            return;
+        }
         switch (data)
         {
             case "owner_home":
