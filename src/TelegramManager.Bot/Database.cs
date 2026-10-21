@@ -30,6 +30,7 @@ public sealed class Database(string connectionString) : IAsyncDisposable
                 CONSTRAINT fk_channels_connected_by FOREIGN KEY (connected_by) REFERENCES users(telegram_id)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
             """,
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS selected_role VARCHAR(16) NULL",
             "ALTER TABLE channels ADD COLUMN IF NOT EXISTS ad_price_rub DECIMAL(10,2) NOT NULL DEFAULT 0",
             "ALTER TABLE channels ADD COLUMN IF NOT EXISTS ad_description TEXT NULL",
             "ALTER TABLE channels ADD COLUMN IF NOT EXISTS ad_formats VARCHAR(255) NOT NULL DEFAULT 'Пост'",
@@ -365,6 +366,38 @@ public sealed class Database(string connectionString) : IAsyncDisposable
         if (!await r.ReadAsync(ct)) return null;
         return (r.GetString(0), r.IsDBNull(1) ? null : r.GetDateTime(1),
             r.IsDBNull(2) ? null : r.GetString(2), r.IsDBNull(3) ? null : r.GetInt32(3));
+    }
+
+
+    public async Task<string?> GetRoleAsync(long user, CancellationToken ct)
+    {
+        await using var cmd = _source.CreateCommand("SELECT selected_role FROM users WHERE telegram_id=@user");
+        cmd.Parameters.Add(new MySqlParameter("@user", user));
+        return (string?)await cmd.ExecuteScalarAsync(ct);
+    }
+
+    public async Task SetRoleAsync(long user, string role, CancellationToken ct)
+    {
+        if (role is not ("owner" or "buyer")) throw new ArgumentOutOfRangeException(nameof(role));
+        await using var cmd = _source.CreateCommand("UPDATE users SET selected_role=@role WHERE telegram_id=@user");
+        cmd.Parameters.Add(new MySqlParameter("@role", role));
+        cmd.Parameters.Add(new MySqlParameter("@user", user));
+        await cmd.ExecuteNonQueryAsync(ct);
+    }
+
+    public async Task<List<(long Id, string Title, decimal Price)>> GetPreviouslyOrderedChannelsAsync(long user, CancellationToken ct)
+    {
+        await using var cmd = _source.CreateCommand("""
+            SELECT c.telegram_id, c.title, c.ad_price_rub FROM channels c
+            JOIN (SELECT channel_id, MAX(created_at) AS last_order FROM ad_requests
+                  WHERE advertiser_id=@user GROUP BY channel_id) a ON a.channel_id=c.telegram_id
+            ORDER BY a.last_order DESC LIMIT 50
+            """);
+        cmd.Parameters.Add(new MySqlParameter("@user", user));
+        await using var r = await cmd.ExecuteReaderAsync(ct);
+        var result = new List<(long, string, decimal)>();
+        while (await r.ReadAsync(ct)) result.Add((r.GetInt64(0), r.GetString(1), r.GetDecimal(2)));
+        return result;
     }
 
     public ValueTask DisposeAsync() => _source.DisposeAsync();
