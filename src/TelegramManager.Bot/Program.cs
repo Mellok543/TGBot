@@ -17,9 +17,12 @@ await database.InitializeAsync(cancellation.Token);
 var bot = new TelegramBotClient(token);
 var me = await bot.GetMe(cancellation.Token);
 var handlers = new BotHandlers(database);
+var scheduler = new AdScheduler(database, bot);
+var schedulerTask = scheduler.RunAsync(cancellation.Token);
 Console.WriteLine($"Telegram Manager started: @{me.Username}");
 await bot.ReceiveAsync(
     (client, update, ct) => handlers.HandleAsync(client, update, ct),
     (_, ex, _) => { Console.Error.WriteLine(ex); return Task.CompletedTask; },
     new ReceiverOptions { AllowedUpdates = [UpdateType.Message, UpdateType.CallbackQuery] },
     cancellationToken: cancellation.Token);
+await schedulerTask;
