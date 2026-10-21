@@ -167,8 +167,7 @@ public sealed class BotHandlers(Database database)
         {
             var valid = pre.Currency == "XTR" && pre.TotalAmount == ProPriceStars &&
                         pre.InvoicePayload == ProPayload(pre.From.Id);
-            await bot.AnswerPreCheckoutQuery(pre.Id, valid,
-                errorMessage: valid ? null : "Некорректный платёж. Создайте новый счёт в профиле.",
+            await bot.AnswerPreCheckoutQuery(pre.Id, errorMessage: valid ? null : "Некорректный платёж. Создайте новый счёт в профиле.",
                 cancellationToken: ct);
             return;
         }
