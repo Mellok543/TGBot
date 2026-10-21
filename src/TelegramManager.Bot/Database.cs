@@ -94,7 +94,14 @@ public sealed class Database(string connectionString) : IAsyncDisposable
             "ALTER TABLE ad_requests ADD COLUMN IF NOT EXISTS published_message_id INT NULL",
             "ALTER TABLE ad_requests ADD COLUMN IF NOT EXISTS published_at DATETIME NULL",
             "ALTER TABLE ad_requests ADD COLUMN IF NOT EXISTS delete_after_hours INT NULL",
-            "ALTER TABLE ad_requests ADD COLUMN IF NOT EXISTS last_error VARCHAR(512) NULL"
+            "ALTER TABLE ad_requests ADD COLUMN IF NOT EXISTS last_error VARCHAR(512) NULL",
+            "ALTER TABLE ad_requests ADD COLUMN IF NOT EXISTS payment_status VARCHAR(24) NOT NULL DEFAULT 'Unpaid'",
+            "ALTER TABLE ad_requests ADD COLUMN IF NOT EXISTS payout_status VARCHAR(24) NOT NULL DEFAULT 'NotEligible'",
+            "ALTER TABLE ad_requests ADD COLUMN IF NOT EXISTS dispute_reason VARCHAR(512) NULL",
+            "ALTER TABLE ad_requests ADD COLUMN IF NOT EXISTS disputed_at DATETIME NULL",
+            "ALTER TABLE ad_requests ADD COLUMN IF NOT EXISTS placement_verified_at DATETIME NULL",
+            "ALTER TABLE ad_requests ADD COLUMN IF NOT EXISTS payout_eligible_at DATETIME NULL",
+            "CREATE INDEX IF NOT EXISTS idx_ad_requests_payout ON ad_requests (payout_status, status)"
         })
         {
             await using var cmd = new MySqlCommand(sql, connection);
@@ -418,7 +425,7 @@ public sealed class Database(string connectionString) : IAsyncDisposable
 
     public async Task FinishPublishAsync(long id, int? messageId, string? error, CancellationToken ct)
     {
-        await using var cmd = _source.CreateCommand("UPDATE ad_requests SET status=@status, published_message_id=@msg, published_at=IF(@msg IS NULL,NULL,UTC_TIMESTAMP()), last_error=@error WHERE id=@id AND status='Publishing'");
+        await using var cmd = _source.CreateCommand("UPDATE ad_requests SET status=@status, published_message_id=@msg, published_at=IF(@msg IS NULL,NULL,UTC_TIMESTAMP()), payout_status=IF(@msg IS NULL,'NotEligible','OnHold'), last_error=@error WHERE id=@id AND status='Publishing'");
         cmd.Parameters.Add(new MySqlParameter("@status", messageId is null ? "PublishFailed" : "Published"));
         cmd.Parameters.Add(new MySqlParameter("@msg", (object?)messageId ?? DBNull.Value));
         cmd.Parameters.Add(new MySqlParameter("@error", (object?)error ?? DBNull.Value));
@@ -437,7 +444,7 @@ public sealed class Database(string connectionString) : IAsyncDisposable
 
     public async Task FinishDeletionAsync(long id, string? error, CancellationToken ct)
     {
-        await using var cmd = _source.CreateCommand("UPDATE ad_requests SET status=@status, last_error=@error WHERE id=@id AND status='Published'");
+        await using var cmd = _source.CreateCommand("UPDATE ad_requests SET status=@status, payout_status=IF(@error IS NULL,'AwaitingVerification','OnHold'), last_error=@error WHERE id=@id AND status='Published'");
         cmd.Parameters.Add(new MySqlParameter("@status", error is null ? "Deleted" : "DeleteFailed"));
         cmd.Parameters.Add(new MySqlParameter("@error", (object?)error ?? DBNull.Value));
         cmd.Parameters.Add(new MySqlParameter("@id", id));
@@ -672,4 +679,33 @@ public sealed class Database(string connectionString) : IAsyncDisposable
     }
 
     public ValueTask DisposeAsync() => _source.DisposeAsync();
+    // Protected orders: never automatically release money on the basis of a timer alone.
+    public async Task<bool> OpenDisputeAsync(long orderId, long actorId, string reason, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(reason)) return false;
+        await using var cmd = _source.CreateCommand("""
+            UPDATE ad_requests SET status='Disputed', payout_status='Blocked',
+                dispute_reason=@reason, disputed_at=UTC_TIMESTAMP()
+            WHERE id=@id AND (advertiser_id=@actor OR owner_id=@actor)
+                AND status IN ('Published','Deleted','DeleteFailed')
+                AND payout_status NOT IN ('Paid','Refunded')
+            """);
+        cmd.Parameters.Add(new MySqlParameter("@id", orderId));
+        cmd.Parameters.Add(new MySqlParameter("@actor", actorId));
+        cmd.Parameters.Add(new MySqlParameter("@reason", reason.Length > 512 ? reason[..512] : reason));
+        return await cmd.ExecuteNonQueryAsync(ct) == 1;
+    }
+
+    public async Task<bool> MarkPlacementVerifiedAsync(long orderId, CancellationToken ct)
+    {
+        await using var cmd = _source.CreateCommand("""
+            UPDATE ad_requests SET placement_verified_at=UTC_TIMESTAMP(),
+                payout_status='ReadyForManualReview', payout_eligible_at=UTC_TIMESTAMP()
+            WHERE id=@id AND status='Deleted' AND payout_status='AwaitingVerification'
+                AND payment_status='Paid'
+            """);
+        cmd.Parameters.Add(new MySqlParameter("@id", orderId));
+        return await cmd.ExecuteNonQueryAsync(ct) == 1;
+    }
+
 }
