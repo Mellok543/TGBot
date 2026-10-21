@@ -33,6 +33,7 @@ public sealed class Database(string connectionString) : IAsyncDisposable
             "ALTER TABLE users ADD COLUMN IF NOT EXISTS subscription_until DATETIME NULL",
             "ALTER TABLE users ADD COLUMN IF NOT EXISTS first_channel_at DATETIME NULL",
             "ALTER TABLE users ADD COLUMN IF NOT EXISTS pro_granted_until DATETIME NULL",
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS is_test_account BOOLEAN NOT NULL DEFAULT FALSE",
             """
             CREATE TABLE IF NOT EXISTS star_payments (
                 telegram_payment_charge_id VARCHAR(255) PRIMARY KEY,
@@ -647,6 +648,27 @@ public sealed class Database(string connectionString) : IAsyncDisposable
         await using var cmd = _source.CreateCommand("UPDATE users SET pro_granted_until=NULL WHERE telegram_id=@user");
         cmd.Parameters.Add(new MySqlParameter("@user", userId));
         return await cmd.ExecuteNonQueryAsync(ct) == 1;
+    }
+
+    public async Task<bool> SetTestAccountAsync(long userId, bool enabled, CancellationToken ct)
+    {
+        await using var cmd = _source.CreateCommand("UPDATE users SET is_test_account=@enabled WHERE telegram_id=@user");
+        cmd.Parameters.Add(new MySqlParameter("@enabled", enabled));
+        cmd.Parameters.Add(new MySqlParameter("@user", userId));
+        return await cmd.ExecuteNonQueryAsync(ct) == 1;
+    }
+
+    public async Task<List<(long Id, string Name, bool Test)>> GetAdminUsersAsync(CancellationToken ct)
+    {
+        await using var cmd = _source.CreateCommand("""
+            SELECT telegram_id, display_name, is_test_account FROM users
+            ORDER BY created_at DESC LIMIT 15
+            """);
+        await using var r = await cmd.ExecuteReaderAsync(ct);
+        var result = new List<(long, string, bool)>();
+        while (await r.ReadAsync(ct))
+            result.Add((r.GetInt64(0), r.GetString(1), r.GetBoolean(2)));
+        return result;
     }
 
     public ValueTask DisposeAsync() => _source.DisposeAsync();
