@@ -109,6 +109,11 @@ public sealed class BotHandlers(Database database)
             if (message.From is not { } user || message.Chat.Type != ChatType.Private) return;
             await database.RegisterAsync(user.Id, user.Username, user.FirstName + (user.LastName is null ? "" : " " + user.LastName), ct);
 
+            if (message.Text?.StartsWith("/menu", StringComparison.Ordinal) == true)
+            {
+                await bot.SendMessage(message.Chat.Id, "Главное меню:", replyMarkup: ForRole(await database.GetRoleAsync(user.Id, ct)), cancellationToken: ct);
+                return;
+            }
             if (message.Text?.StartsWith("/cancel", StringComparison.Ordinal) == true)
             {
                 _pending.TryRemove(user.Id, out _);
