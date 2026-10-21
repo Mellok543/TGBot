@@ -2,6 +2,7 @@ using Telegram.Bot;
 using Telegram.Bot.Types;
 using Telegram.Bot.Types.Enums;
 using Telegram.Bot.Types.ReplyMarkups;
+using Telegram.Bot.Types.Payments;
 
 namespace TelegramManager.Bot;
 
@@ -157,12 +158,46 @@ public sealed class BotHandlers(Database database)
         new[] { InlineKeyboardButton.WithCallbackData("⬅️ Назад", "home") }
     });
 
+    private const int ProPriceStars = 299;
+    private static string ProPayload(long userId) => $"pro30:{userId}";
+
     public async Task HandleAsync(ITelegramBotClient bot, Update update, CancellationToken ct)
     {
+        if (update.PreCheckoutQuery is { } pre)
+        {
+            var valid = pre.Currency == "XTR" && pre.TotalAmount == ProPriceStars &&
+                        pre.InvoicePayload == ProPayload(pre.From.Id);
+            await bot.AnswerPreCheckoutQuery(pre.Id, valid,
+                errorMessage: valid ? null : "Некорректный платёж. Создайте новый счёт в профиле.",
+                cancellationToken: ct);
+            return;
+        }
+
         if (update.Message is { } message)
         {
             if (message.From is not { } user || message.Chat.Type != ChatType.Private) return;
             await database.RegisterAsync(user.Id, user.Username, user.FirstName + (user.LastName is null ? "" : " " + user.LastName), ct);
+            if (message.SuccessfulPayment is { } payment)
+            {
+                if (payment.Currency == "XTR" && payment.TotalAmount == ProPriceStars &&
+                    payment.InvoicePayload == ProPayload(user.Id))
+                {
+                    var credited = await database.RecordSubscriptionPaymentAsync(user.Id,
+                        payment.TelegramPaymentChargeId, payment.TotalAmount, ct);
+                    var expiry = await database.GetSubscriptionUntilAsync(user.Id, ct);
+                    await bot.SendMessage(message.Chat.Id,
+                        credited ? $"⭐ PRO активирован до {expiry?.Add(DisplayOffset):dd.MM.yyyy HH:mm} (UTC+3)."
+                                : "Платёж уже обработан или требует проверки. Если PRO не активен, обратитесь в поддержку.",
+                        replyMarkup: Home(), cancellationToken: ct);
+                }
+                else
+                {
+                    Console.Error.WriteLine($"Unexpected payment payload for user {user.Id}; charge {payment.TelegramPaymentChargeId}");
+                    await bot.SendMessage(message.Chat.Id, "Платёж получен, но данные заказа не совпали. Обратитесь в поддержку для проверки.", cancellationToken: ct);
+                }
+                return;
+            }
+
 
             // ADMIN_TELEGRAM_ID must be a numeric Telegram user ID, never a username.
             var adminConfigured = long.TryParse(Environment.GetEnvironmentVariable("ADMIN_TELEGRAM_ID"), out var adminId);
@@ -429,6 +464,16 @@ public sealed class BotHandlers(Database database)
                     $"🛒 Покупки рекламы\nПодтверждённых заказов: {buyerAnalytics.Bought}\nСумма заказов: {buyerAnalytics.BookedRub:0.##} ₽\n\nЭто стоимость заказов, не подтверждение оплаты.",
                     replyMarkup: Back(), cancellationToken: ct);
                 break;
+            case "buy_pro":
+                await bot.SendInvoice(origin.Chat.Id,
+                    title: "Telegram Manager PRO — 30 дней",
+                    description: "До 10 каналов и расширенная статистика на 30 дней.",
+                    payload: ProPayload(actor.Id),
+                    currency: "XTR",
+                    prices: new[] { new LabeledPrice("PRO — 30 дней", ProPriceStars) },
+                    providerToken: "",
+                    cancellationToken: ct);
+                break;
             case "subscription_status":
                 var plan = await database.GetPlanAsync(actor.Id, ct);
                 var planText = plan.Pro
@@ -439,7 +484,11 @@ public sealed class BotHandlers(Database database)
                         ? $"🎁 Бесплатный период до {plan.TrialEnds.Add(DisplayOffset):dd.MM.yyyy HH:mm} (UTC+3).\nЛимит: 1 канал."
                         : "⏳ Бесплатные 30 дней закончились. Для новых продаж и подключения каналов необходим PRO — 299 Stars / 30 дней.\nОплата Stars пока не подключена.";
                 await bot.EditMessageText(origin.Chat.Id, origin.MessageId, planText,
-                    replyMarkup: Back(), cancellationToken: ct);
+                    replyMarkup: new InlineKeyboardMarkup(new[]
+                    {
+                        new[] { InlineKeyboardButton.WithCallbackData("⭐ Купить / продлить PRO — 299 Stars", "buy_pro") },
+                        new[] { InlineKeyboardButton.WithCallbackData("⬅️ Главное меню", "home") }
+                    }), cancellationToken: ct);
                 break;
             case "owner_earnings":
                 var earnings = await database.GetOwnerEarningsAsync(actor.Id, ct);
