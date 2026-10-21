@@ -21,6 +21,7 @@ public sealed class BotHandlers(Database database)
         new[] { InlineKeyboardButton.WithCallbackData("🧪 Убрать тестовый аккаунт", "admin:testoff") },
         new[] { InlineKeyboardButton.WithCallbackData("👥 Последние пользователи", "admin:users") },
         new[] { InlineKeyboardButton.WithCallbackData("⚖️ Спорные заказы", "admin:disputes") },
+        new[] { InlineKeyboardButton.WithCallbackData("🩺 Состояние заказов и очереди", "admin:operations") },
         new[] { InlineKeyboardButton.WithCallbackData("⬅️ Главное меню", "home") }
     });
 
@@ -449,6 +450,17 @@ public sealed class BotHandlers(Database database)
                 var rows = disputes.Select(x => new[] { InlineKeyboardButton.WithCallbackData($"⚖️ Рассмотреть #{x.Id}", $"admin:dispute:{x.Id}") }).ToList();
                 rows.Add(new[] { InlineKeyboardButton.WithCallbackData("⬅️ Админ-меню", "admin:back") });
                 await bot.EditMessageText(origin.Chat.Id, origin.MessageId, details, replyMarkup: new InlineKeyboardMarkup(rows), cancellationToken: ct);
+            }
+            else if (action == "operations")
+            {
+                var stats = await database.GetOperationsSummaryAsync(ct);
+                var problemOrders = await database.GetOrdersNeedingAttentionAsync(ct);
+                var issues = problemOrders.Count == 0 ? "Нет заказов с ошибками." :
+                    string.Join("\n", problemOrders.Select(x => $"#{x.Id} · {x.Status} · {x.Error ?? "Без подробностей"}"));
+                var report = $"🩺 Состояние системы\nУведомления: ожидают {stats.Pending}, отправляются {stats.Sending}, ошибки {stats.Failed}\nЗависшие публикации: {stats.StuckPublishing}\nОшибки удаления: {stats.DeleteFailures}\n\nЗаказы для проверки:\n{issues}";
+                await bot.EditMessageText(origin.Chat.Id, origin.MessageId,
+                    report.Length > 3900 ? report[..3900] : report,
+                    replyMarkup: AdminMenu(), cancellationToken: ct);
             }
             else if (action == "users")
             {
