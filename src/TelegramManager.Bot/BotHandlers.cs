@@ -308,6 +308,10 @@ public sealed class BotHandlers(Database database)
             case "home":
                 await bot.EditMessageText(origin.Chat.Id, origin.MessageId, "Telegram Manager", replyMarkup: ForRole(await database.GetRoleAsync(actor.Id, ct)), cancellationToken: ct);
                 break;
+            case "clock":
+                var dbNow = await database.GetDatabaseUtcAsync(ct);
+                await bot.SendMessage(origin.Chat.Id, $"🕒 Время базы данных: {dbNow:dd.MM.yyyy HH:mm:ss} UTC\nВремя приложения: {DateTime.UtcNow:dd.MM.yyyy HH:mm:ss} UTC\nЕсли время заявки позже этих значений, публикация ещё не наступила.", cancellationToken: ct);
+                break;
             case "profile_settings":
                 await bot.EditMessageText(origin.Chat.Id, origin.MessageId, "⚙️ Настройки профиля", replyMarkup: new InlineKeyboardMarkup(new[]
                 {
