@@ -9,6 +9,7 @@ public sealed class BotHandlers(Database database)
 {
     private readonly System.Collections.Concurrent.ConcurrentDictionary<long, (long ChannelId, string Field)> _pending = new();
     private readonly System.Collections.Concurrent.ConcurrentDictionary<long, long> _pendingAds = new();
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<long, long> _pendingSchedules = new();
 
     private async Task ShowAdAsync(ITelegramBotClient bot, long chatId, long userId, long requestId, CancellationToken ct)
     {
@@ -22,6 +23,18 @@ public sealed class BotHandlers(Database database)
             await bot.SendVideo(chatId, InputFile.FromFileId(a.File), caption: a.Text, cancellationToken: ct);
         else if (a.Type == "document" && a.File is not null)
             await bot.SendDocument(chatId, InputFile.FromFileId(a.File), caption: a.Text, cancellationToken: ct);
+        if (a.Advertiser == userId && a.Status == "Approved")
+            await bot.SendMessage(chatId, "Выберите время размещения (UTC):", replyMarkup: new InlineKeyboardMarkup(new[]
+            {
+                new[] { InlineKeyboardButton.WithCallbackData("📅 Предложить время", $"schedule:{a.Id}") }
+            }), cancellationToken: ct);
+        if (a.Owner == userId && a.Status == "AwaitingConfirmation")
+            await bot.SendMessage(chatId, "Подтвердите получение оплаты и бронирование. Публикация произойдёт автоматически.", replyMarkup: new InlineKeyboardMarkup(new[]
+            {
+                new[] { InlineKeyboardButton.WithCallbackData("✅ Оплачено · без удаления", $"confirm:0:{a.Id}") },
+                new[] { InlineKeyboardButton.WithCallbackData("✅ Оплачено · удалить через 24 ч", $"confirm:24:{a.Id}") },
+                new[] { InlineKeyboardButton.WithCallbackData("✅ Оплачено · удалить через 48 ч", $"confirm:48:{a.Id}") }
+            }), cancellationToken: ct);
         if (a.Owner == userId && a.Status == "Pending")
             await bot.SendMessage(chatId, "Решение по заявке:", replyMarkup: new InlineKeyboardMarkup(new[]
             {
@@ -84,10 +97,32 @@ public sealed class BotHandlers(Database database)
             {
                 _pending.TryRemove(user.Id, out _);
                 _pendingAds.TryRemove(user.Id, out _);
+                _pendingSchedules.TryRemove(user.Id, out _);
                 await bot.SendMessage(message.Chat.Id, "Действие отменено.", replyMarkup: Home(), cancellationToken: ct);
                 return;
             }
 
+            if (_pendingSchedules.TryRemove(user.Id, out var scheduleId))
+            {
+                var input = message.Text?.Trim() ?? "";
+                if (!DateTime.TryParseExact(input, "yyyy-MM-dd HH:mm", System.Globalization.CultureInfo.InvariantCulture,
+                    System.Globalization.DateTimeStyles.None, out var at) || at <= DateTime.UtcNow.AddMinutes(2) || at > DateTime.UtcNow.AddDays(90))
+                {
+                    await bot.SendMessage(message.Chat.Id, "Формат: 2026-11-15 14:30 (UTC). Время от 2 минут до 90 дней вперёд.", cancellationToken: ct);
+                    return;
+                }
+                if (!await database.ProposeAsync(scheduleId, user.Id, at, ct))
+                {
+                    await bot.SendMessage(message.Chat.Id, "Заявка недоступна для планирования.", cancellationToken: ct);
+                    return;
+                }
+                await bot.SendMessage(message.Chat.Id, $"Время {at:yyyy-MM-dd HH:mm} UTC предложено владельцу.", cancellationToken: ct);
+                var scheduled = await database.GetAdRequestAsync(scheduleId, ct);
+                if (scheduled is not null)
+                    try { await bot.SendMessage(scheduled.Value.Owner, $"📅 Заявка #{scheduleId}: предложено {at:yyyy-MM-dd HH:mm} UTC. Откройте входящие заявки и подтвердите получение оплаты."); }
+                    catch (Telegram.Bot.Exceptions.ApiRequestException ex) { Console.Error.WriteLine(ex.Message); }
+                return;
+            }
             if (_pendingAds.TryRemove(user.Id, out var adChannelId))
             {
                 var type = message.Photo?.Length > 0 ? "photo" : message.Video is not null ? "video" : message.Document is not null ? "document" : message.Text is not null ? "text" : "";
@@ -246,6 +281,19 @@ public sealed class BotHandlers(Database database)
                     _ => "Введите доступные форматы рекламы (до 255 символов)."
                 };
                 await bot.SendMessage(origin.Chat.Id, prompt + "\nДля отмены: /cancel", cancellationToken: ct);
+                break;
+            case string scheduleData when scheduleData.StartsWith("schedule:") && long.TryParse(scheduleData[9..], out var scheduleId):
+                var scheduling = await database.GetAdRequestAsync(scheduleId, ct);
+                if (scheduling is null || scheduling.Value.Advertiser != actor.Id || scheduling.Value.Status != "Approved") break;
+                _pendingSchedules[actor.Id] = scheduleId;
+                await bot.SendMessage(origin.Chat.Id, "Введите дату и время UTC в формате ГГГГ-ММ-ДД ЧЧ:ММ (например 2026-11-15 14:30). Отмена: /cancel.", cancellationToken: ct);
+                break;
+            case string confirmData when confirmData.StartsWith("confirm:"):
+                var confirmParts = data.Split(':');
+                if (confirmParts.Length != 3 || !long.TryParse(confirmParts[2], out var confirmId) || !int.TryParse(confirmParts[1], out var hours) || hours is not (0 or 24 or 48)) break;
+                if (await database.ConfirmAsync(confirmId, actor.Id, hours == 0 ? null : hours, ct))
+                    await bot.EditMessageText(origin.Chat.Id, origin.MessageId, $"Заявка #{confirmId}: оплата подтверждена, публикация запланирована.", cancellationToken: ct);
+                else await bot.SendMessage(origin.Chat.Id, "Не удалось подтвердить: заявка недоступна или время уже занято.", cancellationToken: ct);
                 break;
             case "catalog":
                 var catalog = await database.GetCatalogAsync(ct);
