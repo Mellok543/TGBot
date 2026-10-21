@@ -29,6 +29,6 @@ Console.WriteLine($"Telegram Manager started: @{me.Username}");
 await bot.ReceiveAsync(
     (client, update, ct) => handlers.HandleAsync(client, update, ct),
     (_, ex, _) => { Console.Error.WriteLine(ex); return Task.CompletedTask; },
-    new ReceiverOptions { AllowedUpdates = [UpdateType.Message, UpdateType.CallbackQuery] },
+    new ReceiverOptions { AllowedUpdates = [UpdateType.Message, UpdateType.CallbackQuery, UpdateType.PreCheckoutQuery] },
     cancellationToken: cancellation.Token);
 await schedulerTask;
