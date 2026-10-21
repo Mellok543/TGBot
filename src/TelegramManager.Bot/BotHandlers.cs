@@ -17,12 +17,12 @@ public sealed class BotHandlers(Database database)
         var now = await database.GetDatabaseUtcAsync(ct);
         var rows = Enumerable.Range(0, 7).Select(i =>
         {
-            var day = now.Date.AddDays(i);
+            var day = now.Add(DisplayOffset).Date.AddDays(i);
             return new[] { InlineKeyboardButton.WithCallbackData(day.ToString("ddd dd.MM", new System.Globalization.CultureInfo("ru-RU")), $"day:{requestId}:{day:yyyyMMdd}") };
         }).ToList();
         rows.Add(new[] { InlineKeyboardButton.WithCallbackData("⚡ Ближайшее свободное время", $"nextslot:{requestId}") });
         rows.Add(new[] { InlineKeyboardButton.WithCallbackData("✍️ Ввести дату вручную", $"manualslot:{requestId}") });
-        await bot.SendMessage(chatId, $"🕒 Сейчас в базе: {now:dd.MM.yyyy HH:mm:ss} UTC\nВыберите день публикации:", replyMarkup: new InlineKeyboardMarkup(rows), cancellationToken: ct);
+        await bot.SendMessage(chatId, $"🕒 Сейчас: {now.Add(DisplayOffset):dd.MM.yyyy HH:mm:ss} (UTC+3)\nВыберите день публикации:", replyMarkup: new InlineKeyboardMarkup(rows), cancellationToken: ct);
     }
 
     private async Task ProposeBookingAsync(ITelegramBotClient bot, long chatId, long advertiser, long requestId, DateTime utc, CancellationToken ct)
@@ -38,12 +38,12 @@ public sealed class BotHandlers(Database database)
             await bot.SendMessage(chatId, "Заявка недоступна для бронирования.", cancellationToken: ct);
             return;
         }
-        await bot.SendMessage(chatId, $"Предложено {utc:dd.MM.yyyy HH:mm} UTC. Ожидайте подтверждения оплаты владельцем.", cancellationToken: ct);
+        await bot.SendMessage(chatId, $"Предложено {utc.Add(DisplayOffset):dd.MM.yyyy HH:mm} (UTC+3). Ожидайте подтверждения оплаты владельцем.", cancellationToken: ct);
         var ad = await database.GetAdRequestAsync(requestId, ct);
         if (ad is null) return;
         try
         {
-            await bot.SendMessage(ad.Value.Owner, $"📅 Заявка #{requestId}: {utc:dd.MM.yyyy HH:mm} UTC. Подтвердите получение оплаты:", replyMarkup: new InlineKeyboardMarkup(new[]
+            await bot.SendMessage(ad.Value.Owner, $"📅 Заявка #{requestId}: {utc.Add(DisplayOffset):dd.MM.yyyy HH:mm} (UTC+3). Подтвердите получение оплаты:", replyMarkup: new InlineKeyboardMarkup(new[]
             {
                 new[] { InlineKeyboardButton.WithCallbackData("✅ Оплачено · оставить", $"confirm:0:{requestId}") },
                 new[] { InlineKeyboardButton.WithCallbackData("✅ Оплачено · удалить через 24 ч", $"confirm:24:{requestId}") },
@@ -61,7 +61,7 @@ public sealed class BotHandlers(Database database)
         await bot.SendMessage(chatId, $"Заявка #{a.Id} | {a.Channel}\nСтатус: {a.Status}\nЦена: {a.Price:0.##} ₽\nТип: {a.Type}\n{a.Text}", cancellationToken: ct);
         var status = await database.GetScheduleStatusAsync(a.Id, userId, ct);
         if (status is { } s && (s.Scheduled is not null || s.Error is not null || s.MessageId is not null))
-            await bot.SendMessage(chatId, $"🕒 Публикация UTC: {s.Scheduled:yyyy-MM-dd HH:mm}\nСтатус: {s.Status}\nОшибка: {s.Error ?? "нет"}\nID сообщения: {s.MessageId?.ToString() ?? "нет"}", cancellationToken: ct);
+            await bot.SendMessage(chatId, $"🕒 Публикация (UTC+3): {s.Scheduled?.Add(DisplayOffset):yyyy-MM-dd HH:mm}\nСтатус: {s.Status}\nОшибка: {s.Error ?? "нет"}\nID сообщения: {s.MessageId?.ToString() ?? "нет"}", cancellationToken: ct);
         if (a.Type == "photo" && a.File is not null)
             await bot.SendPhoto(chatId, InputFile.FromFileId(a.File), caption: a.Text, cancellationToken: ct);
         else if (a.Type == "video" && a.File is not null)
@@ -114,26 +114,28 @@ public sealed class BotHandlers(Database database)
             await bot.SendMessage(chatId, text, replyMarkup: SettingsKeyboard(channelId), cancellationToken: ct);
     }
 
-    private static InlineKeyboardMarkup RolePicker() => new(new[]
+    private static readonly TimeSpan DisplayOffset = TimeSpan.FromHours(3);
+    private static InlineKeyboardMarkup Home() => new(new[]
     {
-        new[] { InlineKeyboardButton.WithCallbackData("📺 Я владелец каналов", "owner_home") },
-        new[] { InlineKeyboardButton.WithCallbackData("📣 Я рекламодатель", "buyer_home") }
+        new[] { InlineKeyboardButton.WithCallbackData("📺 Мои каналы", "owner_home") },
+        new[] { InlineKeyboardButton.WithCallbackData("🛒 Покупка рекламы", "buyer_home") },
+        new[] { InlineKeyboardButton.WithCallbackData("📅 Мои размещения", "placements") },
+        new[] { InlineKeyboardButton.WithCallbackData("⚙️ Настройки", "profile_settings") }
     });
+    private static InlineKeyboardMarkup ForRole(string? role) => Home();
     private static InlineKeyboardMarkup OwnerHome() => new(new[]
     {
-        new[] { InlineKeyboardButton.WithCallbackData("📺 Мои каналы", "channels") },
+        new[] { InlineKeyboardButton.WithCallbackData("📺 Управление каналами", "channels") },
         new[] { InlineKeyboardButton.WithCallbackData("➕ Подключить канал", "connect") },
         new[] { InlineKeyboardButton.WithCallbackData("📥 Входящие заявки", "incoming") },
-        new[] { InlineKeyboardButton.WithCallbackData("⚙️ Настройки", "profile_settings") }
+        new[] { InlineKeyboardButton.WithCallbackData("⬅️ Главное меню", "home") }
     });
     private static InlineKeyboardMarkup BuyerHome() => new(new[]
     {
+        new[] { InlineKeyboardButton.WithCallbackData("⭐ Ранее заказанные каналы", "buyer_channels") },
         new[] { InlineKeyboardButton.WithCallbackData("📤 Мои заявки", "outgoing") },
-        new[] { InlineKeyboardButton.WithCallbackData("⭐ Мои каналы", "buyer_channels") },
-        new[] { InlineKeyboardButton.WithCallbackData("🔁 Сменить роль", "home") }
+        new[] { InlineKeyboardButton.WithCallbackData("⬅️ Главное меню", "home") }
     });
-    private static InlineKeyboardMarkup Home() => RolePicker();
-    private static InlineKeyboardMarkup ForRole(string? role) => role == "owner" ? OwnerHome() : role == "buyer" ? BuyerHome() : RolePicker();
     private static InlineKeyboardMarkup Back() => new(new[]
     {
         new[] { InlineKeyboardButton.WithCallbackData("⬅️ Главное меню", "home") }
@@ -153,7 +155,7 @@ public sealed class BotHandlers(Database database)
 
             if (message.Text?.StartsWith("/menu", StringComparison.Ordinal) == true)
             {
-                await bot.SendMessage(message.Chat.Id, "Главное меню:", replyMarkup: ForRole(await database.GetRoleAsync(user.Id, ct)), cancellationToken: ct);
+                await bot.SendMessage(message.Chat.Id, "Главное меню:", replyMarkup: Home(), cancellationToken: ct);
                 return;
             }
             if (message.Text?.StartsWith("/cancel", StringComparison.Ordinal) == true)
@@ -169,20 +171,20 @@ public sealed class BotHandlers(Database database)
             {
                 var input = message.Text?.Trim() ?? "";
                 if (!DateTime.TryParseExact(input, "yyyy-MM-dd HH:mm", System.Globalization.CultureInfo.InvariantCulture,
-                    System.Globalization.DateTimeStyles.None, out var at) || at <= DateTime.UtcNow.AddMinutes(2) || at > DateTime.UtcNow.AddDays(90))
+                    System.Globalization.DateTimeStyles.None, out var at) || at.Add(-DisplayOffset) <= DateTime.UtcNow.AddMinutes(2) || at.Add(-DisplayOffset) > DateTime.UtcNow.AddDays(90))
                 {
                     await bot.SendMessage(message.Chat.Id, "Формат: 2026-11-15 14:30 (UTC). Время от 2 минут до 90 дней вперёд.", cancellationToken: ct);
                     return;
                 }
-                if (!await database.ProposeAsync(scheduleId, user.Id, at, ct))
+                if (!await database.ProposeAsync(scheduleId, user.Id, at.Add(-DisplayOffset), ct))
                 {
                     await bot.SendMessage(message.Chat.Id, "Заявка недоступна для планирования.", cancellationToken: ct);
                     return;
                 }
-                await bot.SendMessage(message.Chat.Id, $"Время {at:yyyy-MM-dd HH:mm} UTC предложено владельцу.", cancellationToken: ct);
+                await bot.SendMessage(message.Chat.Id, $"Время {at:yyyy-MM-dd HH:mm} (UTC+3) предложено владельцу.", cancellationToken: ct);
                 var scheduled = await database.GetAdRequestAsync(scheduleId, ct);
                 if (scheduled is not null)
-                    try { await bot.SendMessage(scheduled.Value.Owner, $"📅 Заявка #{scheduleId}: предложено {at:yyyy-MM-dd HH:mm} UTC. Подтвердите оплату и срок размещения:", replyMarkup: new InlineKeyboardMarkup(new[]
+                    try { await bot.SendMessage(scheduled.Value.Owner, $"📅 Заявка #{scheduleId}: предложено {at:yyyy-MM-dd HH:mm} (UTC+3). Подтвердите оплату и срок размещения:", replyMarkup: new InlineKeyboardMarkup(new[]
                     {
                         new[] { InlineKeyboardButton.WithCallbackData("✅ Оплачено · оставить пост", $"confirm:0:{scheduleId}") },
                         new[] { InlineKeyboardButton.WithCallbackData("✅ Оплачено · удалить через 24 ч", $"confirm:24:{scheduleId}") },
@@ -279,7 +281,7 @@ public sealed class BotHandlers(Database database)
                 {
                     await ShowOfferAsync(bot, message.Chat.Id, null, directId, ct);
                 }
-                else await bot.SendMessage(message.Chat.Id, "Telegram Manager\nГлавное меню:", replyMarkup: ForRole(await database.GetRoleAsync(user.Id, ct)), cancellationToken: ct);
+                else await bot.SendMessage(message.Chat.Id, "Telegram Manager\nГлавное меню:", replyMarkup: Home(), cancellationToken: ct);
             }
             else if (message.Text?.StartsWith("/cancel", StringComparison.Ordinal) == true)
                 await bot.SendMessage(message.Chat.Id, "Действие отменено.", replyMarkup: Home(), cancellationToken: ct);
@@ -298,29 +300,37 @@ public sealed class BotHandlers(Database database)
         switch (data)
         {
             case "owner_home":
-                await database.SetRoleAsync(actor.Id, "owner", ct);
+
                 await bot.EditMessageText(origin.Chat.Id, origin.MessageId, "📺 Панель владельца каналов", replyMarkup: OwnerHome(), cancellationToken: ct);
                 break;
             case "buyer_home":
-                await database.SetRoleAsync(actor.Id, "buyer", ct);
+
                 await bot.EditMessageText(origin.Chat.Id, origin.MessageId, "📣 Кабинет рекламодателя. Для заказа рекламы перейдите по ссылке, предоставленной каналом.", replyMarkup: BuyerHome(), cancellationToken: ct);
                 break;
             case "home":
-                await bot.EditMessageText(origin.Chat.Id, origin.MessageId, "Telegram Manager", replyMarkup: ForRole(await database.GetRoleAsync(actor.Id, ct)), cancellationToken: ct);
+                await bot.EditMessageText(origin.Chat.Id, origin.MessageId, "Telegram Manager", replyMarkup: Home(), cancellationToken: ct);
+                break;
+            case "placements":
+                await bot.EditMessageText(origin.Chat.Id, origin.MessageId, "📅 Мои размещения", replyMarkup: new InlineKeyboardMarkup(new[]
+                {
+                    new[] { InlineKeyboardButton.WithCallbackData("📥 Продажа рекламы", "incoming") },
+                    new[] { InlineKeyboardButton.WithCallbackData("📤 Покупка рекламы", "outgoing") },
+                    new[] { InlineKeyboardButton.WithCallbackData("⬅️ Главное меню", "home") }
+                }), cancellationToken: ct);
                 break;
             case "clock":
                 var dbNow = await database.GetDatabaseUtcAsync(ct);
-                await bot.SendMessage(origin.Chat.Id, $"🕒 Время базы данных: {dbNow:dd.MM.yyyy HH:mm:ss} UTC\nВремя приложения: {DateTime.UtcNow:dd.MM.yyyy HH:mm:ss} UTC\nЕсли время заявки позже этих значений, публикация ещё не наступила.", cancellationToken: ct);
+                await bot.SendMessage(origin.Chat.Id, $"🕒 Время (UTC+3): {dbNow.Add(DisplayOffset):dd.MM.yyyy HH:mm:ss}\nВремя базы (UTC): {dbNow:dd.MM.yyyy HH:mm:ss}\nЕсли время заявки позже этих значений, публикация ещё не наступила.", cancellationToken: ct);
                 break;
             case "profile_settings":
                 await bot.EditMessageText(origin.Chat.Id, origin.MessageId, "⚙️ Настройки профиля", replyMarkup: new InlineKeyboardMarkup(new[]
                 {
-                    new[] { InlineKeyboardButton.WithCallbackData("🔁 Сменить роль", "change_role") },
+                    new[] { InlineKeyboardButton.WithCallbackData("🕒 Текущее время", "clock") },
                     new[] { InlineKeyboardButton.WithCallbackData("⬅️ Назад", "home") }
                 }), cancellationToken: ct);
                 break;
             case "change_role":
-                await bot.EditMessageText(origin.Chat.Id, origin.MessageId, "Выберите роль:", replyMarkup: RolePicker(), cancellationToken: ct);
+                await bot.EditMessageText(origin.Chat.Id, origin.MessageId, "Главное меню:", replyMarkup: Home(), cancellationToken: ct);
                 break;
             case "buyer_channels":
                 var previous = await database.GetPreviouslyOrderedChannelsAsync(actor.Id, ct);
@@ -401,7 +411,7 @@ public sealed class BotHandlers(Database database)
                 var manualAd = await database.GetAdRequestAsync(manualId, ct);
                 if (manualAd is null || manualAd.Value.Advertiser != actor.Id || manualAd.Value.Status != "Approved") break;
                 _pendingSchedules[actor.Id] = manualId;
-                await bot.SendMessage(origin.Chat.Id, "Введите дату и время UTC: ГГГГ-ММ-ДД ЧЧ:ММ. Отмена: /cancel.", cancellationToken: ct);
+                await bot.SendMessage(origin.Chat.Id, "Введите дату и время (UTC+3): ГГГГ-ММ-ДД ЧЧ:ММ. Отмена: /cancel.", cancellationToken: ct);
                 break;
             case string dayData when dayData.StartsWith("day:"):
                 var dayParts = data.Split(':');
@@ -411,16 +421,16 @@ public sealed class BotHandlers(Database database)
                 var dayAd = await database.GetAdRequestAsync(dayId, ct);
                 if (dayAd is null || dayAd.Value.Advertiser != actor.Id || dayAd.Value.Status != "Approved") break;
                 var utcNow = await database.GetDatabaseUtcAsync(ct);
-                if (chosenDay.Date < utcNow.Date || chosenDay.Date > utcNow.Date.AddDays(7)) break;
+                if (chosenDay.Date < utcNow.Add(DisplayOffset).Date || chosenDay.Date > utcNow.Add(DisplayOffset).Date.AddDays(7)) break;
                 var timeRows = new List<InlineKeyboardButton[]>();
                 foreach (var hour in new[] { 9, 12, 15, 18, 21 })
                 {
                     var time = chosenDay.Date.AddHours(hour);
-                    if (time <= utcNow.AddMinutes(2)) continue;
-                    timeRows.Add(new[] { InlineKeyboardButton.WithCallbackData($"{hour:00}:00 UTC", $"slot:{dayId}:{time:yyyyMMddHHmm}") });
+                    if (time.Add(-DisplayOffset) <= utcNow.AddMinutes(2)) continue;
+                    timeRows.Add(new[] { InlineKeyboardButton.WithCallbackData($"{hour:00}:00 (UTC+3)", $"slot:{dayId}:{time:yyyyMMddHHmm}") });
                 }
                 timeRows.Add(new[] { InlineKeyboardButton.WithCallbackData("⬅️ Другой день", $"schedule:{dayId}") });
-                await bot.SendMessage(origin.Chat.Id, $"📅 {chosenDay:dd.MM.yyyy}. Выберите время (UTC):", replyMarkup: new InlineKeyboardMarkup(timeRows), cancellationToken: ct);
+                await bot.SendMessage(origin.Chat.Id, $"📅 {chosenDay:dd.MM.yyyy}. Выберите время (UTC+3):", replyMarkup: new InlineKeyboardMarkup(timeRows), cancellationToken: ct);
                 break;
             case string slotData when slotData.StartsWith("slot:"):
                 var slotParts = data.Split(':');
@@ -429,7 +439,7 @@ public sealed class BotHandlers(Database database)
                         System.Globalization.DateTimeStyles.None, out var slotAt)) break;
                 var slotAd = await database.GetAdRequestAsync(slotId, ct);
                 if (slotAd is null || slotAd.Value.Advertiser != actor.Id || slotAd.Value.Status != "Approved") break;
-                await ProposeBookingAsync(bot, origin.Chat.Id, actor.Id, slotId, slotAt, ct);
+                await ProposeBookingAsync(bot, origin.Chat.Id, actor.Id, slotId, slotAt.Add(-DisplayOffset), ct);
                 break;
             case string confirmData when confirmData.StartsWith("confirm:"):
                 var confirmParts = data.Split(':');
