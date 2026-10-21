@@ -429,7 +429,7 @@ public sealed class Database(string connectionString) : IAsyncDisposable
 
     public async Task FinishPublishAsync(long id, int? messageId, string? error, CancellationToken ct)
     {
-        await using var cmd = _source.CreateCommand("UPDATE ad_requests SET status=@status, published_message_id=@msg, published_at=IF(@msg IS NULL,NULL,UTC_TIMESTAMP()), payout_status=IF(@msg IS NULL,'NotEligible','OnHold'), last_error=@error WHERE id=@id AND status='Publishing'");
+        await using var cmd = _source.CreateCommand("UPDATE ad_requests SET status=@status, published_message_id=@msg, published_at=IF(@msg IS NULL,NULL,UTC_TIMESTAMP()), payout_status=IF(@msg IS NULL OR is_test_order=TRUE,'NotEligible','OnHold'), last_error=@error WHERE id=@id AND status='Publishing'");
         cmd.Parameters.Add(new MySqlParameter("@status", messageId is null ? "PublishFailed" : "Published"));
         cmd.Parameters.Add(new MySqlParameter("@msg", (object?)messageId ?? DBNull.Value));
         cmd.Parameters.Add(new MySqlParameter("@error", (object?)error ?? DBNull.Value));
@@ -448,7 +448,7 @@ public sealed class Database(string connectionString) : IAsyncDisposable
 
     public async Task FinishDeletionAsync(long id, string? error, CancellationToken ct)
     {
-        await using var cmd = _source.CreateCommand("UPDATE ad_requests SET status=@status, payout_status=IF(@error IS NULL,'AwaitingVerification','OnHold'), last_error=@error WHERE id=@id AND status='Published'");
+        await using var cmd = _source.CreateCommand("UPDATE ad_requests SET status=@status, payout_status=IF(is_test_order=TRUE,'NotEligible',IF(@error IS NULL,'AwaitingVerification','OnHold')), last_error=@error WHERE id=@id AND status='Published'");
         cmd.Parameters.Add(new MySqlParameter("@status", error is null ? "Deleted" : "DeleteFailed"));
         cmd.Parameters.Add(new MySqlParameter("@error", (object?)error ?? DBNull.Value));
         cmd.Parameters.Add(new MySqlParameter("@id", id));
