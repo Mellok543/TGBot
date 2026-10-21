@@ -164,10 +164,10 @@ public sealed class BotHandlers(Database database)
                 rows.Add(new[] { InlineKeyboardButton.WithCallbackData("⬅️ Главное меню", "home") });
                 await bot.EditMessageText(origin.Chat.Id, origin.MessageId, text, replyMarkup: new InlineKeyboardMarkup(rows), cancellationToken: ct);
                 break;
-            case var _ when data.StartsWith("settings:") && long.TryParse(data["settings:".Length..], out _):
+            case string settingsData when settingsData.StartsWith("settings:") && long.TryParse(settingsData["settings:".Length..], out _):
                 await ShowSettingsAsync(bot, origin.Chat.Id, origin.MessageId, actor.Id, long.Parse(data["settings:".Length..]), ct);
                 break;
-            case var _ when data.StartsWith("edit:"):
+            case string editData when editData.StartsWith("edit:"):
                 var parts = data.Split(':');
                 if (parts.Length != 3 || !long.TryParse(parts[2], out var editChannelId) || parts[1] is not ("price" or "description" or "formats"))
                     break;
