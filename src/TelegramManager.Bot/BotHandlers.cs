@@ -7,6 +7,30 @@ namespace TelegramManager.Bot;
 
 public sealed class BotHandlers(Database database)
 {
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<long, (long ChannelId, string Field)> _pending = new();
+
+    private static InlineKeyboardMarkup SettingsKeyboard(long id) => new(new[]
+    {
+        new[] { InlineKeyboardButton.WithCallbackData("💰 Цена", $"edit:price:{id}"), InlineKeyboardButton.WithCallbackData("📝 Описание", $"edit:description:{id}") },
+        new[] { InlineKeyboardButton.WithCallbackData("📦 Форматы", $"edit:formats:{id}") },
+        new[] { InlineKeyboardButton.WithCallbackData("⬅️ Мои каналы", "channels") }
+    });
+
+    private async Task ShowSettingsAsync(ITelegramBotClient bot, long chatId, int? messageId, long userId, long channelId, CancellationToken ct)
+    {
+        var settings = await database.GetChannelSettingsAsync(channelId, userId, ct);
+        if (settings is null)
+        {
+            await bot.SendMessage(chatId, "Канал не найден или у вас нет доступа.", cancellationToken: ct);
+            return;
+        }
+        var text = $"⚙️ {settings.Value.Title}\n\n💰 Цена рекламы: {settings.Value.Price:0.##} ₽\n📝 Описание: {(string.IsNullOrWhiteSpace(settings.Value.Description) ? "Не задано" : settings.Value.Description)}\n📦 Форматы: {settings.Value.Formats}";
+        if (messageId is int id)
+            await bot.EditMessageText(chatId, id, text, replyMarkup: SettingsKeyboard(channelId), cancellationToken: ct);
+        else
+            await bot.SendMessage(chatId, text, replyMarkup: SettingsKeyboard(channelId), cancellationToken: ct);
+    }
+
     private static InlineKeyboardMarkup Home() => new(new[]
     {
         new[] { InlineKeyboardButton.WithCallbackData("📺 Мои каналы", "channels") },
@@ -30,6 +54,49 @@ public sealed class BotHandlers(Database database)
         {
             if (message.From is not { } user || message.Chat.Type != ChatType.Private) return;
             await database.RegisterAsync(user.Id, user.Username, user.FirstName + (user.LastName is null ? "" : " " + user.LastName), ct);
+
+            if (message.Text?.StartsWith("/cancel", StringComparison.Ordinal) == true)
+            {
+                _pending.TryRemove(user.Id, out _);
+                await bot.SendMessage(message.Chat.Id, "Действие отменено.", replyMarkup: Home(), cancellationToken: ct);
+                return;
+            }
+
+            if (_pending.TryRemove(user.Id, out var edit))
+            {
+                var input = message.Text?.Trim();
+                if (string.IsNullOrEmpty(input))
+                {
+                    await bot.SendMessage(message.Chat.Id, "Отправьте текстовое значение. Изменение отменено.", cancellationToken: ct);
+                    return;
+                }
+                object value;
+                if (edit.Field == "price")
+                {
+                    if (!decimal.TryParse(input.Replace(',', '.'), System.Globalization.NumberStyles.Number, System.Globalization.CultureInfo.InvariantCulture, out var price)
+                        || price < 0 || price > 99999999.99m)
+                    {
+                        await bot.SendMessage(message.Chat.Id, "Некорректная цена. Укажите число от 0 до 99999999,99. Попробуйте снова через настройки.", cancellationToken: ct);
+                        return;
+                    }
+                    value = price;
+                }
+                else
+                {
+                    var maxLength = edit.Field == "description" ? 1000 : 255;
+                    if (input.Length > maxLength)
+                    {
+                        await bot.SendMessage(message.Chat.Id, $"Слишком длинный текст (максимум {maxLength} символов).", cancellationToken: ct);
+                        return;
+                    }
+                    value = input;
+                }
+                if (await database.UpdateChannelSettingAsync(edit.ChannelId, user.Id, edit.Field, value, ct))
+                    await ShowSettingsAsync(bot, message.Chat.Id, null, user.Id, edit.ChannelId, ct);
+                else
+                    await bot.SendMessage(message.Chat.Id, "Нет доступа к каналу.", cancellationToken: ct);
+                return;
+            }
 
             if (message.ChatShared is { } shared)
             {
@@ -92,10 +159,28 @@ public sealed class BotHandlers(Database database)
                 break;
             case "channels":
                 var channels = await database.GetChannelsAsync(actor.Id, ct);
-                var text = channels.Count == 0
-                    ? "Пока нет подключённых каналов."
-                    : "Подключённые каналы:\n" + string.Join("\n", channels.Select(c => $"• {c.Title} ({(c.Username is null ? c.Id.ToString() : "@" + c.Username)})"));
-                await bot.EditMessageText(origin.Chat.Id, origin.MessageId, text, replyMarkup: Back(), cancellationToken: ct);
+                var text = channels.Count == 0 ? "Пока нет подключённых каналов." : "📺 Выберите канал для настройки:";
+                var rows = channels.Select(c => new[] { InlineKeyboardButton.WithCallbackData(c.Title.Length > 50 ? c.Title[..50] : c.Title, $"settings:{c.Id}") }).ToList();
+                rows.Add(new[] { InlineKeyboardButton.WithCallbackData("⬅️ Главное меню", "home") });
+                await bot.EditMessageText(origin.Chat.Id, origin.MessageId, text, replyMarkup: new InlineKeyboardMarkup(rows), cancellationToken: ct);
+                break;
+            case var _ when data.StartsWith("settings:") && long.TryParse(data["settings:".Length..], out _):
+                await ShowSettingsAsync(bot, origin.Chat.Id, origin.MessageId, actor.Id, long.Parse(data["settings:".Length..]), ct);
+                break;
+            case var _ when data.StartsWith("edit:"):
+                var parts = data.Split(':');
+                if (parts.Length != 3 || !long.TryParse(parts[2], out var editChannelId) || parts[1] is not ("price" or "description" or "formats"))
+                    break;
+                if (await database.GetChannelSettingsAsync(editChannelId, actor.Id, ct) is null)
+                    break;
+                _pending[actor.Id] = (editChannelId, parts[1]);
+                var prompt = parts[1] switch
+                {
+                    "price" => "Введите цену рекламы в рублях (например, 1500).",
+                    "description" => "Введите описание канала (до 1000 символов).",
+                    _ => "Введите доступные форматы рекламы (до 255 символов)."
+                };
+                await bot.SendMessage(origin.Chat.Id, prompt + "\nДля отмены: /cancel", cancellationToken: ct);
                 break;
             case "ads":
                 await bot.EditMessageText(origin.Chat.Id, origin.MessageId, "Рекламные заявки появятся в следующем этапе.", replyMarkup: Back(), cancellationToken: ct);
