@@ -96,6 +96,7 @@ public sealed class Database(string connectionString) : IAsyncDisposable
             "ALTER TABLE ad_requests ADD COLUMN IF NOT EXISTS delete_after_hours INT NULL",
             "ALTER TABLE ad_requests ADD COLUMN IF NOT EXISTS last_error VARCHAR(512) NULL",
             "ALTER TABLE ad_requests ADD COLUMN IF NOT EXISTS payment_status VARCHAR(24) NOT NULL DEFAULT 'Unpaid'",
+            "ALTER TABLE ad_requests ADD COLUMN IF NOT EXISTS is_test_order BOOLEAN NOT NULL DEFAULT FALSE",
             "ALTER TABLE ad_requests ADD COLUMN IF NOT EXISTS payout_status VARCHAR(24) NOT NULL DEFAULT 'NotEligible'",
             "ALTER TABLE ad_requests ADD COLUMN IF NOT EXISTS dispute_reason VARCHAR(512) NULL",
             "ALTER TABLE ad_requests ADD COLUMN IF NOT EXISTS disputed_at DATETIME NULL",
@@ -391,7 +392,7 @@ public sealed class Database(string connectionString) : IAsyncDisposable
             check.Parameters.Add(new MySqlParameter("@at", at));
             if (Convert.ToInt64(await check.ExecuteScalarAsync(ct)) > 0) return false;
         }
-        await using (var cmd = new MySqlCommand("UPDATE ad_requests SET status='Scheduled', paid_confirmed=TRUE, delete_after_hours=@hours WHERE id=@id AND owner_id=@owner AND status='Pending' AND scheduled_at>UTC_TIMESTAMP()", connection, tx))
+        await using (var cmd = new MySqlCommand("UPDATE ad_requests SET status='AwaitingPayment', paid_confirmed=FALSE, payment_status='Unpaid', delete_after_hours=COALESCE(@hours,24) WHERE id=@id AND owner_id=@owner AND status='Pending' AND scheduled_at>UTC_TIMESTAMP()", connection, tx))
         {
             cmd.Parameters.Add(new MySqlParameter("@id", id));
             cmd.Parameters.Add(new MySqlParameter("@owner", owner));
@@ -404,7 +405,7 @@ public sealed class Database(string connectionString) : IAsyncDisposable
 
     public async Task<List<long>> DueAsync(CancellationToken ct)
     {
-        await using var cmd = _source.CreateCommand("SELECT id FROM ad_requests WHERE status='Scheduled' AND paid_confirmed=TRUE AND scheduled_at<=UTC_TIMESTAMP() LIMIT 20");
+        await using var cmd = _source.CreateCommand("SELECT id FROM ad_requests WHERE status='Scheduled' AND paid_confirmed=TRUE AND payment_status IN ('Paid','TestPaid') AND scheduled_at<=UTC_TIMESTAMP() LIMIT 20");
         await using var r = await cmd.ExecuteReaderAsync(ct);
         var ids = new List<long>();
         while (await r.ReadAsync(ct)) ids.Add(r.GetInt64(0));
@@ -414,7 +415,7 @@ public sealed class Database(string connectionString) : IAsyncDisposable
     public async Task<(long Channel, string Type, string? Text, string? File)?> ClaimAsync(long id, CancellationToken ct)
     {
         await using var connection = await _source.OpenConnectionAsync(ct);
-        await using (var cmd = new MySqlCommand("UPDATE ad_requests SET status='Publishing' WHERE id=@id AND status='Scheduled' AND paid_confirmed=TRUE AND scheduled_at<=UTC_TIMESTAMP()", connection))
+        await using (var cmd = new MySqlCommand("UPDATE ad_requests SET status='Publishing' WHERE id=@id AND status='Scheduled' AND paid_confirmed=TRUE AND payment_status IN ('Paid','TestPaid') AND scheduled_at<=UTC_TIMESTAMP()", connection))
         {
             cmd.Parameters.Add(new MySqlParameter("@id", id));
             if (await cmd.ExecuteNonQueryAsync(ct) != 1) return null;
@@ -740,6 +741,22 @@ public sealed class Database(string connectionString) : IAsyncDisposable
         cmd.Parameters.Add(new MySqlParameter("@id", orderId));
         cmd.Parameters.Add(new MySqlParameter("@admin", adminId));
         cmd.Parameters.Add(new MySqlParameter("@decision", decision));
+        return await cmd.ExecuteNonQueryAsync(ct) == 1;
+    }
+
+    // A test checkout is restricted to allowlisted accounts and never represents actual revenue.
+    public async Task<bool> CompleteTestCheckoutAsync(long orderId, long buyerId, CancellationToken ct)
+    {
+        await using var cmd = _source.CreateCommand("""
+            UPDATE ad_requests a JOIN users u ON u.telegram_id=a.advertiser_id
+            SET a.status='Scheduled', a.paid_confirmed=TRUE, a.payment_status='TestPaid',
+                a.is_test_order=TRUE, a.payout_status='NotEligible'
+            WHERE a.id=@id AND a.advertiser_id=@buyer AND a.status='AwaitingPayment'
+                AND a.scheduled_at>UTC_TIMESTAMP()
+                AND u.is_test_account=TRUE
+            """);
+        cmd.Parameters.Add(new MySqlParameter("@id", orderId));
+        cmd.Parameters.Add(new MySqlParameter("@buyer", buyerId));
         return await cmd.ExecuteNonQueryAsync(ct) == 1;
     }
 
