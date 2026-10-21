@@ -244,9 +244,9 @@ public sealed class Database(string connectionString) : IAsyncDisposable
     public async Task<bool> ProposeAsync(long id, long advertiser, DateTime at, CancellationToken ct)
     {
         await using var cmd = _source.CreateCommand("UPDATE ad_requests SET status='AwaitingConfirmation', scheduled_at=@at WHERE id=@id AND advertiser_id=@user AND status='Approved'");
-        cmd.Parameters.AddWithValue("@at", at);
-        cmd.Parameters.AddWithValue("@id", id);
-        cmd.Parameters.AddWithValue("@user", advertiser);
+        cmd.Parameters.Add(new MySqlParameter("@at", at));
+        cmd.Parameters.Add(new MySqlParameter("@id", id));
+        cmd.Parameters.Add(new MySqlParameter("@user", advertiser));
         return await cmd.ExecuteNonQueryAsync(ct) == 1;
     }
 
@@ -258,8 +258,8 @@ public sealed class Database(string connectionString) : IAsyncDisposable
         DateTime at;
         await using (var get = new MySqlCommand("SELECT channel_id, scheduled_at FROM ad_requests WHERE id=@id AND owner_id=@owner AND status='AwaitingConfirmation' FOR UPDATE", connection, tx))
         {
-            get.Parameters.AddWithValue("@id", id);
-            get.Parameters.AddWithValue("@owner", owner);
+            get.Parameters.Add(new MySqlParameter("@id", id));
+            get.Parameters.Add(new MySqlParameter("@owner", owner));
             await using var r = await get.ExecuteReaderAsync(ct);
             if (!await r.ReadAsync(ct)) return false;
             channel = r.GetInt64(0);
@@ -267,21 +267,21 @@ public sealed class Database(string connectionString) : IAsyncDisposable
         }
         await using (var locked = new MySqlCommand("SELECT telegram_id FROM channels WHERE telegram_id=@channel FOR UPDATE", connection, tx))
         {
-            locked.Parameters.AddWithValue("@channel", channel);
+            locked.Parameters.Add(new MySqlParameter("@channel", channel));
             await locked.ExecuteScalarAsync(ct);
         }
         await using (var check = new MySqlCommand("SELECT COUNT(*) FROM ad_requests WHERE channel_id=@channel AND id<>@id AND scheduled_at=@at AND status IN ('Scheduled','Publishing','Published')", connection, tx))
         {
-            check.Parameters.AddWithValue("@channel", channel);
-            check.Parameters.AddWithValue("@id", id);
-            check.Parameters.AddWithValue("@at", at);
+            check.Parameters.Add(new MySqlParameter("@channel", channel));
+            check.Parameters.Add(new MySqlParameter("@id", id));
+            check.Parameters.Add(new MySqlParameter("@at", at));
             if (Convert.ToInt64(await check.ExecuteScalarAsync(ct)) > 0) return false;
         }
         await using (var cmd = new MySqlCommand("UPDATE ad_requests SET status='Scheduled', paid_confirmed=TRUE, delete_after_hours=@hours WHERE id=@id AND owner_id=@owner AND status='AwaitingConfirmation'", connection, tx))
         {
-            cmd.Parameters.AddWithValue("@id", id);
-            cmd.Parameters.AddWithValue("@owner", owner);
-            cmd.Parameters.AddWithValue("@hours", (object?)hours ?? DBNull.Value);
+            cmd.Parameters.Add(new MySqlParameter("@id", id));
+            cmd.Parameters.Add(new MySqlParameter("@owner", owner));
+            cmd.Parameters.Add(new MySqlParameter("@hours", (object?)hours ?? DBNull.Value));
             if (await cmd.ExecuteNonQueryAsync(ct) != 1) return false;
         }
         await tx.CommitAsync(ct);
@@ -302,11 +302,11 @@ public sealed class Database(string connectionString) : IAsyncDisposable
         await using var connection = await _source.OpenConnectionAsync(ct);
         await using (var cmd = new MySqlCommand("UPDATE ad_requests SET status='Publishing' WHERE id=@id AND status='Scheduled' AND paid_confirmed=TRUE AND scheduled_at<=UTC_TIMESTAMP()", connection))
         {
-            cmd.Parameters.AddWithValue("@id", id);
+            cmd.Parameters.Add(new MySqlParameter("@id", id));
             if (await cmd.ExecuteNonQueryAsync(ct) != 1) return null;
         }
         await using var get = new MySqlCommand("SELECT channel_id, content_type, content_text, media_file_id FROM ad_requests WHERE id=@id", connection);
-        get.Parameters.AddWithValue("@id", id);
+        get.Parameters.Add(new MySqlParameter("@id", id));
         await using var r = await get.ExecuteReaderAsync(ct);
         if (!await r.ReadAsync(ct)) return null;
         return (r.GetInt64(0), r.GetString(1), r.IsDBNull(2) ? null : r.GetString(2), r.IsDBNull(3) ? null : r.GetString(3));
@@ -315,10 +315,10 @@ public sealed class Database(string connectionString) : IAsyncDisposable
     public async Task FinishPublishAsync(long id, int? messageId, string? error, CancellationToken ct)
     {
         await using var cmd = _source.CreateCommand("UPDATE ad_requests SET status=@status, published_message_id=@msg, published_at=IF(@msg IS NULL,NULL,UTC_TIMESTAMP()), last_error=@error WHERE id=@id AND status='Publishing'");
-        cmd.Parameters.AddWithValue("@status", messageId is null ? "PublishFailed" : "Published");
-        cmd.Parameters.AddWithValue("@msg", (object?)messageId ?? DBNull.Value);
-        cmd.Parameters.AddWithValue("@error", (object?)error ?? DBNull.Value);
-        cmd.Parameters.AddWithValue("@id", id);
+        cmd.Parameters.Add(new MySqlParameter("@status", messageId is null ? "PublishFailed" : "Published"));
+        cmd.Parameters.Add(new MySqlParameter("@msg", (object?)messageId ?? DBNull.Value));
+        cmd.Parameters.Add(new MySqlParameter("@error", (object?)error ?? DBNull.Value));
+        cmd.Parameters.Add(new MySqlParameter("@id", id));
         await cmd.ExecuteNonQueryAsync(ct);
     }
 
@@ -334,9 +334,9 @@ public sealed class Database(string connectionString) : IAsyncDisposable
     public async Task FinishDeletionAsync(long id, string? error, CancellationToken ct)
     {
         await using var cmd = _source.CreateCommand("UPDATE ad_requests SET status=@status, last_error=@error WHERE id=@id AND status='Published'");
-        cmd.Parameters.AddWithValue("@status", error is null ? "Deleted" : "DeleteFailed");
-        cmd.Parameters.AddWithValue("@error", (object?)error ?? DBNull.Value);
-        cmd.Parameters.AddWithValue("@id", id);
+        cmd.Parameters.Add(new MySqlParameter("@status", error is null ? "Deleted" : "DeleteFailed"));
+        cmd.Parameters.Add(new MySqlParameter("@error", (object?)error ?? DBNull.Value));
+        cmd.Parameters.Add(new MySqlParameter("@id", id));
         await cmd.ExecuteNonQueryAsync(ct);
     }
 
