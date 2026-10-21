@@ -472,7 +472,7 @@ public sealed class Database(string connectionString) : IAsyncDisposable
 
     public async Task<List<(long Id, long Channel, int Message)>> DueDeletionsAsync(CancellationToken ct)
     {
-        await using var cmd = _source.CreateCommand("SELECT id, channel_id, published_message_id FROM ad_requests WHERE status='Published' AND delete_after_hours IS NOT NULL AND DATE_ADD(published_at, INTERVAL delete_after_hours HOUR)<=UTC_TIMESTAMP() LIMIT 20");
+        await using var cmd = _source.CreateCommand("SELECT id, channel_id, published_message_id FROM ad_requests WHERE status IN ('Published','Disputed','DisputeResolved') AND published_message_id IS NOT NULL AND last_error IS NULL AND delete_after_hours IS NOT NULL AND DATE_ADD(published_at, INTERVAL delete_after_hours HOUR)<=UTC_TIMESTAMP() LIMIT 20");
         await using var r = await cmd.ExecuteReaderAsync(ct);
         var list = new List<(long, long, int)>();
         while (await r.ReadAsync(ct)) list.Add((r.GetInt64(0), r.GetInt64(1), r.GetInt32(2)));
@@ -481,7 +481,7 @@ public sealed class Database(string connectionString) : IAsyncDisposable
 
     public async Task FinishDeletionAsync(long id, string? error, CancellationToken ct)
     {
-        await using var cmd = _source.CreateCommand("UPDATE ad_requests SET status=@status, payout_status=IF(is_test_order=TRUE,'NotEligible',IF(@error IS NULL,'AwaitingVerification','OnHold')), last_error=@error WHERE id=@id AND status='Published'");
+        await using var cmd = _source.CreateCommand("UPDATE ad_requests SET status=IF(status='Published',@status,status), published_message_id=IF(@error IS NULL,NULL,published_message_id), payout_status=IF(status IN ('Disputed','DisputeResolved'),'Blocked',IF(is_test_order=TRUE,'NotEligible',IF(@error IS NULL,'AwaitingVerification','OnHold'))), last_error=@error WHERE id=@id AND status IN ('Published','Disputed','DisputeResolved') AND published_message_id IS NOT NULL AND last_error IS NULL");
         cmd.Parameters.Add(new MySqlParameter("@status", error is null ? "Deleted" : "DeleteFailed"));
         cmd.Parameters.Add(new MySqlParameter("@error", (object?)error ?? DBNull.Value));
         cmd.Parameters.Add(new MySqlParameter("@id", id));
