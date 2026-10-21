@@ -29,7 +29,10 @@ public sealed class Database(string connectionString) : IAsyncDisposable
                 INDEX idx_channels_connected_by (connected_by),
                 CONSTRAINT fk_channels_connected_by FOREIGN KEY (connected_by) REFERENCES users(telegram_id)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
-            """
+            """,
+            "ALTER TABLE channels ADD COLUMN IF NOT EXISTS ad_price_rub DECIMAL(10,2) NOT NULL DEFAULT 0",
+            "ALTER TABLE channels ADD COLUMN IF NOT EXISTS ad_description TEXT NULL",
+            "ALTER TABLE channels ADD COLUMN IF NOT EXISTS ad_formats VARCHAR(255) NOT NULL DEFAULT 'Пост'"
         })
         {
             await using var cmd = new MySqlCommand(sql, connection);
@@ -88,6 +91,36 @@ public sealed class Database(string connectionString) : IAsyncDisposable
         cmd.Parameters.Add(new MySqlParameter("@channelId", channelId));
         cmd.Parameters.Add(new MySqlParameter("@userId", userId));
         await cmd.ExecuteNonQueryAsync(ct);
+    }
+
+
+    public async Task<(long Id, string Title, decimal Price, string Description, string Formats)?> GetChannelSettingsAsync(long channelId, long ownerId, CancellationToken ct)
+    {
+        await using var cmd = _source.CreateCommand("""
+            SELECT telegram_id, title, ad_price_rub, COALESCE(ad_description,''), ad_formats
+            FROM channels WHERE telegram_id=@id AND connected_by=@owner
+            """);
+        cmd.Parameters.Add(new MySqlParameter("@id", channelId));
+        cmd.Parameters.Add(new MySqlParameter("@owner", ownerId));
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        if (!await reader.ReadAsync(ct)) return null;
+        return (reader.GetInt64(0), reader.GetString(1), reader.GetDecimal(2), reader.GetString(3), reader.GetString(4));
+    }
+
+    public async Task<bool> UpdateChannelSettingAsync(long channelId, long ownerId, string field, object value, CancellationToken ct)
+    {
+        var column = field switch
+        {
+            "price" => "ad_price_rub",
+            "description" => "ad_description",
+            "formats" => "ad_formats",
+            _ => throw new ArgumentOutOfRangeException(nameof(field))
+        };
+        await using var cmd = _source.CreateCommand($"UPDATE channels SET {column}=@value WHERE telegram_id=@id AND connected_by=@owner");
+        cmd.Parameters.Add(new MySqlParameter("@value", value));
+        cmd.Parameters.Add(new MySqlParameter("@id", channelId));
+        cmd.Parameters.Add(new MySqlParameter("@owner", ownerId));
+        return await cmd.ExecuteNonQueryAsync(ct) > 0;
     }
 
     public ValueTask DisposeAsync() => _source.DisposeAsync();
