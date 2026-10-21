@@ -35,6 +35,7 @@ public sealed class Database(string connectionString) : IAsyncDisposable
             "ALTER TABLE channels ADD COLUMN IF NOT EXISTS ad_description TEXT NULL",
             "ALTER TABLE channels ADD COLUMN IF NOT EXISTS ad_formats VARCHAR(255) NOT NULL DEFAULT 'Пост'",
             "ALTER TABLE channels ADD COLUMN IF NOT EXISTS is_listed BOOLEAN NOT NULL DEFAULT FALSE",
+            "ALTER TABLE channels ADD COLUMN IF NOT EXISTS category VARCHAR(32) NOT NULL DEFAULT 'other'",
             """
             CREATE TABLE IF NOT EXISTS ad_requests (
                 id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
@@ -179,6 +180,30 @@ public sealed class Database(string connectionString) : IAsyncDisposable
         var items = new List<(long, string, decimal, string, string)>();
         while (await reader.ReadAsync(ct))
             items.Add((reader.GetInt64(0), reader.GetString(1), reader.GetDecimal(2), reader.GetString(3), reader.GetString(4)));
+        return items;
+    }
+
+    public async Task<bool> SetChannelCategoryAsync(long channelId, long ownerId, string category, CancellationToken ct)
+    {
+        if (!new[] { "news", "tech", "games", "business", "education", "entertainment", "lifestyle", "sport", "other" }.Contains(category)) return false;
+        await using var cmd = _source.CreateCommand("UPDATE channels SET category=@category WHERE telegram_id=@id AND connected_by=@owner");
+        cmd.Parameters.Add(new MySqlParameter("@category", category));
+        cmd.Parameters.Add(new MySqlParameter("@id", channelId));
+        cmd.Parameters.Add(new MySqlParameter("@owner", ownerId));
+        return await cmd.ExecuteNonQueryAsync(ct) > 0;
+    }
+
+    public async Task<List<(long Id, string Title, decimal Price)>> GetCategoryChannelsAsync(string category, CancellationToken ct)
+    {
+        await using var cmd = _source.CreateCommand("""
+            SELECT telegram_id, title, ad_price_rub FROM channels
+            WHERE is_listed=TRUE AND category=@category ORDER BY connected_at DESC LIMIT 50
+            """);
+        cmd.Parameters.Add(new MySqlParameter("@category", category));
+        await using var r = await cmd.ExecuteReaderAsync(ct);
+        var items = new List<(long, string, decimal)>();
+        while (await r.ReadAsync(ct))
+            items.Add((r.GetInt64(0), r.GetString(1), r.GetDecimal(2)));
         return items;
     }
 
