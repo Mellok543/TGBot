@@ -1104,9 +1104,9 @@ public sealed class BotHandlers(Database database)
         var favorite = viewerId is long viewer && await database.IsFavoriteAsync(viewer,channelId,ct);
         var reviewLabel = reviewSummary.Count==0 ? "⭐ Отзывов пока нет" : $"⭐ {reviewSummary.Average:0.0}/5 · {reviewSummary.Count} проверенных оценок";
         var activity = reputation is { } rep
-            ? $"🏅 Опыт владельца: {rep.Completed} подтверждённых размещений, {rep.RepeatClients} рекламодателей\\n📊 Индекс активности: {rep.Rating:0}/100 (не отзывы)"
+            ? $"🏅 Опыт владельца: {rep.Completed} подтверждённых размещений, {rep.RepeatClients} рекламодателей\n📊 Индекс активности: {rep.Rating:0}/100 (не отзывы)"
             : "🏅 Подтверждённых размещений пока нет";
-        var text = $"📺 {x.Title}\\n🏷 {categoryName}\\n💰 Стоимость: {x.Price:0.##} ₽\\n📝 {(string.IsNullOrWhiteSpace(x.Description) ? "Описание пока не добавлено" : x.Description)}\\n📦 {x.Formats}\\n\\n{activity}\\n\\n{reviewLabel}\n\\nОформите заявку на рекламу в этом канале.";
+        var text = $"📺 {x.Title}\n🏷 {categoryName}\n💰 Стоимость: {x.Price:0.##} ₽\n📝 {(string.IsNullOrWhiteSpace(x.Description) ? "Описание пока не добавлено" : x.Description)}\n📦 {x.Formats}\n\n{activity}\n\n{reviewLabel}\n\nОформите заявку на рекламу в этом канале.";
         var markup = new InlineKeyboardMarkup(new[]
         {
             new[] { InlineKeyboardButton.WithCallbackData("📝 Заказать рекламу", $"order:{channelId}") },
