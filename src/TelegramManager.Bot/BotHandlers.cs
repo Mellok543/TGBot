@@ -10,6 +10,9 @@ public sealed class BotHandlers(Database database)
 {
     private readonly System.Collections.Concurrent.ConcurrentDictionary<long, (long ChannelId, string Field)> _pending = new();
     private readonly System.Collections.Concurrent.ConcurrentDictionary<long, long> _pendingAds = new();
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<long, string> _pendingCatalogSearch = new();
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<long, string> _catalogSearch = new();
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<long, decimal> _catalogMaxPrice = new();
     private readonly System.Collections.Concurrent.ConcurrentDictionary<long, long> _pendingSchedules = new();
     private readonly System.Collections.Concurrent.ConcurrentDictionary<long,long> _pendingTimeRates = new();
     private readonly System.Collections.Concurrent.ConcurrentDictionary<long,(long OrderId,long RateId)> _pendingDurationSelections = new();
@@ -376,6 +379,7 @@ public sealed class BotHandlers(Database database)
             {
                 _pending.TryRemove(user.Id, out _);
                 _pendingAds.TryRemove(user.Id, out _);
+                _pendingCatalogSearch.TryRemove(user.Id,out _);
                 _pendingSchedules.TryRemove(user.Id, out _);
                 _pendingTimeRates.TryRemove(user.Id, out _);
                 _pendingDurationSelections.TryRemove(user.Id,out _);
@@ -384,6 +388,24 @@ public sealed class BotHandlers(Database database)
                 return;
             }
 
+            if (_pendingCatalogSearch.TryRemove(user.Id,out _))
+            {
+                var queryText=(message.Text??"").Trim();
+                if(queryText.Length>80)
+                {
+                    await bot.SendMessage(message.Chat.Id,"Запрос слишком длинный (максимум 80 символов).",cancellationToken:ct);
+                    return;
+                }
+                if(queryText=="/cancel" || queryText=="-") _catalogSearch.TryRemove(user.Id,out _);
+                else if(queryText.Length>=2) _catalogSearch[user.Id]=queryText;
+                else
+                {
+                    await bot.SendMessage(message.Chat.Id,"Введите хотя бы 2 символа или «-» для сброса.",cancellationToken:ct);
+                    return;
+                }
+                await ShowCatalogPageAsync(bot,message.Chat.Id,null,"all","new",0,ct,user.Id);
+                return;
+            }
             if (_pendingTimeRates.TryRemove(user.Id,out var timeRateChannel))
             {
                 var parts=(message.Text??"").Trim().Split(' ',StringSplitOptions.RemoveEmptyEntries);
@@ -434,7 +456,7 @@ public sealed class BotHandlers(Database database)
                     return;
                 }
                 await bot.SendMessage(message.Chat.Id, $"Рекламный материал сохранён (заявка #{requestId}). Теперь выберите дату и время публикации.", cancellationToken: ct);
-                await ShowBookingDaysAsync(bot, message.Chat.Id, requestId.Value, ct);
+                await ShowOrderScheduleOptionsAsync(bot,message.Chat.Id,user.Id,requestId.Value,ct);
                 return;
             }
 
@@ -919,6 +941,17 @@ public sealed class BotHandlers(Database database)
                 _pendingReviewComments[actor.Id]=commentOrder;
                 await bot.SendMessage(origin.Chat.Id,"✍️ Отправьте текст отзыва (до 500 символов). /cancel — отмена.",cancellationToken:ct);
                 break;
+            case "catalogsearch":
+                _pendingCatalogSearch[actor.Id]="search";
+                await bot.SendMessage(origin.Chat.Id,"🔎 Введите часть названия канала (от 2 до 80 символов). Для сброса введите «-». /cancel — отмена.",cancellationToken:ct);
+                break;
+            case string priceFilterData when priceFilterData.StartsWith("catalogprice:"):
+                if(priceFilterData=="catalogprice:clear") _catalogMaxPrice.TryRemove(actor.Id,out _);
+                else if(decimal.TryParse(priceFilterData["catalogprice:".Length..],out var limit) &&
+                    limit is 1000 or 3000 or 5000 or 10000) _catalogMaxPrice[actor.Id]=limit;
+                else break;
+                await ShowCatalogPageAsync(bot,origin.Chat.Id,origin.MessageId,"all","new",0,ct,actor.Id);
+                break;
             case "catalog":
                 var categoryRows = new List<InlineKeyboardButton[]>
                 {
@@ -936,12 +969,12 @@ public sealed class BotHandlers(Database database)
                 if (browseParts[1] != "all" && !Categories.Any(x => x.Key == browseParts[1])) break;
                 if (browseParts[2] is not ("new" or "price" or "expensive" or "rating")) break;
                 await ShowCatalogPageAsync(bot, origin.Chat.Id, origin.MessageId,
-                    browseParts[1], browseParts[2], browsePage, ct);
+                    browseParts[1], browseParts[2], browsePage, ct,actor.Id);
                 break;
             case string categoryData when categoryData.StartsWith("browsecategory:"):
                 var browseKey = categoryData["browsecategory:".Length..];
                 if (!Categories.Any(x => x.Key == browseKey)) break;
-                await ShowCatalogPageAsync(bot, origin.Chat.Id, origin.MessageId, browseKey, "new", 0, ct);
+                await ShowCatalogPageAsync(bot, origin.Chat.Id, origin.MessageId, browseKey, "new", 0, ct,actor.Id);
                 break;
             case string setCategoryData when setCategoryData.StartsWith("setcategory:") && long.TryParse(setCategoryData["setcategory:".Length..], out var categoryChannelId):
                 if (await database.GetChannelSettingsAsync(categoryChannelId, actor.Id, ct) is null) break;
@@ -1054,13 +1087,15 @@ public sealed class BotHandlers(Database database)
     }
 
 
-    private async Task ShowCatalogPageAsync(ITelegramBotClient bot, long chatId, int messageId,
-        string category, string sort, int page, CancellationToken ct)
+    private async Task ShowCatalogPageAsync(ITelegramBotClient bot, long chatId, int? messageId,
+        string category, string sort, int page, CancellationToken ct,long userId)
     {
-        var count = await database.CountBrowseChannelsAsync(category, ct);
+        var search = _catalogSearch.TryGetValue(userId,out var searchText) ? searchText : null;
+        decimal? maxPrice = _catalogMaxPrice.TryGetValue(userId,out var priceLimit) ? priceLimit : null;
+        var count = await database.CountBrowseChannelsAsync(category, ct,search,maxPrice);
         var last = Math.Max(0, (count-1)/8);
         page = Math.Clamp(page, 0, Math.Min(last, 100));
-        var channels = await database.BrowseChannelsAsync(category, sort, page, ct);
+        var channels = await database.BrowseChannelsAsync(category, sort, page, ct,search,maxPrice);
         var title = category == "all" ? "🌐 Все категории" : Categories.First(x => x.Key == category).Name;
         var rows = channels.Select(x => new[]
         {
@@ -1077,6 +1112,16 @@ public sealed class BotHandlers(Database database)
             InlineKeyboardButton.WithCallbackData("💎 Дороже", $"browse:{category}:expensive:0"),
             InlineKeyboardButton.WithCallbackData("🏅 Опыт", $"browse:{category}:rating:0")
         });
+        rows.Add(new[] { InlineKeyboardButton.WithCallbackData("🔎 Поиск по названию", "catalogsearch") });
+        rows.Add(new[] {
+            InlineKeyboardButton.WithCallbackData("≤ 1000 ₽","catalogprice:1000"),
+            InlineKeyboardButton.WithCallbackData("≤ 3000 ₽","catalogprice:3000"),
+            InlineKeyboardButton.WithCallbackData("≤ 5000 ₽","catalogprice:5000")
+        });
+        rows.Add(new[] {
+            InlineKeyboardButton.WithCallbackData("≤ 10000 ₽","catalogprice:10000"),
+            InlineKeyboardButton.WithCallbackData("Сбросить цену","catalogprice:clear")
+        });
         var navigation = new List<InlineKeyboardButton>();
         if (page > 0) navigation.Add(InlineKeyboardButton.WithCallbackData("⬅️", $"browse:{category}:{sort}:{page-1}"));
         navigation.Add(InlineKeyboardButton.WithCallbackData($"{page+1}/{Math.Max(1,(count+7)/8)}", $"browse:{category}:{sort}:{page}"));
@@ -1085,11 +1130,14 @@ public sealed class BotHandlers(Database database)
         rows.Add(new[] { InlineKeyboardButton.WithCallbackData("🗂 Сменить категорию", "catalog") });
         rows.Add(new[] { InlineKeyboardButton.WithCallbackData("⬅️ Кабинет", "buyer_home") });
         var sortLabel = sort switch { "price" => "дешевле", "expensive" => "дороже", "rating" => "по опыту", _ => "новые" };
-        await bot.EditMessageText(chatId, messageId,
-            $"🔎 {title}\\nНайдено: {count} · Сортировка: {sortLabel}\\n\\n" +
+        var filters=$"Поиск: {search??"все"} · Цена до: {(maxPrice is null?"любая":$"{maxPrice:0} ₽")}";
+        var body = 
+            $"🔎 {title}\n{filters}\nНайдено: {count} · Сортировка: {sortLabel}\n\n" +
             (channels.Count == 0 ? "Пока нет доступных каналов." :
              "Количество размещений — подтверждённые реальные заказы, не тестовые."),
-            replyMarkup: new InlineKeyboardMarkup(rows), cancellationToken: ct);
+;
+        if(messageId is int mid) await bot.EditMessageText(chatId,mid,body,replyMarkup:new InlineKeyboardMarkup(rows),cancellationToken:ct);
+        else await bot.SendMessage(chatId,body,replyMarkup:new InlineKeyboardMarkup(rows),cancellationToken:ct);
     }
 
     private async Task ShowOfferAsync(ITelegramBotClient bot, long chatId, int? messageId, long channelId, CancellationToken ct, long? viewerId = null)
