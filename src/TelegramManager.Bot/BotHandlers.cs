@@ -1157,13 +1157,27 @@ public sealed class BotHandlers(Database database)
         var reputation = info is null ? null : await database.GetOwnerReputationAsync(info.Value.Owner, ct);
         var categoryName = info is null ? "Не указана" :
             Categories.FirstOrDefault(c => c.Key == info.Value.Category).Name ?? "Другое";
+        string audience="👥 Подписчики: данные недоступны";
+        try
+        {
+            var members=await bot.GetChatMemberCount(channelId,cancellationToken:ct);
+            audience=$"👥 Подписчики: {members:N0} (Telegram)";
+        }
+        catch (Telegram.Bot.Exceptions.ApiRequestException)
+        {
+            // Bot may not have permission to inspect this channel.
+        }
+        catch (System.Net.Http.HttpRequestException)
+        {
+            // Channel metrics must not block opening the offer.
+        }
         var reviewSummary = await database.GetChannelReviewSummaryAsync(channelId,ct);
         var favorite = viewerId is long viewer && await database.IsFavoriteAsync(viewer,channelId,ct);
         var reviewLabel = reviewSummary.Count==0 ? "⭐ Отзывов пока нет" : $"⭐ {reviewSummary.Average:0.0}/5 · {reviewSummary.Count} проверенных оценок";
         var activity = reputation is { } rep
             ? $"🏅 Опыт владельца: {rep.Completed} подтверждённых размещений, {rep.RepeatClients} рекламодателей\n📊 Индекс активности: {rep.Rating:0}/100 (не отзывы)"
             : "🏅 Подтверждённых размещений пока нет";
-        var text = $"📺 {x.Title}\n🏷 {categoryName}\n💰 Стоимость: {x.Price:0.##} ₽\n📝 {(string.IsNullOrWhiteSpace(x.Description) ? "Описание пока не добавлено" : x.Description)}\n📦 {x.Formats}\n\n{activity}\n\n{reviewLabel}\n\nОформите заявку на рекламу в этом канале.";
+        var text = $"📺 {x.Title}\n🏷 {categoryName}\n💰 Стоимость: {x.Price:0.##} ₽\n📝 {(string.IsNullOrWhiteSpace(x.Description) ? "Описание пока не добавлено" : x.Description)}\n📦 {x.Formats}\n{audience}\n\n{activity}\n\n{reviewLabel}\n\nОформите заявку на рекламу в этом канале.";
         var buttons = new List<InlineKeyboardButton[]>
         {
             new[] { InlineKeyboardButton.WithCallbackData("📝 Заказать рекламу", $"order:{channelId}") }
