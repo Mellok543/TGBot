@@ -8,7 +8,30 @@ public sealed class Database(string connectionString) : IAsyncDisposable
 
     public async Task InitializeAsync(CancellationToken ct)
     {
+        var startupTimer = System.Diagnostics.Stopwatch.StartNew();
+        Console.WriteLine("[Startup] Connecting to MariaDB...");
         await using var connection = await _source.OpenConnectionAsync(ct);
+        Console.WriteLine($"[Startup] MariaDB connected in {startupTimer.ElapsedMilliseconds} ms.");
+        // Bump this version when adding or changing any schema migration below.
+        const int schemaVersion = 1;
+        await using (var create = new MySqlCommand("""
+            CREATE TABLE IF NOT EXISTS bot_schema_version (
+                id TINYINT NOT NULL PRIMARY KEY,
+                version INT NOT NULL
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+            """, connection))
+            await create.ExecuteNonQueryAsync(ct);
+        await using (var check = new MySqlCommand("SELECT version FROM bot_schema_version WHERE id=1", connection))
+        {
+            var installed = await check.ExecuteScalarAsync(ct);
+            if (installed is not null && installed is not DBNull &&
+                Convert.ToInt32(installed) >= schemaVersion)
+            {
+                Console.WriteLine($"[Startup] Schema v{schemaVersion} is current; skipped migrations ({startupTimer.ElapsedMilliseconds} ms).");
+                return;
+            }
+        }
+        Console.WriteLine($"[Startup] Applying schema v{schemaVersion}...");
         foreach (var sql in new[]
         {
             """
@@ -183,6 +206,15 @@ public sealed class Database(string connectionString) : IAsyncDisposable
             await using var cmd = new MySqlCommand(sql, connection);
             await cmd.ExecuteNonQueryAsync(ct);
         }
+        await using (var stamp = new MySqlCommand("""
+            INSERT INTO bot_schema_version(id,version) VALUES (1,@version)
+            ON DUPLICATE KEY UPDATE version=VALUES(version)
+            """, connection))
+        {
+            stamp.Parameters.Add(new MySqlParameter("@version", schemaVersion));
+            await stamp.ExecuteNonQueryAsync(ct);
+        }
+        Console.WriteLine($"[Startup] Schema v{schemaVersion} ready in {startupTimer.ElapsedMilliseconds} ms.");
     }
 
     public async Task RegisterAsync(long id, string? username, string name, CancellationToken ct)
