@@ -22,6 +22,7 @@ public sealed class BotHandlers(Database database)
         new[] { InlineKeyboardButton.WithCallbackData("👥 Последние пользователи", "admin:users") },
         new[] { InlineKeyboardButton.WithCallbackData("⚖️ Спорные заказы", "admin:disputes") },
         new[] { InlineKeyboardButton.WithCallbackData("🩺 Состояние заказов и очереди", "admin:operations") },
+        new[] { InlineKeyboardButton.WithCallbackData("📨 Недоставленные уведомления", "admin:failednotices") },
         new[] { InlineKeyboardButton.WithCallbackData("⬅️ Главное меню", "home") }
     });
 
@@ -450,6 +451,27 @@ public sealed class BotHandlers(Database database)
                 var rows = disputes.Select(x => new[] { InlineKeyboardButton.WithCallbackData($"⚖️ Рассмотреть #{x.Id}", $"admin:dispute:{x.Id}") }).ToList();
                 rows.Add(new[] { InlineKeyboardButton.WithCallbackData("⬅️ Админ-меню", "admin:back") });
                 await bot.EditMessageText(origin.Chat.Id, origin.MessageId, details, replyMarkup: new InlineKeyboardMarkup(rows), cancellationToken: ct);
+            }
+            else if (action == "failednotices")
+            {
+                var failed = await database.GetFailedNotificationsAsync(ct);
+                var lines = failed.Count == 0 ? "Нет недоставленных уведомлений." :
+                    string.Join("\n", failed.Select(x => $"#{x.Id} · заказ {x.OrderId} · пользователь {x.Recipient} · попыток {x.Attempts}\n{x.Error ?? "Причина не указана"}"));
+                var rows = failed.Select(x => new[]
+                {
+                    InlineKeyboardButton.WithCallbackData($"🔄 Повторить уведомление #{x.Id}", $"admin:retrynotice:{x.Id}")
+                }).ToList();
+                rows.Add(new[] { InlineKeyboardButton.WithCallbackData("⬅️ Админ-меню", "admin:back") });
+                await bot.EditMessageText(origin.Chat.Id, origin.MessageId,
+                    "📨 Недоставленные уведомления (до 15)\n" + (lines.Length > 3400 ? lines[..3400] : lines),
+                    replyMarkup: new InlineKeyboardMarkup(rows), cancellationToken: ct);
+            }
+            else if (action.StartsWith("retrynotice:") && long.TryParse(action["retrynotice:".Length..], out var noticeId))
+            {
+                var retried = await database.RetryFailedNotificationAsync(noticeId, ct);
+                await bot.SendMessage(origin.Chat.Id, retried
+                    ? $"Уведомление #{noticeId} поставлено на повторную отправку. Проверьте, что пользователь разблокировал бота."
+                    : "Уведомление не найдено или уже обрабатывается.", cancellationToken: ct);
             }
             else if (action == "operations")
             {
