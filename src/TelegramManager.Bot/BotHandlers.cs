@@ -269,6 +269,13 @@ public sealed class BotHandlers(Database database)
 
     public async Task HandleAsync(ITelegramBotClient bot, Update update, CancellationToken ct)
     {
+        if(update.ChannelPost is { } channelPost)
+        {
+            await database.ObserveChannelPostAsync(channelPost.Chat.Id,channelPost.MessageId,
+                channelPost.Date.ToUniversalTime(),ct);
+            return;
+        }
+
         if (update.PreCheckoutQuery is { } pre)
         {
             var valid = pre.Currency == "XTR" && pre.TotalAmount == ProPriceStars &&
@@ -1164,6 +1171,7 @@ public sealed class BotHandlers(Database database)
             metricsTimeout.CancelAfter(TimeSpan.FromSeconds(3));
             var members=await bot.GetChatMemberCount(channelId,cancellationToken:metricsTimeout.Token);
             audience=$"👥 Подписчики: {members:N0} (Telegram)";
+            await database.SaveSubscriberSnapshotAsync(channelId,members,ct);
         }
         catch (Telegram.Bot.Exceptions.ApiRequestException)
         {
@@ -1177,13 +1185,20 @@ public sealed class BotHandlers(Database database)
         {
             // Do not make users wait for unavailable channel statistics.
         }
+        var metrics=await database.GetChannelMetricsAsync(channelId,ct);
+        var trend=metrics is { Previous: int previous,Today: int today }
+            ? $"📈 Изменение подписчиков за период от последнего замера не менее 7 дней назад: {today-previous:+#;-#;0}"
+            : "📈 Динамика подписчиков: пока недостаточно замеров";
+        var posting=metrics is { } m && m.DaysObserved>0
+            ? $"📰 Зафиксировано публикаций: {m.Posts7} за 7 дней · {m.Posts30} за 30 дней"
+            : "📰 Частота публикаций: наблюдение ещё не началось";
         var reviewSummary = await database.GetChannelReviewSummaryAsync(channelId,ct);
         var favorite = viewerId is long viewer && await database.IsFavoriteAsync(viewer,channelId,ct);
         var reviewLabel = reviewSummary.Count==0 ? "⭐ Отзывов пока нет" : $"⭐ {reviewSummary.Average:0.0}/5 · {reviewSummary.Count} проверенных оценок";
         var activity = reputation is { } rep
             ? $"🏅 Опыт владельца: {rep.Completed} подтверждённых размещений, {rep.RepeatClients} рекламодателей\n📊 Индекс активности: {rep.Rating:0}/100 (не отзывы)"
             : "🏅 Подтверждённых размещений пока нет";
-        var text = $"📺 {x.Title}\n🏷 {categoryName}\n💰 Стоимость: {x.Price:0.##} ₽\n📝 {(string.IsNullOrWhiteSpace(x.Description) ? "Описание пока не добавлено" : x.Description)}\n📦 {x.Formats}\n{audience}\n\n{activity}\n\n{reviewLabel}\n\nОформите заявку на рекламу в этом канале.";
+        var text = $"📺 {x.Title}\n🏷 {categoryName}\n💰 Стоимость: {x.Price:0.##} ₽\n📝 {(string.IsNullOrWhiteSpace(x.Description) ? "Описание пока не добавлено" : x.Description)}\n📦 {x.Formats}\n{audience}\n{trend}\n{posting}\n\n{activity}\n\n{reviewLabel}\n\nОформите заявку на рекламу в этом канале.";
         var buttons = new List<InlineKeyboardButton[]>
         {
             new[] { InlineKeyboardButton.WithCallbackData("📝 Заказать рекламу", $"order:{channelId}") }
