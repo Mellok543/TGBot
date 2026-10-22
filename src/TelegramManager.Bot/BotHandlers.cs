@@ -1160,7 +1160,9 @@ public sealed class BotHandlers(Database database)
         string audience="👥 Подписчики: данные недоступны";
         try
         {
-            var members=await bot.GetChatMemberCount(channelId,cancellationToken:ct);
+            using var metricsTimeout=CancellationTokenSource.CreateLinkedTokenSource(ct);
+            metricsTimeout.CancelAfter(TimeSpan.FromSeconds(3));
+            var members=await bot.GetChatMemberCount(channelId,cancellationToken:metricsTimeout.Token);
             audience=$"👥 Подписчики: {members:N0} (Telegram)";
         }
         catch (Telegram.Bot.Exceptions.ApiRequestException)
@@ -1170,6 +1172,10 @@ public sealed class BotHandlers(Database database)
         catch (System.Net.Http.HttpRequestException)
         {
             // Channel metrics must not block opening the offer.
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            // Do not make users wait for unavailable channel statistics.
         }
         var reviewSummary = await database.GetChannelReviewSummaryAsync(channelId,ct);
         var favorite = viewerId is long viewer && await database.IsFavoriteAsync(viewer,channelId,ct);
