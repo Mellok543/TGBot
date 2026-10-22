@@ -152,6 +152,7 @@ public sealed class BotHandlers(Database database)
     {
         new[] { InlineKeyboardButton.WithCallbackData("📺 Мои каналы", "owner_home") },
         new[] { InlineKeyboardButton.WithCallbackData("🛒 Покупка рекламы", "buyer_home") },
+        new[] { InlineKeyboardButton.WithCallbackData("🔎 Каталог каналов", "catalog") },
         new[] { InlineKeyboardButton.WithCallbackData("📅 Мои размещения", "placements") },
         new[] { InlineKeyboardButton.WithCallbackData("👤 Мой профиль", "profile") },
         new[] { InlineKeyboardButton.WithCallbackData("⚙️ Настройки", "profile_settings") }
@@ -167,6 +168,7 @@ public sealed class BotHandlers(Database database)
     });
     private static InlineKeyboardMarkup BuyerHome() => new(new[]
     {
+        new[] { InlineKeyboardButton.WithCallbackData("🔎 Каталог каналов", "catalog") },
         new[] { InlineKeyboardButton.WithCallbackData("⭐ Ранее заказанные каналы", "buyer_channels") },
         new[] { InlineKeyboardButton.WithCallbackData("📤 Мои заявки", "outgoing") },
         new[] { InlineKeyboardButton.WithCallbackData("⬅️ Главное меню", "home") }
@@ -509,7 +511,7 @@ public sealed class BotHandlers(Database database)
                 break;
             case "buyer_home":
 
-                await bot.EditMessageText(origin.Chat.Id, origin.MessageId, "📣 Кабинет рекламодателя. Для заказа рекламы перейдите по ссылке, предоставленной каналом.", replyMarkup: BuyerHome(), cancellationToken: ct);
+                await bot.EditMessageText(origin.Chat.Id, origin.MessageId, "📣 Кабинет рекламодателя. Выберите канал в каталоге, сравните стоимость и опыт владельца, затем оформите заявку.", replyMarkup: BuyerHome(), cancellationToken: ct);
                 break;
             case "home":
                 await bot.EditMessageText(origin.Chat.Id, origin.MessageId, "Telegram Manager", replyMarkup: Home(), cancellationToken: ct);
@@ -724,17 +726,28 @@ public sealed class BotHandlers(Database database)
                 else await bot.SendMessage(origin.Chat.Id, "Не удалось подтвердить: заявка недоступна или время уже занято.", cancellationToken: ct);
                 break;
             case "catalog":
-                var categoryRows = Categories.Select(x => new[] { InlineKeyboardButton.WithCallbackData(x.Name, $"browsecategory:{x.Key}") }).ToList();
-                categoryRows.Add(new[] { InlineKeyboardButton.WithCallbackData("⬅️ Назад", "home") });
-                await bot.EditMessageText(origin.Chat.Id, origin.MessageId, "📣 Выберите категорию каналов:", replyMarkup: new InlineKeyboardMarkup(categoryRows), cancellationToken: ct);
+                var categoryRows = new List<InlineKeyboardButton[]>
+                {
+                    new[] { InlineKeyboardButton.WithCallbackData("🌐 Все категории", "browse:all:new:0") }
+                };
+                categoryRows.AddRange(Categories.Select(x => new[] { InlineKeyboardButton.WithCallbackData(x.Name, $"browse:{x.Key}:new:0") }));
+                categoryRows.Add(new[] { InlineKeyboardButton.WithCallbackData("⬅️ Кабинет рекламодателя", "buyer_home") });
+                await bot.EditMessageText(origin.Chat.Id, origin.MessageId,
+                    "🔎 Каталог рекламы\\nВыберите тематику. Внутри доступны сортировка по цене и опыту владельца.",
+                    replyMarkup: new InlineKeyboardMarkup(categoryRows), cancellationToken: ct);
+                break;
+            case string browseData when browseData.StartsWith("browse:"):
+                var browseParts = browseData.Split(':');
+                if (browseParts.Length != 4 || !int.TryParse(browseParts[3], out var browsePage)) break;
+                if (browseParts[1] != "all" && !Categories.Any(x => x.Key == browseParts[1])) break;
+                if (browseParts[2] is not ("new" or "price" or "expensive" or "rating")) break;
+                await ShowCatalogPageAsync(bot, origin.Chat.Id, origin.MessageId,
+                    browseParts[1], browseParts[2], browsePage, ct);
                 break;
             case string categoryData when categoryData.StartsWith("browsecategory:"):
                 var browseKey = categoryData["browsecategory:".Length..];
                 if (!Categories.Any(x => x.Key == browseKey)) break;
-                var categoryChannels = await database.GetCategoryChannelsAsync(browseKey, ct);
-                var categoryChannelRows = categoryChannels.Select(x => new[] { InlineKeyboardButton.WithCallbackData($"📺 {x.Title} · {x.Price:0.##} ₽", $"offer:{x.Id}") }).ToList();
-                categoryChannelRows.Add(new[] { InlineKeyboardButton.WithCallbackData("⬅️ Категории", "catalog") });
-                await bot.EditMessageText(origin.Chat.Id, origin.MessageId, categoryChannels.Count == 0 ? "В этой категории пока нет каналов." : $"📣 {Categories.First(x => x.Key == browseKey).Name}:", replyMarkup: new InlineKeyboardMarkup(categoryChannelRows), cancellationToken: ct);
+                await ShowCatalogPageAsync(bot, origin.Chat.Id, origin.MessageId, browseKey, "new", 0, ct);
                 break;
             case string setCategoryData when setCategoryData.StartsWith("setcategory:") && long.TryParse(setCategoryData["setcategory:".Length..], out var categoryChannelId):
                 if (await database.GetChannelSettingsAsync(categoryChannelId, actor.Id, ct) is null) break;
@@ -848,6 +861,44 @@ public sealed class BotHandlers(Database database)
     }
 
 
+    private async Task ShowCatalogPageAsync(ITelegramBotClient bot, long chatId, int messageId,
+        string category, string sort, int page, CancellationToken ct)
+    {
+        var count = await database.CountBrowseChannelsAsync(category, ct);
+        var last = Math.Max(0, (count-1)/8);
+        page = Math.Clamp(page, 0, Math.Min(last, 100));
+        var channels = await database.BrowseChannelsAsync(category, sort, page, ct);
+        var title = category == "all" ? "🌐 Все категории" : Categories.First(x => x.Key == category).Name;
+        var rows = channels.Select(x => new[]
+        {
+            InlineKeyboardButton.WithCallbackData(
+                $"📺 {x.Title} · {x.Price:0.##} ₽ · {x.Completed} размещ.", $"offer:{x.Id}")
+        }).ToList();
+        rows.Add(new[]
+        {
+            InlineKeyboardButton.WithCallbackData("🆕 Новые", $"browse:{category}:new:0"),
+            InlineKeyboardButton.WithCallbackData("💰 Дешевле", $"browse:{category}:price:0")
+        });
+        rows.Add(new[]
+        {
+            InlineKeyboardButton.WithCallbackData("💎 Дороже", $"browse:{category}:expensive:0"),
+            InlineKeyboardButton.WithCallbackData("🏅 Опыт", $"browse:{category}:rating:0")
+        });
+        var navigation = new List<InlineKeyboardButton>();
+        if (page > 0) navigation.Add(InlineKeyboardButton.WithCallbackData("⬅️", $"browse:{category}:{sort}:{page-1}"));
+        navigation.Add(InlineKeyboardButton.WithCallbackData($"{page+1}/{Math.Max(1,(count+7)/8)}", $"browse:{category}:{sort}:{page}"));
+        if (page < last && page < 100) navigation.Add(InlineKeyboardButton.WithCallbackData("➡️", $"browse:{category}:{sort}:{page+1}"));
+        rows.Add(navigation.ToArray());
+        rows.Add(new[] { InlineKeyboardButton.WithCallbackData("🗂 Сменить категорию", "catalog") });
+        rows.Add(new[] { InlineKeyboardButton.WithCallbackData("⬅️ Кабинет", "buyer_home") });
+        var sortLabel = sort switch { "price" => "дешевле", "expensive" => "дороже", "rating" => "по опыту", _ => "новые" };
+        await bot.EditMessageText(chatId, messageId,
+            $"🔎 {title}\\nНайдено: {count} · Сортировка: {sortLabel}\\n\\n" +
+            (channels.Count == 0 ? "Пока нет доступных каналов." :
+             "Количество размещений — подтверждённые реальные заказы, не тестовые."),
+            replyMarkup: new InlineKeyboardMarkup(rows), cancellationToken: ct);
+    }
+
     private async Task ShowOfferAsync(ITelegramBotClient bot, long chatId, int? messageId, long channelId, CancellationToken ct)
     {
         var offer = await database.GetPublicChannelAsync(channelId, ct);
@@ -857,11 +908,19 @@ public sealed class BotHandlers(Database database)
             return;
         }
         var x = offer.Value;
-        var text = $"📺 {x.Title}\n💰 Стоимость: {x.Price:0.##} ₽\n📝 {x.Description}\n📦 {x.Formats}\n\nОформите заявку на рекламу в этом канале.";
+        var info = await database.GetChannelPublicInfoAsync(channelId, ct);
+        var reputation = info is null ? null : await database.GetOwnerReputationAsync(info.Value.Owner, ct);
+        var categoryName = info is null ? "Не указана" :
+            Categories.FirstOrDefault(c => c.Key == info.Value.Category).Name ?? "Другое";
+        var activity = reputation is { } rep
+            ? $"🏅 Опыт владельца: {rep.Completed} подтверждённых размещений, {rep.RepeatClients} рекламодателей\\n📊 Индекс активности: {rep.Rating:0}/100 (не отзывы)"
+            : "🏅 Подтверждённых размещений пока нет";
+        var text = $"📺 {x.Title}\\n🏷 {categoryName}\\n💰 Стоимость: {x.Price:0.##} ₽\\n📝 {(string.IsNullOrWhiteSpace(x.Description) ? "Описание пока не добавлено" : x.Description)}\\n📦 {x.Formats}\\n\\n{activity}\\n\\nОформите заявку на рекламу в этом канале.";
         var markup = new InlineKeyboardMarkup(new[]
         {
             new[] { InlineKeyboardButton.WithCallbackData("📝 Заказать рекламу", $"order:{channelId}") },
-            new[] { InlineKeyboardButton.WithCallbackData("⬅️ Меню", "buyer_home") }
+            new[] { InlineKeyboardButton.WithCallbackData("🔎 Каталог", "catalog") },
+            new[] { InlineKeyboardButton.WithCallbackData("⬅️ Кабинет", "buyer_home") }
         });
         if (messageId is int id) await bot.EditMessageText(chatId, id, text, replyMarkup: markup, cancellationToken: ct);
         else await bot.SendMessage(chatId, text, replyMarkup: markup, cancellationToken: ct);
