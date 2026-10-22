@@ -780,7 +780,7 @@ public sealed class BotHandlers(Database database)
                 var pickParts=pickRateData.Split(':');
                 if(pickParts.Length!=3||!long.TryParse(pickParts[1],out var pickOrder)||
                     !long.TryParse(pickParts[2],out var pickRateId))break;
-                var pickChannel=await database.GetOrderChannelAsync(pickOrder,actor.Id);
+                var pickChannel=await database.GetOrderChannelAsync(pickOrder,actor.Id,ct);
                 if(pickChannel is null)break;
                 var selectedRates=await database.GetDurationRatesAsync(pickChannel.Value,ct);
                 var selected=selectedRates.FirstOrDefault(x=>x.Id==pickRateId);
@@ -791,19 +791,19 @@ public sealed class BotHandlers(Database database)
             case string scheduleData when scheduleData.StartsWith("schedule:") && long.TryParse(scheduleData[9..], out var scheduleId):
                 var scheduling = await database.GetAdRequestAsync(scheduleId, ct);
                 if (scheduling is null || scheduling.Value.Advertiser != actor.Id || scheduling.Value.Status != "Draft") break;
-                var scheduleChannel=await database.GetOrderChannelAsync(scheduleId,actor.Id);
+                var scheduleChannel=await database.GetOrderChannelAsync(scheduleId,actor.Id,ct);
                 if(scheduleChannel is null)break;
                 var configuredRates=await database.GetDurationRatesAsync(scheduleChannel.Value,ct);
                 if(configuredRates.Count>0)
                 {
-                    var rows=configuredRates.Select(rate=>new[]
+                    var packageRows=configuredRates.Select(rate=>new[]
                     {
                         InlineKeyboardButton.WithCallbackData(
                             $"📦 {rate.Duration} часов — {rate.Price:0.##} ₽",
                             $"pickrate:{scheduleId}:{rate.Id}")
                     }).ToList();
                     await bot.SendMessage(origin.Chat.Id,"📦 Выберите срок публикации и цену:",
-                        replyMarkup:new InlineKeyboardMarkup(rows),cancellationToken:ct);
+                        replyMarkup:new InlineKeyboardMarkup(packageRows),cancellationToken:ct);
                 }
                 else await ShowBookingDaysAsync(bot, origin.Chat.Id, scheduleId, ct);
                 break;
@@ -892,9 +892,9 @@ public sealed class BotHandlers(Database database)
                     }),cancellationToken:ct);
                 break;
             case string rateData when rateData.StartsWith("rate:"):
-                var rateParts=rateData.Split(':');
-                if(rateParts.Length!=3||!long.TryParse(rateParts[1],out var rateOrder)||
-                    !int.TryParse(rateParts[2],out var stars)||stars<1||stars>5)break;
+                var reviewRateParts=rateData.Split(':');
+                if(reviewRateParts.Length!=3||!long.TryParse(reviewRateParts[1],out var rateOrder)||
+                    !int.TryParse(reviewRateParts[2],out var stars)||stars<1||stars>5)break;
                 if(await database.SaveReviewAsync(rateOrder,actor.Id,stars,ct))
                 {
                     await bot.SendMessage(origin.Chat.Id,
