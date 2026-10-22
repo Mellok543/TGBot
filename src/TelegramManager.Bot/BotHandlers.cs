@@ -363,11 +363,14 @@ public sealed class BotHandlers(Database database)
             if (_pendingTimeRates.TryRemove(user.Id,out var timeRateChannel))
             {
                 var parts= (message.Text??"").Trim().Split(' ',StringSplitOptions.RemoveEmptyEntries);
-                var valid=parts.Length==4 && int.TryParse(parts[0],out var day) &&
-                    TimeSpan.TryParseExact(parts[1],@"hh\\:mm",System.Globalization.CultureInfo.InvariantCulture,out var time) &&
+                int day=0,duration=0;
+                decimal price=0;
+                TimeSpan time=default;
+                var valid=parts.Length==4 && int.TryParse(parts[0],out day) &&
+                    TimeSpan.TryParseExact(parts[1],@"hh\:mm",System.Globalization.CultureInfo.InvariantCulture,out time) &&
                     decimal.TryParse(parts[2].Replace(',','.'),System.Globalization.NumberStyles.Number,
-                        System.Globalization.CultureInfo.InvariantCulture,out var price) &&
-                    int.TryParse(parts[3],out var duration);
+                        System.Globalization.CultureInfo.InvariantCulture,out price) &&
+                    int.TryParse(parts[3],out duration);
                 if(!valid || !await database.SaveTimeRateAsync(timeRateChannel,user.Id,
                     day,time.Hours,time.Minutes,price,duration,ct))
                     await bot.SendMessage(message.Chat.Id,"Неверные данные. Пример: 0 18:00 2500 24. День: 0=пн ... 6=вс, время UTC+3, минуты 00/30, цена ₽, срок 1–168 часов.",cancellationToken:ct);
