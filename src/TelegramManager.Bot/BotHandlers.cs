@@ -1107,14 +1107,26 @@ public sealed class BotHandlers(Database database)
             ? $"🏅 Опыт владельца: {rep.Completed} подтверждённых размещений, {rep.RepeatClients} рекламодателей\n📊 Индекс активности: {rep.Rating:0}/100 (не отзывы)"
             : "🏅 Подтверждённых размещений пока нет";
         var text = $"📺 {x.Title}\n🏷 {categoryName}\n💰 Стоимость: {x.Price:0.##} ₽\n📝 {(string.IsNullOrWhiteSpace(x.Description) ? "Описание пока не добавлено" : x.Description)}\n📦 {x.Formats}\n\n{activity}\n\n{reviewLabel}\n\nОформите заявку на рекламу в этом канале.";
-        var markup = new InlineKeyboardMarkup(new[]
+        var buttons = new List<InlineKeyboardButton[]>
         {
-            new[] { InlineKeyboardButton.WithCallbackData("📝 Заказать рекламу", $"order:{channelId}") },
-            new[] { InlineKeyboardButton.WithCallbackData(favorite ? "💔 Убрать из избранного" : "❤️ В избранное", $"favorite:{channelId}") },
-            new[] { InlineKeyboardButton.WithCallbackData("⭐ Читать отзывы", $"reviews:{channelId}") },
-            new[] { InlineKeyboardButton.WithCallbackData("🔎 Каталог", "catalog") },
-            new[] { InlineKeyboardButton.WithCallbackData("⬅️ Кабинет", "buyer_home") }
-        });
+            new[] { InlineKeyboardButton.WithCallbackData("📝 Заказать рекламу", $"order:{channelId}") }
+        };
+        // Public channels can be opened directly. Private channels have no reliable
+        // public URL unless the owner explicitly supplies an invitation link.
+        if (info is { Username: { } username } &&
+            System.Text.RegularExpressions.Regex.IsMatch(username, @"^@?[A-Za-z0-9_]{5,32}$"))
+        {
+            buttons.Add(new[]
+            {
+                InlineKeyboardButton.WithUrl("📢 Перейти в канал",
+                    $"https://t.me/{username.TrimStart('@')}")
+            });
+        }
+        buttons.Add(new[] { InlineKeyboardButton.WithCallbackData(favorite ? "💔 Убрать из избранного" : "❤️ В избранное", $"favorite:{channelId}") });
+        buttons.Add(new[] { InlineKeyboardButton.WithCallbackData("⭐ Читать отзывы", $"reviews:{channelId}") });
+        buttons.Add(new[] { InlineKeyboardButton.WithCallbackData("🔎 Каталог", "catalog") });
+        buttons.Add(new[] { InlineKeyboardButton.WithCallbackData("⬅️ Кабинет", "buyer_home") });
+        var markup = new InlineKeyboardMarkup(buttons);
         if (messageId is int id) await bot.EditMessageText(chatId, id, text, replyMarkup: markup, cancellationToken: ct);
         else await bot.SendMessage(chatId, text, replyMarkup: markup, cancellationToken: ct);
     }
