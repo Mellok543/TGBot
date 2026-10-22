@@ -107,6 +107,36 @@ public sealed class Database(string connectionString) : IAsyncDisposable
             "ALTER TABLE ad_requests ADD COLUMN IF NOT EXISTS dispute_resolved_by BIGINT NULL",
             "CREATE INDEX IF NOT EXISTS idx_ad_requests_payout ON ad_requests (payout_status, status)",
             """
+            CREATE TABLE IF NOT EXISTS channel_favorites (
+                user_id BIGINT NOT NULL,
+                channel_id BIGINT NOT NULL,
+                created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (user_id,channel_id),
+                INDEX idx_favorites_channel (channel_id),
+                FOREIGN KEY (user_id) REFERENCES users(telegram_id),
+                FOREIGN KEY (channel_id) REFERENCES channels(telegram_id)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS channel_reviews (
+                id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+                order_id BIGINT NOT NULL,
+                channel_id BIGINT NOT NULL,
+                owner_id BIGINT NOT NULL,
+                advertiser_id BIGINT NOT NULL,
+                stars TINYINT NOT NULL,
+                comment VARCHAR(500) NULL,
+                created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                UNIQUE KEY uq_channel_review_order (order_id),
+                INDEX idx_reviews_channel (channel_id,stars),
+                INDEX idx_reviews_owner (owner_id),
+                FOREIGN KEY (order_id) REFERENCES ad_requests(id),
+                FOREIGN KEY (channel_id) REFERENCES channels(telegram_id),
+                FOREIGN KEY (advertiser_id) REFERENCES users(telegram_id)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+            """,
+            """
             CREATE TABLE IF NOT EXISTS notification_outbox (
                 id BIGINT AUTO_INCREMENT PRIMARY KEY,
                 order_id BIGINT NOT NULL,
@@ -1068,6 +1098,133 @@ public sealed class Database(string connectionString) : IAsyncDisposable
             """);
         cmd.Parameters.Add(new MySqlParameter("@category", category));
         return Convert.ToInt32(await cmd.ExecuteScalarAsync(ct));
+    }
+
+    public async Task<bool> ToggleFavoriteAsync(long userId, long channelId, CancellationToken ct)
+    {
+        await using var connection = await _source.OpenConnectionAsync(ct);
+        await using var tx = await connection.BeginTransactionAsync(ct);
+        await using (var locked = new MySqlCommand("SELECT telegram_id FROM channels WHERE telegram_id=@channel FOR UPDATE", connection, tx))
+        {
+            locked.Parameters.Add(new MySqlParameter("@channel", channelId));
+            if (await locked.ExecuteScalarAsync(ct) is null) return false;
+        }
+        await using (var remove = new MySqlCommand("DELETE FROM channel_favorites WHERE user_id=@user AND channel_id=@channel", connection, tx))
+        {
+            remove.Parameters.Add(new MySqlParameter("@user", userId));
+            remove.Parameters.Add(new MySqlParameter("@channel", channelId));
+            if (await remove.ExecuteNonQueryAsync(ct)>0)
+            {
+                await tx.CommitAsync(ct);
+                return false;
+            }
+        }
+        await using (var insert = new MySqlCommand("INSERT IGNORE INTO channel_favorites(user_id,channel_id) VALUES (@user,@channel)", connection, tx))
+        {
+            insert.Parameters.Add(new MySqlParameter("@user", userId));
+            insert.Parameters.Add(new MySqlParameter("@channel", channelId));
+            await insert.ExecuteNonQueryAsync(ct);
+        }
+        await tx.CommitAsync(ct);
+        return true;
+    }
+
+    public async Task<bool> IsFavoriteAsync(long userId, long channelId, CancellationToken ct)
+    {
+        await using var cmd = _source.CreateCommand("SELECT COUNT(*) FROM channel_favorites WHERE user_id=@user AND channel_id=@channel");
+        cmd.Parameters.Add(new MySqlParameter("@user", userId));
+        cmd.Parameters.Add(new MySqlParameter("@channel", channelId));
+        return Convert.ToInt64(await cmd.ExecuteScalarAsync(ct))>0;
+    }
+
+    public async Task<List<(long Id,string Title,decimal Price)>> GetFavoriteChannelsAsync(long userId, CancellationToken ct)
+    {
+        await using var cmd = _source.CreateCommand("""
+            SELECT c.telegram_id,c.title,c.ad_price_rub FROM channel_favorites f
+            JOIN channels c ON c.telegram_id=f.channel_id
+            JOIN users u ON u.telegram_id=c.connected_by
+            WHERE f.user_id=@user AND c.is_listed=TRUE
+              AND ((u.subscription_until>UTC_TIMESTAMP() OR u.pro_granted_until>UTC_TIMESTAMP())
+                OR u.created_at>UTC_TIMESTAMP()-INTERVAL 30 DAY)
+            ORDER BY f.created_at DESC LIMIT 30
+            """);
+        cmd.Parameters.Add(new MySqlParameter("@user", userId));
+        var items = new List<(long,string,decimal)>();
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        while(await reader.ReadAsync(ct))
+            items.Add((reader.GetInt64(0),reader.GetString(1),reader.GetDecimal(2)));
+        return items;
+    }
+
+    public async Task<bool> CanReviewOrderAsync(long orderId,long advertiserId,CancellationToken ct)
+    {
+        await using var cmd = _source.CreateCommand("""
+            SELECT COUNT(*) FROM ad_requests a WHERE a.id=@id AND a.advertiser_id=@user
+              AND a.status IN ('Published','Deleted') AND a.payment_status='Paid'
+              AND a.is_test_order=FALSE AND a.payout_status<>'Blocked'
+            """);
+        cmd.Parameters.Add(new MySqlParameter("@id",orderId));
+        cmd.Parameters.Add(new MySqlParameter("@user",advertiserId));
+        return Convert.ToInt64(await cmd.ExecuteScalarAsync(ct))>0;
+    }
+
+    public async Task<bool> SaveReviewAsync(long orderId,long advertiserId,int stars,CancellationToken ct)
+    {
+        if(stars<1||stars>5) return false;
+        await using var cmd = _source.CreateCommand("""
+            INSERT INTO channel_reviews(order_id,channel_id,owner_id,advertiser_id,stars)
+            SELECT a.id,a.channel_id,a.owner_id,a.advertiser_id,@stars FROM ad_requests a
+            WHERE a.id=@id AND a.advertiser_id=@user AND a.status IN ('Published','Deleted')
+              AND a.payment_status='Paid' AND a.is_test_order=FALSE AND a.payout_status<>'Blocked'
+            ON DUPLICATE KEY UPDATE stars=IF(advertiser_id=VALUES(advertiser_id),VALUES(stars),stars)
+            """);
+        cmd.Parameters.Add(new MySqlParameter("@id",orderId));
+        cmd.Parameters.Add(new MySqlParameter("@user",advertiserId));
+        cmd.Parameters.Add(new MySqlParameter("@stars",stars));
+        return await cmd.ExecuteNonQueryAsync(ct)>0;
+    }
+
+    public async Task<bool> SaveReviewCommentAsync(long orderId,long advertiserId,string comment,CancellationToken ct)
+    {
+        if(string.IsNullOrWhiteSpace(comment)||comment.Length>500)return false;
+        await using var cmd = _source.CreateCommand("""
+            UPDATE channel_reviews SET comment=@comment
+            WHERE order_id=@id AND advertiser_id=@user
+            """);
+        cmd.Parameters.Add(new MySqlParameter("@id",orderId));
+        cmd.Parameters.Add(new MySqlParameter("@user",advertiserId));
+        cmd.Parameters.Add(new MySqlParameter("@comment",comment));
+        return await cmd.ExecuteNonQueryAsync(ct)>0;
+    }
+
+    public async Task<(double Average,int Count)> GetChannelReviewSummaryAsync(long channelId,CancellationToken ct)
+    {
+        await using var cmd = _source.CreateCommand("""
+            SELECT COALESCE(AVG(r.stars),0),COUNT(*) FROM channel_reviews r
+            JOIN ad_requests a ON a.id=r.order_id
+            WHERE r.channel_id=@channel AND a.status IN ('Published','Deleted')
+              AND a.payment_status='Paid' AND a.is_test_order=FALSE AND a.payout_status<>'Blocked'
+            """);
+        cmd.Parameters.Add(new MySqlParameter("@channel",channelId));
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        return await reader.ReadAsync(ct) ? (reader.GetDouble(0),reader.GetInt32(1)) : (0,0);
+    }
+
+    public async Task<List<(int Stars,string? Comment,DateTime At)>> GetChannelReviewsAsync(long channelId,CancellationToken ct)
+    {
+        await using var cmd = _source.CreateCommand("""
+            SELECT r.stars,r.comment,r.created_at FROM channel_reviews r
+            JOIN ad_requests a ON a.id=r.order_id
+            WHERE r.channel_id=@channel AND a.status IN ('Published','Deleted')
+              AND a.payment_status='Paid' AND a.is_test_order=FALSE AND a.payout_status<>'Blocked'
+            ORDER BY r.updated_at DESC LIMIT 10
+            """);
+        cmd.Parameters.Add(new MySqlParameter("@channel",channelId));
+        var items=new List<(int,string?,DateTime)>();
+        await using var reader=await cmd.ExecuteReaderAsync(ct);
+        while(await reader.ReadAsync(ct))
+            items.Add((reader.GetInt32(0),reader.IsDBNull(1)?null:reader.GetString(1),reader.GetDateTime(2)));
+        return items;
     }
 
 }
