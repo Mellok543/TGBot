@@ -495,11 +495,18 @@ public sealed class BotHandlers(Database database)
         }
 
         if (update.CallbackQuery is not { } query || query.From is not { } actor || query.Message is not { } origin) return;
-        if (origin.Chat.Type != ChatType.Private)
+        // Acknowledge immediately: Telegram callback IDs expire while slow DB work runs.
+        try
         {
             await bot.AnswerCallbackQuery(query.Id, cancellationToken: ct);
-            return;
         }
+        catch (Telegram.Bot.Exceptions.ApiRequestException ex) when (ex.ErrorCode == 400 &&
+            (ex.Message.Contains("query is too old", StringComparison.OrdinalIgnoreCase) ||
+             ex.Message.Contains("query ID is invalid", StringComparison.OrdinalIgnoreCase)))
+        {
+            Console.WriteLine($"Expired callback query ignored: {ex.Message}");
+        }
+        if (origin.Chat.Type != ChatType.Private) return;
         await database.RegisterAsync(actor.Id, actor.Username, actor.FirstName + (actor.LastName is null ? "" : " " + actor.LastName), ct);
 
         var data = query.Data ?? "";
@@ -507,7 +514,7 @@ public sealed class BotHandlers(Database database)
         {
             if (!IsAdmin(actor.Id))
             {
-                await bot.AnswerCallbackQuery(query.Id, "Недостаточно прав.", showAlert: true, cancellationToken: ct);
+                await bot.SendMessage(origin.Chat.Id, "Недостаточно прав.", cancellationToken: ct);
                 return;
             }
             var action = data["admin:".Length..];
@@ -592,7 +599,6 @@ public sealed class BotHandlers(Database database)
                     "Введите числовой Telegram ID пользователя.";
                 await bot.SendMessage(origin.Chat.Id, prompt + "\n/cancel — отмена", cancellationToken: ct);
             }
-            await bot.AnswerCallbackQuery(query.Id, cancellationToken: ct);
             return;
         }
         switch (data)
@@ -1045,7 +1051,6 @@ public sealed class BotHandlers(Database database)
                 await bot.EditMessageText(origin.Chat.Id, origin.MessageId, "Telegram Manager • .NET 10\nПодключение каналов и регистрация пользователей. Платежи не включены.", replyMarkup: Back(), cancellationToken: ct);
                 break;
         }
-        await bot.AnswerCallbackQuery(query.Id, cancellationToken: ct);
     }
 
 
