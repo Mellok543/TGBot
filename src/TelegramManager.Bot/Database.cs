@@ -1104,7 +1104,7 @@ public sealed class Database(string connectionString) : IAsyncDisposable
     }
 
     public async Task<List<(long Id, string Title, decimal Price, int Completed, int Clients)>> BrowseChannelsAsync(
-        string category, string sort, int page, CancellationToken ct)
+        string category, string sort, int page, CancellationToken ct, string? search = null, decimal? maxPrice = null)
     {
         page = Math.Clamp(page, 0, 100);
         var order = sort switch
@@ -1124,6 +1124,8 @@ public sealed class Database(string connectionString) : IAsyncDisposable
             JOIN users u ON u.telegram_id=c.connected_by
             LEFT JOIN ad_requests a ON a.owner_id=c.connected_by
             WHERE c.is_listed=TRUE AND (@category='all' OR c.category=@category)
+              AND (@search IS NULL OR c.title LIKE @search)
+              AND (@maxprice IS NULL OR c.ad_price_rub<=@maxprice)
               AND ((u.subscription_until>UTC_TIMESTAMP() OR u.pro_granted_until>UTC_TIMESTAMP())
                 OR u.created_at>UTC_TIMESTAMP()-INTERVAL 30 DAY)
             GROUP BY c.telegram_id,c.title,c.ad_price_rub,c.connected_at
@@ -1131,6 +1133,8 @@ public sealed class Database(string connectionString) : IAsyncDisposable
             """);
         cmd.Parameters.Add(new MySqlParameter("@category", category));
         cmd.Parameters.Add(new MySqlParameter("@offset", page*8));
+        cmd.Parameters.Add(new MySqlParameter("@search", search is null ? DBNull.Value : $"%{search}%"));
+        cmd.Parameters.Add(new MySqlParameter("@maxprice", maxPrice is null ? DBNull.Value : maxPrice.Value));
         var items = new List<(long,string,decimal,int,int)>();
         await using var reader = await cmd.ExecuteReaderAsync(ct);
         while (await reader.ReadAsync(ct))
@@ -1138,15 +1142,19 @@ public sealed class Database(string connectionString) : IAsyncDisposable
         return items;
     }
 
-    public async Task<int> CountBrowseChannelsAsync(string category, CancellationToken ct)
+    public async Task<int> CountBrowseChannelsAsync(string category, CancellationToken ct, string? search = null, decimal? maxPrice = null)
     {
         await using var cmd = _source.CreateCommand("""
             SELECT COUNT(*) FROM channels c JOIN users u ON u.telegram_id=c.connected_by
             WHERE c.is_listed=TRUE AND (@category='all' OR c.category=@category)
+              AND (@search IS NULL OR c.title LIKE @search)
+              AND (@maxprice IS NULL OR c.ad_price_rub<=@maxprice)
               AND ((u.subscription_until>UTC_TIMESTAMP() OR u.pro_granted_until>UTC_TIMESTAMP())
                 OR u.created_at>UTC_TIMESTAMP()-INTERVAL 30 DAY)
             """);
         cmd.Parameters.Add(new MySqlParameter("@category", category));
+        cmd.Parameters.Add(new MySqlParameter("@search", search is null ? DBNull.Value : $"%{search}%"));
+        cmd.Parameters.Add(new MySqlParameter("@maxprice", maxPrice is null ? DBNull.Value : maxPrice.Value));
         return Convert.ToInt32(await cmd.ExecuteScalarAsync(ct));
     }
 
