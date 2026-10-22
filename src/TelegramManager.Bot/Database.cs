@@ -963,4 +963,31 @@ public sealed class Database(string connectionString) : IAsyncDisposable
         return result;
     }
 
+    public async Task<List<(long Id, long OrderId, long Recipient, int Attempts, string? Error)>> GetFailedNotificationsAsync(CancellationToken ct)
+    {
+        await using var cmd = _source.CreateCommand("""
+            SELECT id,order_id,recipient_id,attempts,last_error FROM notification_outbox
+            WHERE state='Failed' ORDER BY id DESC LIMIT 15
+            """);
+        var items = new List<(long,long,long,int,string?)>();
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+            items.Add((reader.GetInt64(0),reader.GetInt64(1),reader.GetInt64(2),
+                reader.GetInt32(3),reader.IsDBNull(4)?null:reader.GetString(4)));
+        return items;
+    }
+
+    // Only explicit admin action may retry a permanently failed notification.
+    // An already sent or currently leased notification is never reset.
+    public async Task<bool> RetryFailedNotificationAsync(long notificationId, CancellationToken ct)
+    {
+        await using var cmd = _source.CreateCommand("""
+            UPDATE notification_outbox
+            SET state='Pending', attempts=0, next_attempt_at=UTC_TIMESTAMP(), last_error=NULL
+            WHERE id=@id AND state='Failed'
+            """);
+        cmd.Parameters.Add(new MySqlParameter("@id", notificationId));
+        return await cmd.ExecuteNonQueryAsync(ct)==1;
+    }
+
 }
