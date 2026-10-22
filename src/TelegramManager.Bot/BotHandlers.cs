@@ -45,7 +45,7 @@ public sealed class BotHandlers(Database database)
         }).ToList();
         rows.Add(new[]{InlineKeyboardButton.WithCallbackData("➕ Добавить вариант",$"addrate:{channelId}")});
         rows.Add(new[]{InlineKeyboardButton.WithCallbackData("⬅️ Настройки канала",$"settings:{channelId}")});
-        var body="📦 Варианты размещения\\nУкажите длительность публикации и стоимость. Например: 24 часа — 1600 ₽, 48 часов — 3000 ₽.\\nНажмите на вариант, чтобы удалить его.\\n"+
+        var body="📦 Варианты размещения\nУкажите длительность публикации и стоимость. Например: 24 часа — 1600 ₽, 48 часов — 3000 ₽.\nНажмите на вариант, чтобы удалить его.\n"+
             (rates.Count==0?"Вариантов пока нет. Пока они не настроены, действует стандартный срок и общая цена.":$"Активных вариантов: {rates.Count}");
         if(messageId is int id)await bot.EditMessageText(chatId,id,body,replyMarkup:new InlineKeyboardMarkup(rows),cancellationToken:ct);
         else await bot.SendMessage(chatId,body,replyMarkup:new InlineKeyboardMarkup(rows),cancellationToken:ct);
@@ -820,7 +820,7 @@ public sealed class BotHandlers(Database database)
                 if(await database.GetChannelSettingsAsync(addRateChannel,actor.Id,ct) is null)break;
                 _pendingTimeRates[actor.Id]=addRateChannel;
                 await bot.SendMessage(origin.Chat.Id,
-                    "📦 Новый вариант размещения. Введите срок в часах и цену в рублях через пробел.\\nПример: 24 1600\\nИли: 48 3000\\n/cancel — отмена.",
+                    "📦 Новый вариант размещения. Введите срок в часах и цену в рублях через пробел.\nПример: 24 1600\nИли: 48 3000\n/cancel — отмена.",
                     cancellationToken:ct);
                 break;
             case string removeRateData when removeRateData.StartsWith("removerate:"):
@@ -923,8 +923,8 @@ public sealed class BotHandlers(Database database)
                 long.TryParse(reviewsData["reviews:".Length..],out var reviewsChannel):
                 var reviews=await database.GetChannelReviewsAsync(reviewsChannel,ct);
                 var reviewText=reviews.Count==0 ? "У канала пока нет проверенных отзывов." :
-                    "⭐ Проверенные отзывы рекламодателей:\\n\\n"+
-                    string.Join("\\n\\n",reviews.Select(x=>$"{new string('⭐',x.Stars)} · {x.At.Add(DisplayOffset):dd.MM.yyyy}\\n{x.Comment??"Без комментария"}"));
+                    "⭐ Проверенные отзывы рекламодателей:\n\n"+
+                    string.Join("\n\n",reviews.Select(x=>$"{new string('⭐',x.Stars)} · {x.At.Add(DisplayOffset):dd.MM.yyyy}\n{x.Comment??"Без комментария"}"));
                 await bot.EditMessageText(origin.Chat.Id,origin.MessageId,reviewText,
                     replyMarkup:new InlineKeyboardMarkup(new[]
                     {
@@ -938,7 +938,7 @@ public sealed class BotHandlers(Database database)
                 if(await database.SaveReviewAsync(rateOrder,actor.Id,stars,ct))
                 {
                     await bot.SendMessage(origin.Chat.Id,
-                        $"⭐ Оценка {stars}/5 сохранена для заказа #{rateOrder}.\\nМожете добавить комментарий (до 500 символов).",
+                        $"⭐ Оценка {stars}/5 сохранена для заказа #{rateOrder}.\nМожете добавить комментарий (до 500 символов).",
                         replyMarkup:new InlineKeyboardMarkup(new[]
                         {
                             new[]{InlineKeyboardButton.WithCallbackData("✍️ Добавить комментарий",$"reviewcomment:{rateOrder}")},
@@ -972,7 +972,7 @@ public sealed class BotHandlers(Database database)
                 categoryRows.AddRange(Categories.Select(x => new[] { InlineKeyboardButton.WithCallbackData(x.Name, $"browse:{x.Key}:new:0") }));
                 categoryRows.Add(new[] { InlineKeyboardButton.WithCallbackData("⬅️ Кабинет рекламодателя", "buyer_home") });
                 await bot.EditMessageText(origin.Chat.Id, origin.MessageId,
-                    "🔎 Каталог рекламы\\nВыберите тематику. Внутри доступны сортировка по цене и опыту владельца.",
+                    "🔎 Каталог рекламы\nВыберите тематику. Внутри доступны сортировка по цене и опыту владельца.",
                     replyMarkup: new InlineKeyboardMarkup(categoryRows), cancellationToken: ct);
                 break;
             case string browseData when browseData.StartsWith("browse:"):
