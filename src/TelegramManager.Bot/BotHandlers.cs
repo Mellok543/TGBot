@@ -100,7 +100,7 @@ public sealed class BotHandlers(Database database)
         if ((a.Owner == userId || a.Advertiser == userId) && a.Status is "Published" or "Deleted" or "DeleteFailed")
             await bot.SendMessage(chatId, "⚖️ Обнаружили нарушение условий размещения? Откройте спор. Выплата будет заблокирована до проверки.",
                 replyMarkup: new InlineKeyboardMarkup(new[] { new[] { InlineKeyboardButton.WithCallbackData("⚖️ Открыть спор", $"dispute:{a.Id}") } }), cancellationToken: ct);
-        if(a.Advertiser==userId && a.Status is "Published" or "Deleted")
+        if(a.Advertiser==userId && a.Status is ("Published" or "Deleted"))
         {
             if(await database.CanReviewOrderAsync(a.Id,userId,ct))
                 await bot.SendMessage(chatId,"⭐ Оцените сотрудничество с владельцем канала (1–5). Только для реальных оплаченных заказов.",
