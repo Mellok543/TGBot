@@ -435,7 +435,9 @@ public sealed class Database(string connectionString) : IAsyncDisposable
 
     public async Task<bool> ProposeAsync(long id, long advertiser, DateTime at, CancellationToken ct)
     {
-        await using var cmd = _source.CreateCommand("UPDATE ad_requests SET status='Pending', scheduled_at=@at WHERE id=@id AND advertiser_id=@user AND status='Draft'");
+        await using var cmd = _source.CreateCommand("UPDATE ad_requests a SET a.status='Pending', a.scheduled_at=@at
+            WHERE a.id=@id AND a.advertiser_id=@user AND a.status='Draft'
+              AND NOT EXISTS (SELECT 1 FROM channel_time_rates r WHERE r.channel_id=a.channel_id AND r.is_active=TRUE)");
         cmd.Parameters.Add(new MySqlParameter("@at", at));
         cmd.Parameters.Add(new MySqlParameter("@id", id));
         cmd.Parameters.Add(new MySqlParameter("@user", advertiser));
