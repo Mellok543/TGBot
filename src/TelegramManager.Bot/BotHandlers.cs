@@ -51,6 +51,25 @@ public sealed class BotHandlers(Database database)
         else await bot.SendMessage(chatId,body,replyMarkup:new InlineKeyboardMarkup(rows),cancellationToken:ct);
     }
 
+    private async Task ShowOrderScheduleOptionsAsync(ITelegramBotClient bot,long chatId,long advertiser,long orderId,CancellationToken ct)
+    {
+        var channelId=await database.GetOrderChannelAsync(orderId,advertiser,ct);
+        if(channelId is null)return;
+        var rates=await database.GetDurationRatesAsync(channelId.Value,ct);
+        if(rates.Count==0)
+        {
+            await ShowBookingDaysAsync(bot,chatId,orderId,ct);
+            return;
+        }
+        var rows=rates.Select(rate=>new[]
+        {
+            InlineKeyboardButton.WithCallbackData(
+                $"📦 {rate.Duration} часов — {rate.Price:0.##} ₽",$"pickrate:{orderId}:{rate.Id}")
+        }).ToList();
+        await bot.SendMessage(chatId,"📦 Шаг 2/3: выберите срок размещения и цену. Затем выберите дату публикации.",
+            replyMarkup:new InlineKeyboardMarkup(rows),cancellationToken:ct);
+    }
+
     private async Task ShowBookingDaysAsync(ITelegramBotClient bot, long chatId, long requestId, CancellationToken ct)
     {
         var now = await database.GetDatabaseUtcAsync(ct);
@@ -819,21 +838,7 @@ public sealed class BotHandlers(Database database)
             case string scheduleData when scheduleData.StartsWith("schedule:") && long.TryParse(scheduleData[9..], out var scheduleId):
                 var scheduling = await database.GetAdRequestAsync(scheduleId, ct);
                 if (scheduling is null || scheduling.Value.Advertiser != actor.Id || scheduling.Value.Status != "Draft") break;
-                var scheduleChannel=await database.GetOrderChannelAsync(scheduleId,actor.Id,ct);
-                if(scheduleChannel is null)break;
-                var configuredRates=await database.GetDurationRatesAsync(scheduleChannel.Value,ct);
-                if(configuredRates.Count>0)
-                {
-                    var packageRows=configuredRates.Select(rate=>new[]
-                    {
-                        InlineKeyboardButton.WithCallbackData(
-                            $"📦 {rate.Duration} часов — {rate.Price:0.##} ₽",
-                            $"pickrate:{scheduleId}:{rate.Id}")
-                    }).ToList();
-                    await bot.SendMessage(origin.Chat.Id,"📦 Выберите срок публикации и цену:",
-                        replyMarkup:new InlineKeyboardMarkup(packageRows),cancellationToken:ct);
-                }
-                else await ShowBookingDaysAsync(bot, origin.Chat.Id, scheduleId, ct);
+                await ShowOrderScheduleOptionsAsync(bot,origin.Chat.Id,actor.Id,scheduleId,ct);
                 break;
             case string nextData when nextData.StartsWith("nextslot:") && long.TryParse(nextData[9..], out var nextId):
                 var nextAd = await database.GetAdRequestAsync(nextId, ct);
@@ -1134,8 +1139,7 @@ public sealed class BotHandlers(Database database)
         var body = 
             $"🔎 {title}\n{filters}\nНайдено: {count} · Сортировка: {sortLabel}\n\n" +
             (channels.Count == 0 ? "Пока нет доступных каналов." :
-             "Количество размещений — подтверждённые реальные заказы, не тестовые."),
-;
+             "Количество размещений — подтверждённые реальные заказы, не тестовые.");
         if(messageId is int mid) await bot.EditMessageText(chatId,mid,body,replyMarkup:new InlineKeyboardMarkup(rows),cancellationToken:ct);
         else await bot.SendMessage(chatId,body,replyMarkup:new InlineKeyboardMarkup(rows),cancellationToken:ct);
     }
