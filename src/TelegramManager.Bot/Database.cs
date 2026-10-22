@@ -13,7 +13,7 @@ public sealed class Database(string connectionString) : IAsyncDisposable
         await using var connection = await _source.OpenConnectionAsync(ct);
         Console.WriteLine($"[Startup] MariaDB connected in {startupTimer.ElapsedMilliseconds} ms.");
         // Bump this version when adding or changing any schema migration below.
-        const int schemaVersion = 1;
+        const int schemaVersion = 2;
         await using (var create = new MySqlCommand("""
             CREATE TABLE IF NOT EXISTS bot_schema_version (
                 id TINYINT NOT NULL PRIMARY KEY,
@@ -31,6 +31,7 @@ public sealed class Database(string connectionString) : IAsyncDisposable
                 return;
             }
         }
+        // Store only metrics observable through the Bot API; never invent views or reach.
         Console.WriteLine($"[Startup] Applying schema v{schemaVersion}...");
         foreach (var sql in new[]
         {
@@ -206,6 +207,27 @@ public sealed class Database(string connectionString) : IAsyncDisposable
             await using var cmd = new MySqlCommand(sql, connection);
             await cmd.ExecuteNonQueryAsync(ct);
         }
+        await using (var metrics = new MySqlCommand("""
+            CREATE TABLE IF NOT EXISTS channel_daily_metrics (
+                channel_id BIGINT NOT NULL,
+                day DATE NOT NULL,
+                subscribers INT NULL,
+                posts INT NOT NULL DEFAULT 0,
+                PRIMARY KEY(channel_id,day),
+                FOREIGN KEY(channel_id) REFERENCES channels(telegram_id)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+            """,connection))
+            await metrics.ExecuteNonQueryAsync(ct);
+        await using (var seen = new MySqlCommand("""
+            CREATE TABLE IF NOT EXISTS channel_observed_posts (
+                channel_id BIGINT NOT NULL,
+                message_id INT NOT NULL,
+                posted_at DATETIME NOT NULL,
+                PRIMARY KEY(channel_id,message_id),
+                FOREIGN KEY(channel_id) REFERENCES channels(telegram_id)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+            """,connection))
+            await seen.ExecuteNonQueryAsync(ct);
         await using (var stamp = new MySqlCommand("""
             INSERT INTO bot_schema_version(id,version) VALUES (1,@version)
             ON DUPLICATE KEY UPDATE version=VALUES(version)
@@ -1359,6 +1381,63 @@ public sealed class Database(string connectionString) : IAsyncDisposable
         var updated=await cmd.ExecuteNonQueryAsync(ct)==1;
         if(updated)await RecordOrderEventAsync(orderId,advertiser,"DurationSelected",$"Тариф {rateId}, {utc:yyyy-MM-dd HH:mm} UTC",ct);
         return updated;
+    }
+
+    public async Task SaveSubscriberSnapshotAsync(long channelId,int subscribers,CancellationToken ct)
+    {
+        await using var cmd=_source.CreateCommand("""
+            INSERT INTO channel_daily_metrics(channel_id,day,subscribers)
+            SELECT telegram_id,UTC_DATE(),@count FROM channels WHERE telegram_id=@channel
+            ON DUPLICATE KEY UPDATE subscribers=VALUES(subscribers)
+            """);
+        cmd.Parameters.Add(new MySqlParameter("@channel",channelId));
+        cmd.Parameters.Add(new MySqlParameter("@count",subscribers));
+        await cmd.ExecuteNonQueryAsync(ct);
+    }
+
+    public async Task ObserveChannelPostAsync(long channelId,int messageId,DateTime postedAt,CancellationToken ct)
+    {
+        await using var connection=await _source.OpenConnectionAsync(ct);
+        await using var tx=await connection.BeginTransactionAsync(ct);
+        await using var cmd=new MySqlCommand("""
+            INSERT IGNORE INTO channel_observed_posts(channel_id,message_id,posted_at)
+            SELECT telegram_id,@message,@at FROM channels WHERE telegram_id=@channel
+            """,connection,tx);
+        cmd.Parameters.Add(new MySqlParameter("@channel",channelId));
+        cmd.Parameters.Add(new MySqlParameter("@message",messageId));
+        cmd.Parameters.Add(new MySqlParameter("@at",postedAt));
+        var inserted=await cmd.ExecuteNonQueryAsync(ct);
+        if(inserted==1)
+        {
+            await using var daily=new MySqlCommand("""
+                INSERT INTO channel_daily_metrics(channel_id,day,posts)
+                VALUES(@channel,DATE(@at),1)
+                ON DUPLICATE KEY UPDATE posts=posts+1
+                """,connection,tx);
+            daily.Parameters.Add(new MySqlParameter("@channel",channelId));
+            daily.Parameters.Add(new MySqlParameter("@at",postedAt));
+            await daily.ExecuteNonQueryAsync(ct);
+        }
+        await tx.CommitAsync(ct);
+    }
+
+    public async Task<(int? Today,int? Previous,int Posts7,int Posts30,int DaysObserved)?> GetChannelMetricsAsync(long channelId,CancellationToken ct)
+    {
+        await using var cmd=_source.CreateCommand("""
+            SELECT
+                (SELECT subscribers FROM channel_daily_metrics WHERE channel_id=@id AND subscribers IS NOT NULL ORDER BY day DESC LIMIT 1),
+                (SELECT subscribers FROM channel_daily_metrics WHERE channel_id=@id AND subscribers IS NOT NULL AND day<=UTC_DATE()-INTERVAL 7 DAY ORDER BY day DESC LIMIT 1),
+                COALESCE(SUM(CASE WHEN day>=UTC_DATE()-INTERVAL 6 DAY THEN posts ELSE 0 END),0),
+                COALESCE(SUM(CASE WHEN day>=UTC_DATE()-INTERVAL 29 DAY THEN posts ELSE 0 END),0),
+                COUNT(*)
+            FROM channel_daily_metrics WHERE channel_id=@id
+            """);
+        cmd.Parameters.Add(new MySqlParameter("@id",channelId));
+        await using var reader=await cmd.ExecuteReaderAsync(ct);
+        if(!await reader.ReadAsync(ct))return null;
+        return (reader.IsDBNull(0)?null:reader.GetInt32(0),
+            reader.IsDBNull(1)?null:reader.GetInt32(1),
+            reader.GetInt32(2),reader.GetInt32(3),reader.GetInt32(4));
     }
 
 }
