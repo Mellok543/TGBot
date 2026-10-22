@@ -210,6 +210,22 @@ public sealed class BotHandlers(Database database)
             return;
         }
 
+        if (update.Message is { } reviewMessage && reviewMessage.Chat.Type == ChatType.Private &&
+            reviewMessage.From is { } reviewAuthor &&
+            _pendingReviewComments.ContainsKey(reviewAuthor.Id))
+        {
+            _pendingReviewComments.TryRemove(reviewAuthor.Id,out var pendingReviewId);
+            if(reviewMessage.Text=="/cancel")
+                await bot.SendMessage(reviewMessage.Chat.Id,"Отзыв отменён.",cancellationToken:ct);
+            else if(reviewMessage.Text is not { } comment || comment.Length>500 || string.IsNullOrWhiteSpace(comment))
+                await bot.SendMessage(reviewMessage.Chat.Id,"Комментарий должен содержать от 1 до 500 символов.",cancellationToken:ct);
+            else if(await database.SaveReviewCommentAsync(pendingReviewId,reviewAuthor.Id,comment,ct))
+                await bot.SendMessage(reviewMessage.Chat.Id,"Спасибо! Ваш отзыв сохранён.",cancellationToken:ct);
+            else
+                await bot.SendMessage(reviewMessage.Chat.Id,"Не удалось сохранить отзыв. Сначала поставьте оценку.",cancellationToken:ct);
+            return;
+        }
+
         if (update.Message is { } message)
         {
             if (message.From is not { } user || message.Chat.Type != ChatType.Private) return;
@@ -412,21 +428,6 @@ public sealed class BotHandlers(Database database)
             }
             else if (message.Text?.StartsWith("/cancel", StringComparison.Ordinal) == true)
                 await bot.SendMessage(message.Chat.Id, "Действие отменено.", replyMarkup: Home(), cancellationToken: ct);
-            return;
-        }
-
-        if (update.Message is { } reviewMessage && reviewMessage.Chat.Type == ChatType.Private &&
-            reviewMessage.From is { } reviewAuthor &&
-            _pendingReviewComments.TryRemove(reviewAuthor.Id,out var pendingReviewId))
-        {
-            if(reviewMessage.Text=="/cancel")
-                await bot.SendMessage(reviewMessage.Chat.Id,"Отзыв отменён.",cancellationToken:ct);
-            else if(reviewMessage.Text is not { } comment || comment.Length>500 || string.IsNullOrWhiteSpace(comment))
-                await bot.SendMessage(reviewMessage.Chat.Id,"Комментарий должен содержать от 1 до 500 символов.",cancellationToken:ct);
-            else if(await database.SaveReviewCommentAsync(pendingReviewId,reviewAuthor.Id,comment,ct))
-                await bot.SendMessage(reviewMessage.Chat.Id,"Спасибо! Ваш отзыв сохранён.",cancellationToken:ct);
-            else
-                await bot.SendMessage(reviewMessage.Chat.Id,"Не удалось сохранить отзыв. Сначала поставьте оценку.",cancellationToken:ct);
             return;
         }
 
