@@ -990,4 +990,84 @@ public sealed class Database(string connectionString) : IAsyncDisposable
         return await cmd.ExecuteNonQueryAsync(ct)==1;
     }
 
+    // Ratings are based on unique advertisers with completed, non-test placements.
+    // No fabricated reviews or unverified subscriber counts.
+    public async Task<(int Completed, int RepeatClients, decimal Rating)?> GetOwnerReputationAsync(long ownerId, CancellationToken ct)
+    {
+        await using var cmd = _source.CreateCommand("""
+            SELECT COUNT(*), COUNT(DISTINCT advertiser_id)
+            FROM ad_requests
+            WHERE owner_id=@owner AND status IN ('Published','Deleted')
+              AND payment_status='Paid' AND is_test_order=FALSE
+              AND payout_status<>'Blocked'
+            """);
+        cmd.Parameters.Add(new MySqlParameter("@owner", ownerId));
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        if (!await reader.ReadAsync(ct)) return null;
+        var completed = reader.GetInt32(0);
+        var clients = reader.GetInt32(1);
+        // This is a transparent activity score, not a subjective 5-star review.
+        var score = Math.Min(100m, completed * 5m + clients * 10m);
+        return (completed, clients, score);
+    }
+
+    public async Task<(long Owner, string Category, string? Username)?> GetChannelPublicInfoAsync(long channelId, CancellationToken ct)
+    {
+        await using var cmd = _source.CreateCommand("""
+            SELECT connected_by,category,username FROM channels WHERE telegram_id=@id
+            """);
+        cmd.Parameters.Add(new MySqlParameter("@id", channelId));
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        return await reader.ReadAsync(ct)
+            ? (reader.GetInt64(0),reader.GetString(1),reader.IsDBNull(2)?null:reader.GetString(2))
+            : null;
+    }
+
+    public async Task<List<(long Id, string Title, decimal Price, int Completed, int Clients)>> BrowseChannelsAsync(
+        string category, string sort, int page, CancellationToken ct)
+    {
+        page = Math.Clamp(page, 0, 100);
+        var order = sort switch
+        {
+            "price" => "c.ad_price_rub ASC, c.telegram_id",
+            "expensive" => "c.ad_price_rub DESC, c.telegram_id",
+            "rating" => "completed DESC, clients DESC, c.telegram_id",
+            _ => "c.connected_at DESC, c.telegram_id"
+        };
+        await using var cmd = _source.CreateCommand($"""
+            SELECT c.telegram_id,c.title,c.ad_price_rub,
+                COUNT(DISTINCT CASE WHEN a.status IN ('Published','Deleted') AND a.payment_status='Paid'
+                     AND a.is_test_order=FALSE AND a.payout_status<>'Blocked' THEN a.id END) AS completed,
+                COUNT(DISTINCT CASE WHEN a.status IN ('Published','Deleted') AND a.payment_status='Paid'
+                     AND a.is_test_order=FALSE AND a.payout_status<>'Blocked' THEN a.advertiser_id END) AS clients
+            FROM channels c
+            JOIN users u ON u.telegram_id=c.connected_by
+            LEFT JOIN ad_requests a ON a.owner_id=c.connected_by
+            WHERE c.is_listed=TRUE AND (@category='all' OR c.category=@category)
+              AND ((u.subscription_until>UTC_TIMESTAMP() OR u.pro_granted_until>UTC_TIMESTAMP())
+                OR u.created_at>UTC_TIMESTAMP()-INTERVAL 30 DAY)
+            GROUP BY c.telegram_id,c.title,c.ad_price_rub,c.connected_at
+            ORDER BY {order} LIMIT 8 OFFSET @offset
+            """);
+        cmd.Parameters.Add(new MySqlParameter("@category", category));
+        cmd.Parameters.Add(new MySqlParameter("@offset", page*8));
+        var items = new List<(long,string,decimal,int,int)>();
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+            items.Add((reader.GetInt64(0),reader.GetString(1),reader.GetDecimal(2),reader.GetInt32(3),reader.GetInt32(4)));
+        return items;
+    }
+
+    public async Task<int> CountBrowseChannelsAsync(string category, CancellationToken ct)
+    {
+        await using var cmd = _source.CreateCommand("""
+            SELECT COUNT(*) FROM channels c JOIN users u ON u.telegram_id=c.connected_by
+            WHERE c.is_listed=TRUE AND (@category='all' OR c.category=@category)
+              AND ((u.subscription_until>UTC_TIMESTAMP() OR u.pro_granted_until>UTC_TIMESTAMP())
+                OR u.created_at>UTC_TIMESTAMP()-INTERVAL 30 DAY)
+            """);
+        cmd.Parameters.Add(new MySqlParameter("@category", category));
+        return Convert.ToInt32(await cmd.ExecuteScalarAsync(ct));
+    }
+
 }
