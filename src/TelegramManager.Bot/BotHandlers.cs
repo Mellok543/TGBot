@@ -387,10 +387,12 @@ public sealed class BotHandlers(Database database)
             if (_pendingTimeRates.TryRemove(user.Id,out var timeRateChannel))
             {
                 var parts=(message.Text??"").Trim().Split(' ',StringSplitOptions.RemoveEmptyEntries);
+                int duration=0;
+                decimal price=0;
                 var valid=parts.Length==2 &&
-                    int.TryParse(parts[0],out var duration) &&
+                    int.TryParse(parts[0],out duration) &&
                     decimal.TryParse(parts[1].Replace(',','.'),System.Globalization.NumberStyles.Number,
-                        System.Globalization.CultureInfo.InvariantCulture,out var price);
+                        System.Globalization.CultureInfo.InvariantCulture,out price);
                 if(!valid || !await database.SaveDurationRateAsync(timeRateChannel,user.Id,duration,price,ct))
                     await bot.SendMessage(message.Chat.Id,"Введите срок в часах и цену в рублях. Например: 24 1600. Допустимый срок: 1–720 часов.",cancellationToken:ct);
                 else
