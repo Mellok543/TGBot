@@ -107,6 +107,23 @@ public sealed class Database(string connectionString) : IAsyncDisposable
             "ALTER TABLE ad_requests ADD COLUMN IF NOT EXISTS dispute_resolved_by BIGINT NULL",
             "CREATE INDEX IF NOT EXISTS idx_ad_requests_payout ON ad_requests (payout_status, status)",
             """
+            CREATE TABLE IF NOT EXISTS channel_time_rates (
+                id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+                channel_id BIGINT NOT NULL,
+                weekday TINYINT NOT NULL,
+                hour_local TINYINT NOT NULL,
+                minute_local TINYINT NOT NULL DEFAULT 0,
+                price_rub DECIMAL(10,2) NOT NULL,
+                duration_hours INT NOT NULL DEFAULT 24,
+                is_active BOOLEAN NOT NULL DEFAULT TRUE,
+                UNIQUE KEY uq_channel_time_rate (channel_id,weekday,hour_local,minute_local),
+                FOREIGN KEY (channel_id) REFERENCES channels(telegram_id)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+            """,
+            """
+            ALTER TABLE ad_requests ADD COLUMN IF NOT EXISTS time_rate_id BIGINT NULL
+            """,
+            """
             CREATE TABLE IF NOT EXISTS channel_favorites (
                 user_id BIGINT NOT NULL,
                 channel_id BIGINT NOT NULL,
@@ -454,7 +471,7 @@ public sealed class Database(string connectionString) : IAsyncDisposable
             check.Parameters.Add(new MySqlParameter("@at", at));
             if (Convert.ToInt64(await check.ExecuteScalarAsync(ct)) > 0) return false;
         }
-        await using (var cmd = new MySqlCommand("UPDATE ad_requests SET status='AwaitingPayment', paid_confirmed=FALSE, payment_status='Unpaid', delete_after_hours=COALESCE(@hours,24) WHERE id=@id AND owner_id=@owner AND status='Pending' AND scheduled_at>UTC_TIMESTAMP()", connection, tx))
+        await using (var cmd = new MySqlCommand("UPDATE ad_requests SET status='AwaitingPayment', paid_confirmed=FALSE, payment_status='Unpaid', delete_after_hours=COALESCE(delete_after_hours,@hours,24) WHERE id=@id AND owner_id=@owner AND status='Pending' AND scheduled_at>UTC_TIMESTAMP()", connection, tx))
         {
             cmd.Parameters.Add(new MySqlParameter("@id", id));
             cmd.Parameters.Add(new MySqlParameter("@owner", owner));
@@ -1225,6 +1242,89 @@ public sealed class Database(string connectionString) : IAsyncDisposable
         while(await reader.ReadAsync(ct))
             items.Add((reader.GetInt32(0),reader.IsDBNull(1)?null:reader.GetString(1),reader.GetDateTime(2)));
         return items;
+    }
+
+    public async Task<List<(long Id,int Weekday,int Hour,int Minute,decimal Price,int Duration)>> GetTimeRatesAsync(long channelId,CancellationToken ct)
+    {
+        await using var cmd=_source.CreateCommand("""
+            SELECT id,weekday,hour_local,minute_local,price_rub,duration_hours
+            FROM channel_time_rates WHERE channel_id=@channel AND is_active=TRUE
+            ORDER BY weekday,hour_local,minute_local
+            """);
+        cmd.Parameters.Add(new MySqlParameter("@channel",channelId));
+        var rows=new List<(long,int,int,int,decimal,int)>();
+        await using var reader=await cmd.ExecuteReaderAsync(ct);
+        while(await reader.ReadAsync(ct))
+            rows.Add((reader.GetInt64(0),reader.GetInt32(1),reader.GetInt32(2),reader.GetInt32(3),reader.GetDecimal(4),reader.GetInt32(5)));
+        return rows;
+    }
+
+    public async Task<bool> SaveTimeRateAsync(long channelId,long owner,int weekday,int hour,int minute,decimal price,int duration,CancellationToken ct)
+    {
+        if(weekday<0||weekday>6||hour<0||hour>23||minute is not (0 or 30)||
+           price<0||price>99999999.99m||duration<1||duration>168)return false;
+        await using var cmd=_source.CreateCommand("""
+            INSERT INTO channel_time_rates(channel_id,weekday,hour_local,minute_local,price_rub,duration_hours,is_active)
+            SELECT c.telegram_id,@weekday,@hour,@minute,@price,@duration,TRUE
+            FROM channels c WHERE c.telegram_id=@channel AND c.connected_by=@owner
+            ON DUPLICATE KEY UPDATE price_rub=VALUES(price_rub),duration_hours=VALUES(duration_hours),is_active=TRUE
+            """);
+        cmd.Parameters.Add(new MySqlParameter("@channel",channelId));
+        cmd.Parameters.Add(new MySqlParameter("@owner",owner));
+        cmd.Parameters.Add(new MySqlParameter("@weekday",weekday));
+        cmd.Parameters.Add(new MySqlParameter("@hour",hour));
+        cmd.Parameters.Add(new MySqlParameter("@minute",minute));
+        cmd.Parameters.Add(new MySqlParameter("@price",price));
+        cmd.Parameters.Add(new MySqlParameter("@duration",duration));
+        return await cmd.ExecuteNonQueryAsync(ct)>0;
+    }
+
+    public async Task<bool> DeleteTimeRateAsync(long channelId,long owner,long rateId,CancellationToken ct)
+    {
+        await using var cmd=_source.CreateCommand("""
+            UPDATE channel_time_rates r JOIN channels c ON c.telegram_id=r.channel_id
+            SET r.is_active=FALSE WHERE r.id=@id AND r.channel_id=@channel AND c.connected_by=@owner
+            """);
+        cmd.Parameters.Add(new MySqlParameter("@id",rateId));
+        cmd.Parameters.Add(new MySqlParameter("@channel",channelId));
+        cmd.Parameters.Add(new MySqlParameter("@owner",owner));
+        return await cmd.ExecuteNonQueryAsync(ct)>0;
+    }
+
+    public async Task<long?> GetOrderChannelAsync(long orderId,long advertiser,CancellationToken ct)
+    {
+        await using var cmd=_source.CreateCommand("SELECT channel_id FROM ad_requests WHERE id=@id AND advertiser_id=@user AND status='Draft'");
+        cmd.Parameters.Add(new MySqlParameter("@id",orderId));
+        cmd.Parameters.Add(new MySqlParameter("@user",advertiser));
+        var value=await cmd.ExecuteScalarAsync(ct);
+        return value is null or DBNull ? null : Convert.ToInt64(value);
+    }
+
+    public async Task<bool> ProposeRateAsync(long orderId,long advertiser,long rateId,DateTime utc,CancellationToken ct)
+    {
+        await using var cmd=_source.CreateCommand("""
+            UPDATE ad_requests a
+            JOIN channel_time_rates r ON r.channel_id=a.channel_id AND r.id=@rate AND r.is_active=TRUE
+            SET a.status='Pending',a.scheduled_at=@at,a.time_rate_id=r.id,a.price_rub=r.price_rub,
+                a.delete_after_hours=r.duration_hours
+            WHERE a.id=@id AND a.advertiser_id=@user AND a.status='Draft'
+              AND WEEKDAY(DATE_ADD(@at,INTERVAL 3 HOUR))=r.weekday
+              AND HOUR(DATE_ADD(@at,INTERVAL 3 HOUR))=r.hour_local
+              AND MINUTE(DATE_ADD(@at,INTERVAL 3 HOUR))=r.minute_local
+              AND @at>DATE_ADD(UTC_TIMESTAMP(),INTERVAL 2 MINUTE)
+              AND @at<DATE_ADD(UTC_TIMESTAMP(),INTERVAL 90 DAY)
+              AND NOT EXISTS (
+                  SELECT 1 FROM (SELECT channel_id,scheduled_at,status FROM ad_requests) other
+                  WHERE other.channel_id=a.channel_id AND other.scheduled_at=@at
+                    AND other.status IN ('Pending','AwaitingPayment','Scheduled','Publishing','Published'))
+            """);
+        cmd.Parameters.Add(new MySqlParameter("@rate",rateId));
+        cmd.Parameters.Add(new MySqlParameter("@at",utc));
+        cmd.Parameters.Add(new MySqlParameter("@id",orderId));
+        cmd.Parameters.Add(new MySqlParameter("@user",advertiser));
+        var updated=await cmd.ExecuteNonQueryAsync(ct)==1;
+        if(updated)await RecordOrderEventAsync(orderId,advertiser,"RateSelected",$"Тариф {rateId}, {utc:yyyy-MM-dd HH:mm} UTC",ct);
+        return updated;
     }
 
 }
