@@ -100,6 +100,16 @@ public sealed class BotHandlers(Database database)
         if ((a.Owner == userId || a.Advertiser == userId) && a.Status is "Published" or "Deleted" or "DeleteFailed")
             await bot.SendMessage(chatId, "⚖️ Обнаружили нарушение условий размещения? Откройте спор. Выплата будет заблокирована до проверки.",
                 replyMarkup: new InlineKeyboardMarkup(new[] { new[] { InlineKeyboardButton.WithCallbackData("⚖️ Открыть спор", $"dispute:{a.Id}") } }), cancellationToken: ct);
+        if(a.Advertiser==userId && a.Status is "Published" or "Deleted")
+        {
+            if(await database.CanReviewOrderAsync(a.Id,userId,ct))
+                await bot.SendMessage(chatId,"⭐ Оцените сотрудничество с владельцем канала (1–5). Только для реальных оплаченных заказов.",
+                    replyMarkup:new InlineKeyboardMarkup(new[]
+                    {
+                        Enumerable.Range(1,5).Select(n=>InlineKeyboardButton.WithCallbackData(
+                            $"{n} ⭐",$"rate:{a.Id}:{n}")).ToArray()
+                    }),cancellationToken:ct);
+        }
         if (a.Advertiser == userId && a.Status == "AwaitingPayment")
             await bot.SendMessage(chatId, $"💳 Заказ #{a.Id}: к оплате {a.Price:0.##} ₽. Реальная оплата пока недоступна. Тестовая оплата разрешена только тестовым аккаунтам.",
                 replyMarkup: new InlineKeyboardMarkup(new[] { new[] { InlineKeyboardButton.WithCallbackData("🧪 Тестовая оплата (без списания)", $"testpay:{a.Id}") } }), cancellationToken: ct);
@@ -111,6 +121,8 @@ public sealed class BotHandlers(Database database)
             }), cancellationToken: ct);
     }
 
+
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<long,long> _pendingReviewComments = new();
 
     private static readonly (string Key, string Name)[] Categories =
     {
@@ -169,6 +181,7 @@ public sealed class BotHandlers(Database database)
     private static InlineKeyboardMarkup BuyerHome() => new(new[]
     {
         new[] { InlineKeyboardButton.WithCallbackData("🔎 Каталог каналов", "catalog") },
+        new[] { InlineKeyboardButton.WithCallbackData("❤️ Избранные каналы", "favorites") },
         new[] { InlineKeyboardButton.WithCallbackData("⭐ Ранее заказанные каналы", "buyer_channels") },
         new[] { InlineKeyboardButton.WithCallbackData("📤 Мои заявки", "outgoing") },
         new[] { InlineKeyboardButton.WithCallbackData("⬅️ Главное меню", "home") }
@@ -399,6 +412,21 @@ public sealed class BotHandlers(Database database)
             }
             else if (message.Text?.StartsWith("/cancel", StringComparison.Ordinal) == true)
                 await bot.SendMessage(message.Chat.Id, "Действие отменено.", replyMarkup: Home(), cancellationToken: ct);
+            return;
+        }
+
+        if (update.Message is { } reviewMessage && reviewMessage.Chat.Type == ChatType.Private &&
+            reviewMessage.From is { } reviewAuthor &&
+            _pendingReviewComments.TryRemove(reviewAuthor.Id,out var pendingReviewId))
+        {
+            if(reviewMessage.Text=="/cancel")
+                await bot.SendMessage(reviewMessage.Chat.Id,"Отзыв отменён.",cancellationToken:ct);
+            else if(reviewMessage.Text is not { } comment || comment.Length>500 || string.IsNullOrWhiteSpace(comment))
+                await bot.SendMessage(reviewMessage.Chat.Id,"Комментарий должен содержать от 1 до 500 символов.",cancellationToken:ct);
+            else if(await database.SaveReviewCommentAsync(pendingReviewId,reviewAuthor.Id,comment,ct))
+                await bot.SendMessage(reviewMessage.Chat.Id,"Спасибо! Ваш отзыв сохранён.",cancellationToken:ct);
+            else
+                await bot.SendMessage(reviewMessage.Chat.Id,"Не удалось сохранить отзыв. Сначала поставьте оценку.",cancellationToken:ct);
             return;
         }
 
@@ -725,6 +753,57 @@ public sealed class BotHandlers(Database database)
                 }
                 else await bot.SendMessage(origin.Chat.Id, "Не удалось подтвердить: заявка недоступна или время уже занято.", cancellationToken: ct);
                 break;
+            case "favorites":
+                var favorites = await database.GetFavoriteChannelsAsync(actor.Id, ct);
+                var favoriteRows = favorites.Select(x => new[]
+                {
+                    InlineKeyboardButton.WithCallbackData($"❤️ {x.Title} · {x.Price:0.##} ₽", $"offer:{x.Id}")
+                }).ToList();
+                favoriteRows.Add(new[] { InlineKeyboardButton.WithCallbackData("🔎 Открыть каталог", "catalog") });
+                favoriteRows.Add(new[] { InlineKeyboardButton.WithCallbackData("⬅️ Кабинет", "buyer_home") });
+                await bot.EditMessageText(origin.Chat.Id, origin.MessageId,
+                    favorites.Count==0 ? "❤️ Избранное пока пусто. Добавляйте каналы из карточек каталога." :
+                        $"❤️ Избранные каналы ({favorites.Count})", replyMarkup:new InlineKeyboardMarkup(favoriteRows), cancellationToken:ct);
+                break;
+            case string favoriteData when favoriteData.StartsWith("favorite:") &&
+                long.TryParse(favoriteData["favorite:".Length..], out var favoriteId):
+                await database.ToggleFavoriteAsync(actor.Id,favoriteId,ct);
+                await ShowOfferAsync(bot,origin.Chat.Id,origin.MessageId,favoriteId,ct,actor.Id);
+                break;
+            case string reviewsData when reviewsData.StartsWith("reviews:") &&
+                long.TryParse(reviewsData["reviews:".Length..],out var reviewsChannel):
+                var reviews=await database.GetChannelReviewsAsync(reviewsChannel,ct);
+                var reviewText=reviews.Count==0 ? "У канала пока нет проверенных отзывов." :
+                    "⭐ Проверенные отзывы рекламодателей:\\n\\n"+
+                    string.Join("\\n\\n",reviews.Select(x=>$"{new string('⭐',x.Stars)} · {x.At.Add(DisplayOffset):dd.MM.yyyy}\\n{x.Comment??"Без комментария"}"));
+                await bot.EditMessageText(origin.Chat.Id,origin.MessageId,reviewText,
+                    replyMarkup:new InlineKeyboardMarkup(new[]
+                    {
+                        new[]{InlineKeyboardButton.WithCallbackData("⬅️ Карточка канала",$"offer:{reviewsChannel}")}
+                    }),cancellationToken:ct);
+                break;
+            case string rateData when rateData.StartsWith("rate:"):
+                var rateParts=rateData.Split(':');
+                if(rateParts.Length!=3||!long.TryParse(rateParts[1],out var rateOrder)||
+                    !int.TryParse(rateParts[2],out var stars)||stars<1||stars>5)break;
+                if(await database.SaveReviewAsync(rateOrder,actor.Id,stars,ct))
+                {
+                    await bot.SendMessage(origin.Chat.Id,
+                        $"⭐ Оценка {stars}/5 сохранена для заказа #{rateOrder}.\\nМожете добавить комментарий (до 500 символов).",
+                        replyMarkup:new InlineKeyboardMarkup(new[]
+                        {
+                            new[]{InlineKeyboardButton.WithCallbackData("✍️ Добавить комментарий",$"reviewcomment:{rateOrder}")},
+                            new[]{InlineKeyboardButton.WithCallbackData("📋 Вернуться к заказу",$"ad:{rateOrder}")}
+                        }),cancellationToken:ct);
+                }
+                else await bot.SendMessage(origin.Chat.Id,"Оценка доступна только рекламодателю после оплаченного реального размещения без открытого спора.",cancellationToken:ct);
+                break;
+            case string commentData when commentData.StartsWith("reviewcomment:") &&
+                long.TryParse(commentData["reviewcomment:".Length..],out var commentOrder):
+                if(!await database.CanReviewOrderAsync(commentOrder,actor.Id,ct))break;
+                _pendingReviewComments[actor.Id]=commentOrder;
+                await bot.SendMessage(origin.Chat.Id,"✍️ Отправьте текст отзыва (до 500 символов). /cancel — отмена.",cancellationToken:ct);
+                break;
             case "catalog":
                 var categoryRows = new List<InlineKeyboardButton[]>
                 {
@@ -770,7 +849,7 @@ public sealed class BotHandlers(Database database)
                 await bot.EditMessageText(origin.Chat.Id, origin.MessageId, requests.Count == 0 ? "Заявок пока нет." : (owned ? "📥 Входящие заявки:" : "📤 Мои заявки:"), replyMarkup: new InlineKeyboardMarkup(requestRows), cancellationToken: ct);
                 break;
             case string offerData when offerData.StartsWith("offer:") && long.TryParse(offerData[6..], out var offerId):
-                await ShowOfferAsync(bot, origin.Chat.Id, origin.MessageId, offerId, ct);
+                await ShowOfferAsync(bot, origin.Chat.Id, origin.MessageId, offerId, ct, actor.Id);
                 break;
             case string orderData when orderData.StartsWith("order:") && long.TryParse(orderData[6..], out var orderId):
                 if (await database.GetPublicChannelAsync(orderId, ct) is null)
@@ -899,7 +978,7 @@ public sealed class BotHandlers(Database database)
             replyMarkup: new InlineKeyboardMarkup(rows), cancellationToken: ct);
     }
 
-    private async Task ShowOfferAsync(ITelegramBotClient bot, long chatId, int? messageId, long channelId, CancellationToken ct)
+    private async Task ShowOfferAsync(ITelegramBotClient bot, long chatId, int? messageId, long channelId, CancellationToken ct, long? viewerId = null)
     {
         var offer = await database.GetPublicChannelAsync(channelId, ct);
         if (offer is null)
@@ -912,13 +991,18 @@ public sealed class BotHandlers(Database database)
         var reputation = info is null ? null : await database.GetOwnerReputationAsync(info.Value.Owner, ct);
         var categoryName = info is null ? "Не указана" :
             Categories.FirstOrDefault(c => c.Key == info.Value.Category).Name ?? "Другое";
+        var reviewSummary = await database.GetChannelReviewSummaryAsync(channelId,ct);
+        var favorite = viewerId is long viewer && await database.IsFavoriteAsync(viewer,channelId,ct);
+        var reviewLabel = reviewSummary.Count==0 ? "⭐ Отзывов пока нет" : $"⭐ {reviewSummary.Average:0.0}/5 · {reviewSummary.Count} проверенных оценок";
         var activity = reputation is { } rep
             ? $"🏅 Опыт владельца: {rep.Completed} подтверждённых размещений, {rep.RepeatClients} рекламодателей\\n📊 Индекс активности: {rep.Rating:0}/100 (не отзывы)"
             : "🏅 Подтверждённых размещений пока нет";
-        var text = $"📺 {x.Title}\\n🏷 {categoryName}\\n💰 Стоимость: {x.Price:0.##} ₽\\n📝 {(string.IsNullOrWhiteSpace(x.Description) ? "Описание пока не добавлено" : x.Description)}\\n📦 {x.Formats}\\n\\n{activity}\\n\\nОформите заявку на рекламу в этом канале.";
+        var text = $"📺 {x.Title}\\n🏷 {categoryName}\\n💰 Стоимость: {x.Price:0.##} ₽\\n📝 {(string.IsNullOrWhiteSpace(x.Description) ? "Описание пока не добавлено" : x.Description)}\\n📦 {x.Formats}\\n\\n{activity}\\n\\n{reviewLabel}\n\\nОформите заявку на рекламу в этом канале.";
         var markup = new InlineKeyboardMarkup(new[]
         {
             new[] { InlineKeyboardButton.WithCallbackData("📝 Заказать рекламу", $"order:{channelId}") },
+            new[] { InlineKeyboardButton.WithCallbackData(favorite ? "💔 Убрать из избранного" : "❤️ В избранное", $"favorite:{channelId}") },
+            new[] { InlineKeyboardButton.WithCallbackData("⭐ Читать отзывы", $"reviews:{channelId}") },
             new[] { InlineKeyboardButton.WithCallbackData("🔎 Каталог", "catalog") },
             new[] { InlineKeyboardButton.WithCallbackData("⬅️ Кабинет", "buyer_home") }
         });
