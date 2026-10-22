@@ -11,6 +11,7 @@ public sealed class BotHandlers(Database database)
     private readonly System.Collections.Concurrent.ConcurrentDictionary<long, (long ChannelId, string Field)> _pending = new();
     private readonly System.Collections.Concurrent.ConcurrentDictionary<long, long> _pendingAds = new();
     private readonly System.Collections.Concurrent.ConcurrentDictionary<long, long> _pendingSchedules = new();
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<long,long> _pendingTimeRates = new();
     private readonly System.Collections.Concurrent.ConcurrentDictionary<long, string> _adminPending = new();
     private static bool IsAdmin(long id) => long.TryParse(Environment.GetEnvironmentVariable("ADMIN_TELEGRAM_ID"), out var admin) && id == admin;
     private static InlineKeyboardMarkup AdminMenu() => new(new[]
@@ -26,6 +27,27 @@ public sealed class BotHandlers(Database database)
         new[] { InlineKeyboardButton.WithCallbackData("⬅️ Главное меню", "home") }
     });
 
+
+    private static readonly string[] DayNames={"Пн","Вт","Ср","Чт","Пт","Сб","Вс"};
+
+    private async Task ShowTimeRatesAsync(ITelegramBotClient bot,long chatId,int? messageId,
+        long owner,long channelId,CancellationToken ct)
+    {
+        if(await database.GetChannelSettingsAsync(channelId,owner,ct) is null)return;
+        var rates=await database.GetTimeRatesAsync(channelId,ct);
+        var rows=rates.Select(x=>new[]
+        {
+            InlineKeyboardButton.WithCallbackData(
+                $"❌ {DayNames[x.Weekday]} {x.Hour:00}:{x.Minute:00} · {x.Price:0.##} ₽ · {x.Duration} ч",
+                $"removerate:{channelId}:{x.Id}")
+        }).ToList();
+        rows.Add(new[]{InlineKeyboardButton.WithCallbackData("➕ Добавить время и цену",$"addrate:{channelId}")});
+        rows.Add(new[]{InlineKeyboardButton.WithCallbackData("⬅️ Настройки канала",$"settings:{channelId}")});
+        var body="🕒 Варианты размещения (UTC+3)\\nКаждый день недели и час имеет собственную цену и срок. Нажмите на вариант, чтобы удалить его.\\n"+
+            (rates.Count==0?"Вариантов пока нет. Пока они не настроены, действует обычный выбор времени и общая цена.":$"Активных вариантов: {rates.Count}");
+        if(messageId is int id)await bot.EditMessageText(chatId,id,body,replyMarkup:new InlineKeyboardMarkup(rows),cancellationToken:ct);
+        else await bot.SendMessage(chatId,body,replyMarkup:new InlineKeyboardMarkup(rows),cancellationToken:ct);
+    }
 
     private async Task ShowBookingDaysAsync(ITelegramBotClient bot, long chatId, long requestId, CancellationToken ct)
     {
@@ -137,6 +159,7 @@ public sealed class BotHandlers(Database database)
         new[] { InlineKeyboardButton.WithCallbackData("💰 Цена", $"edit:price:{id}"), InlineKeyboardButton.WithCallbackData("📝 Описание", $"edit:description:{id}") },
         new[] { InlineKeyboardButton.WithCallbackData("📦 Форматы", $"edit:formats:{id}") },
         new[] { InlineKeyboardButton.WithCallbackData("🏷 Категория", $"setcategory:{id}") },
+        new[] { InlineKeyboardButton.WithCallbackData("🕒 Время и цены размещений", $"timerates:{id}") },
         new[] { InlineKeyboardButton.WithCallbackData("🌐 В каталоге: вкл/выкл", $"listing:{id}") },
         new[] { InlineKeyboardButton.WithCallbackData("⬅️ Мои каналы", "channels") }
     });
@@ -331,11 +354,27 @@ public sealed class BotHandlers(Database database)
                 _pending.TryRemove(user.Id, out _);
                 _pendingAds.TryRemove(user.Id, out _);
                 _pendingSchedules.TryRemove(user.Id, out _);
+                _pendingTimeRates.TryRemove(user.Id, out _);
                 _adminPending.TryRemove(user.Id, out _);
                 await bot.SendMessage(message.Chat.Id, "Действие отменено.", replyMarkup: ForRole(await database.GetRoleAsync(user.Id, ct)), cancellationToken: ct);
                 return;
             }
 
+            if (_pendingTimeRates.TryRemove(user.Id,out var timeRateChannel))
+            {
+                var parts= (message.Text??"").Trim().Split(' ',StringSplitOptions.RemoveEmptyEntries);
+                var valid=parts.Length==4 && int.TryParse(parts[0],out var day) &&
+                    TimeSpan.TryParseExact(parts[1],@"hh\\:mm",System.Globalization.CultureInfo.InvariantCulture,out var time) &&
+                    decimal.TryParse(parts[2].Replace(',','.'),System.Globalization.NumberStyles.Number,
+                        System.Globalization.CultureInfo.InvariantCulture,out var price) &&
+                    int.TryParse(parts[3],out var duration);
+                if(!valid || !await database.SaveTimeRateAsync(timeRateChannel,user.Id,
+                    day,time.Hours,time.Minutes,price,duration,ct))
+                    await bot.SendMessage(message.Chat.Id,"Неверные данные. Пример: 0 18:00 2500 24. День: 0=пн ... 6=вс, время UTC+3, минуты 00/30, цена ₽, срок 1–168 часов.",cancellationToken:ct);
+                else
+                    await ShowTimeRatesAsync(bot,message.Chat.Id,null,user.Id,timeRateChannel,ct);
+                return;
+            }
             if (_pendingSchedules.TryRemove(user.Id, out var scheduleId))
             {
                 var input = message.Text?.Trim() ?? "";
@@ -694,10 +733,88 @@ public sealed class BotHandlers(Database database)
                 };
                 await bot.SendMessage(origin.Chat.Id, prompt + "\nДля отмены: /cancel", cancellationToken: ct);
                 break;
+            case string rateListData when rateListData.StartsWith("timerates:") &&
+                long.TryParse(rateListData["timerates:".Length..],out var rateChannel):
+                await ShowTimeRatesAsync(bot,origin.Chat.Id,origin.MessageId,actor.Id,rateChannel,ct);
+                break;
+            case string addRateData when addRateData.StartsWith("addrate:") &&
+                long.TryParse(addRateData["addrate:".Length..],out var addRateChannel):
+                if(await database.GetChannelSettingsAsync(addRateChannel,actor.Id,ct) is null)break;
+                _pendingTimeRates[actor.Id]=addRateChannel;
+                await bot.SendMessage(origin.Chat.Id,
+                    "🕒 Новый тариф. Отправьте одной строкой:\\nДень недели (0=пн ... 6=вс), время (UTC+3), цена ₽, срок в часах.\\nПример: 0 18:00 2500 24\\nМожно создать несколько вариантов для разных дней и часов. /cancel — отмена.",
+                    cancellationToken:ct);
+                break;
+            case string removeRateData when removeRateData.StartsWith("removerate:"):
+                var rateParts=removeRateData.Split(':');
+                if(rateParts.Length!=3||!long.TryParse(rateParts[1],out var removeChannel)||
+                    !long.TryParse(rateParts[2],out var removeId))break;
+                await database.DeleteTimeRateAsync(removeChannel,actor.Id,removeId,ct);
+                await ShowTimeRatesAsync(bot,origin.Chat.Id,origin.MessageId,actor.Id,removeChannel,ct);
+                break;
+            case string pickRateData when pickRateData.StartsWith("pickrate:"):
+                var pickParts=pickRateData.Split(':');
+                if(pickParts.Length!=3||!long.TryParse(pickParts[1],out var pickOrder)||
+                    !long.TryParse(pickParts[2],out var pickRateId))break;
+                var pickChannel=await database.GetOrderChannelAsync(pickOrder,actor.Id);
+                if(pickChannel is null)break;
+                var selectedRates=await database.GetTimeRatesAsync(pickChannel.Value,ct);
+                var selected=selectedRates.FirstOrDefault(x=>x.Id==pickRateId);
+                if(selected.Id==0)break;
+                var now=await database.GetDatabaseUtcAsync(ct);
+                var today=now.Add(DisplayOffset).Date;
+                var options=Enumerable.Range(0,30)
+                    .Select(offset=>today.AddDays(offset).AddHours(selected.Hour).AddMinutes(selected.Minute))
+                    .Where(local=>((int)local.DayOfWeek+6)%7==selected.Weekday &&
+                        local.Add(-DisplayOffset)>now.AddMinutes(2))
+                    .Take(4).ToList();
+                var choiceRows=options.Select(local=>new[]
+                {
+                    InlineKeyboardButton.WithCallbackData(
+                        $"{local:ddd dd.MM HH:mm} · {selected.Price:0.##} ₽",
+                        $"ratetime:{pickOrder}:{pickRateId}:{local:yyyyMMddHHmm}")
+                }).ToList();
+                choiceRows.Add(new[]{InlineKeyboardButton.WithCallbackData("⬅️ Выбрать тариф",$"schedule:{pickOrder}")});
+                await bot.SendMessage(origin.Chat.Id,"📅 Выберите дату размещения (UTC+3):",
+                    replyMarkup:new InlineKeyboardMarkup(choiceRows),cancellationToken:ct);
+                break;
+            case string rateTimeData when rateTimeData.StartsWith("ratetime:"):
+                var chosenParts=rateTimeData.Split(':');
+                if(chosenParts.Length!=4||!long.TryParse(chosenParts[1],out var chosenOrder)||
+                    !long.TryParse(chosenParts[2],out var chosenRate)||
+                    !DateTime.TryParseExact(chosenParts[3],"yyyyMMddHHmm",
+                        System.Globalization.CultureInfo.InvariantCulture,System.Globalization.DateTimeStyles.None,
+                        out var chosenLocal))break;
+                if(await database.ProposeRateAsync(chosenOrder,actor.Id,chosenRate,chosenLocal.Add(-DisplayOffset),ct))
+                {
+                    var chosenAd=await database.GetAdRequestAsync(chosenOrder,ct);
+                    await bot.SendMessage(origin.Chat.Id,
+                        $"✅ Время предложено: {chosenLocal:dd.MM.yyyy HH:mm} (UTC+3). Цена: {chosenAd?.Price:0.##} ₽. Ожидаем согласования владельца.",
+                        cancellationToken:ct);
+                    if(chosenAd is not null)
+                        await database.EnqueueNotificationToUserAsync(chosenOrder,chosenAd.Value.Owner,
+                            $"📥 Новая заявка #{chosenOrder}: {chosenLocal:dd.MM.yyyy HH:mm} (UTC+3), {chosenAd.Value.Price:0.##} ₽. Откройте входящие заявки.",ct);
+                }
+                else await bot.SendMessage(origin.Chat.Id,"Слот уже занят или тариф изменён. Выберите другой вариант.",cancellationToken:ct);
+                break;
             case string scheduleData when scheduleData.StartsWith("schedule:") && long.TryParse(scheduleData[9..], out var scheduleId):
                 var scheduling = await database.GetAdRequestAsync(scheduleId, ct);
                 if (scheduling is null || scheduling.Value.Advertiser != actor.Id || scheduling.Value.Status != "Draft") break;
-                await ShowBookingDaysAsync(bot, origin.Chat.Id, scheduleId, ct);
+                var scheduleChannel=await database.GetOrderChannelAsync(scheduleId,actor.Id);
+                if(scheduleChannel is null)break;
+                var configuredRates=await database.GetTimeRatesAsync(scheduleChannel.Value,ct);
+                if(configuredRates.Count>0)
+                {
+                    var rows=configuredRates.Select(rate=>new[]
+                    {
+                        InlineKeyboardButton.WithCallbackData(
+                            $"📅 {DayNames[rate.Weekday]} {rate.Hour:00}:{rate.Minute:00} · {rate.Price:0.##} ₽ · {rate.Duration} ч",
+                            $"pickrate:{scheduleId}:{rate.Id}")
+                    }).ToList();
+                    await bot.SendMessage(origin.Chat.Id,"🕒 Владелец предлагает следующие варианты размещения (UTC+3):",
+                        replyMarkup:new InlineKeyboardMarkup(rows),cancellationToken:ct);
+                }
+                else await ShowBookingDaysAsync(bot, origin.Chat.Id, scheduleId, ct);
                 break;
             case string nextData when nextData.StartsWith("nextslot:") && long.TryParse(nextData[9..], out var nextId):
                 var nextAd = await database.GetAdRequestAsync(nextId, ct);
