@@ -640,9 +640,21 @@ app.MapPost("/api/payments/yookassa/notification", async (HttpRequest req, MySql
             UPDATE ad_requests SET status='Scheduled',paid_confirmed=TRUE,
               payment_status='TestPaid',is_test_order=TRUE,payout_status='NotEligible'
             WHERE id=@order AND status='AwaitingPayment'
+              AND scheduled_at>DATE_ADD(UTC_TIMESTAMP(),INTERVAL 10 MINUTE)
             """,conn,tx);
         update.Parameters.AddWithValue("@order",orderId);
         var transitioned=await update.ExecuteNonQueryAsync(ct);
+        if(transitioned==0)
+        {
+            await using var late=new MySqlCommand("""
+                UPDATE ad_requests SET status='PaidReschedule', paid_confirmed=TRUE,
+                  payment_status='TestPaid', is_test_order=TRUE, payout_status='NotEligible'
+                WHERE id=@order AND status='AwaitingPayment'
+                  AND scheduled_at<=DATE_ADD(UTC_TIMESTAMP(),INTERVAL 10 MINUTE)
+                """,conn,tx);
+            late.Parameters.AddWithValue("@order",orderId);
+            await late.ExecuteNonQueryAsync(ct);
+        }
         if(transitioned==1)
         {
             await using var notice=new MySqlCommand("""
@@ -704,10 +716,23 @@ app.MapPost("/api/orders/{orderId:long}/payment/check", async (long orderId, Htt
             UPDATE ad_requests SET status='Scheduled', paid_confirmed=TRUE,
                 payment_status='TestPaid', is_test_order=TRUE, payout_status='NotEligible'
             WHERE id=@id AND advertiser_id=@buyer AND status='AwaitingPayment'
+              AND scheduled_at>DATE_ADD(UTC_TIMESTAMP(),INTERVAL 10 MINUTE)
             """, conn, tx);
         update.Parameters.AddWithValue("@id", orderId);
         update.Parameters.AddWithValue("@buyer", buyer);
         var transitioned = await update.ExecuteNonQueryAsync(ct);
+        if (transitioned == 0)
+        {
+            await using var late=new MySqlCommand("""
+                UPDATE ad_requests SET status='PaidReschedule', paid_confirmed=TRUE,
+                    payment_status='TestPaid', is_test_order=TRUE, payout_status='NotEligible'
+                WHERE id=@id AND advertiser_id=@buyer AND status='AwaitingPayment'
+                  AND scheduled_at<=DATE_ADD(UTC_TIMESTAMP(),INTERVAL 10 MINUTE)
+                """, conn, tx);
+            late.Parameters.AddWithValue("@id",orderId);
+            late.Parameters.AddWithValue("@buyer",buyer);
+            await late.ExecuteNonQueryAsync(ct);
+        }
         if (transitioned == 1)
         {
             await using var notice = new MySqlCommand("""
