@@ -165,6 +165,9 @@ jobs:
           mariadb --defaults-extra-file="$HOME/.my.cnf" --batch --skip-column-names \
             -e 'SELECT 1' | grep -qx '1'
           echo 'MariaDB authentication OK'
+          echo '=== TEST CHANNEL LOOKUP ==='
+          mariadb --defaults-extra-file="$HOME/.my.cnf" --batch --skip-column-names \
+            -e "SELECT telegram_id,username,title FROM s2_telegram_manager.channels WHERE LOWER(REPLACE(COALESCE(username,''),'@',''))='testchanel54' LIMIT 5;"
           echo '=== REKLIO DATABASE TABLES ==='
           mariadb --defaults-extra-file="$HOME/.my.cnf" --batch --skip-column-names \
             -e "SELECT TABLE_SCHEMA, TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA NOT IN ('mysql','information_schema','performance_schema','sys') AND TABLE_NAME IN ('ad_requests','notification_outbox','reklio_publications','reklio_payment_attempts','reklio_payment_events') ORDER BY TABLE_SCHEMA,TABLE_NAME;"
