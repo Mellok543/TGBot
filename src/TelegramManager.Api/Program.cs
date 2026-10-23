@@ -146,8 +146,8 @@ app.MapGet("/api/my-channels/{channelId:long}/rates", async (long channelId, Htt
         FROM channel_duration_rates r JOIN channels c ON c.telegram_id=r.channel_id
         WHERE c.telegram_id=@channel AND c.connected_by=@owner ORDER BY r.duration_hours
         """);
-    cmd.Parameters.AddWithValue("@channel",channelId);
-    cmd.Parameters.AddWithValue("@owner",userId);
+    cmd.Parameters.Add(new MySqlParameter("@channel",channelId));
+    cmd.Parameters.Add(new MySqlParameter("@owner",userId));
     var rates=new List<object>();
     await using var reader=await cmd.ExecuteReaderAsync(ct);
     while(await reader.ReadAsync(ct))
@@ -165,10 +165,10 @@ app.MapPost("/api/my-channels/{channelId:long}/rates", async (long channelId, Up
         WHERE telegram_id=@channel AND connected_by=@owner
         ON DUPLICATE KEY UPDATE price_rub=VALUES(price_rub),is_active=TRUE
         """);
-    cmd.Parameters.AddWithValue("@channel",channelId);
-    cmd.Parameters.AddWithValue("@owner",userId);
-    cmd.Parameters.AddWithValue("@hours",input.Hours);
-    cmd.Parameters.AddWithValue("@price",input.Price);
+    cmd.Parameters.Add(new MySqlParameter("@channel",channelId));
+    cmd.Parameters.Add(new MySqlParameter("@owner",userId));
+    cmd.Parameters.Add(new MySqlParameter("@hours",input.Hours));
+    cmd.Parameters.Add(new MySqlParameter("@price",input.Price));
     var changed=await cmd.ExecuteNonQueryAsync(ct);
     return changed>0 ? Results.Ok(new {saved=true}) : Results.NotFound();
 });
@@ -180,9 +180,9 @@ app.MapPost("/api/my-channels/{channelId:long}/rates/{rateId:long}/toggle", asyn
         SET r.is_active=NOT r.is_active
         WHERE r.id=@rate AND c.telegram_id=@channel AND c.connected_by=@owner
         """);
-    cmd.Parameters.AddWithValue("@rate",rateId);
-    cmd.Parameters.AddWithValue("@channel",channelId);
-    cmd.Parameters.AddWithValue("@owner",userId);
+    cmd.Parameters.Add(new MySqlParameter("@rate",rateId));
+    cmd.Parameters.Add(new MySqlParameter("@channel",channelId));
+    cmd.Parameters.Add(new MySqlParameter("@owner",userId));
     return await cmd.ExecuteNonQueryAsync(ct)>0 ? Results.Ok(new {saved=true}) : Results.NotFound();
 });
 app.MapPost("/api/my-channels/{channelId:long}/listing", async (long channelId,UpdateListingInput input,HttpRequest req,MySqlDataSource db,CancellationToken ct) =>
@@ -191,9 +191,9 @@ app.MapPost("/api/my-channels/{channelId:long}/listing", async (long channelId,U
     await using var cmd=db.CreateCommand("""
         UPDATE channels SET is_listed=@listed WHERE telegram_id=@channel AND connected_by=@owner
         """);
-    cmd.Parameters.AddWithValue("@listed",input.Listed);
-    cmd.Parameters.AddWithValue("@channel",channelId);
-    cmd.Parameters.AddWithValue("@owner",userId);
+    cmd.Parameters.Add(new MySqlParameter("@listed",input.Listed));
+    cmd.Parameters.Add(new MySqlParameter("@channel",channelId));
+    cmd.Parameters.Add(new MySqlParameter("@owner",userId));
     return await cmd.ExecuteNonQueryAsync(ct)>0 ? Results.Ok(new {saved=true}) : Results.NotFound();
 });
 app.MapGet("/api/channels/{channelId:long}/rates", async (long channelId, HttpRequest req, MySqlDataSource db, CancellationToken ct) =>
