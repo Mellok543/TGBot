@@ -299,7 +299,7 @@ app.MapGet("/api/admin/disputes", async (HttpRequest req,MySqlDataSource db,Canc
 app.MapPost("/api/admin/disputes/{orderId:long}/resolve",async(long orderId,HttpRequest req,MySqlDataSource db,CancellationToken ct) =>
 {
     if(Authorized(req) is not long userId) return Results.Unauthorized();
-    if(!IsDisputeAdmin(userId)) return Results.Forbid();
+    if(!IsRootAdmin(userId)) return Results.Forbid();
     var input=await req.ReadFromJsonAsync<ResolveDisputeInput>(cancellationToken:ct);
     if(input?.Decision is not ("RefundRecommended" or "PayoutRecommended"))
         return Results.BadRequest(new {error="Недопустимое решение"});
