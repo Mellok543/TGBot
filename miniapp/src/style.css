@@ -13,3 +13,7 @@
 .catalogSummary button{border:0;background:transparent;color:#91bcff;padding:6px;cursor:pointer}
 
 .channelStats{display:flex;flex-wrap:wrap;gap:7px;margin-top:12px}.channelStats span{background:#24334a;border:1px solid #344762;padding:7px 9px;border-radius:9px;color:#9fb1ca;font-size:11px}.channelStats b{color:#e3edff;font-weight:700}
+
+.detailHeading{display:flex;align-items:center;gap:14px;margin-top:20px}.detailHeading h2{margin:0 0 6px;font-size:23px}.detailCategory{font-size:12px;color:#9fb2cd}.detailSubtitle{font-size:15px;margin:26px 0 12px;color:#e8f0ff}
+.detailStats{display:grid;grid-template-columns:1fr 1fr;gap:10px}.detailStats>div{padding:15px 12px;border-radius:14px;background:#19273c;border:1px solid #30425e;display:flex;flex-direction:column;gap:8px}.detailStats small{font-size:11px;color:#9bacbf}.detailStats strong{font-size:21px;color:#f2f6ff}
+.historyCard{border:1px solid #344762;background:#18273b;border-radius:14px;padding:14px}.historyCard svg{display:block;width:100%;height:135px;overflow:visible}.historyLabels{display:flex;justify-content:space-between;color:#91a4c1;font-size:11px;margin:5px 0 12px}.historyCard>small{color:#b5c5da;font-size:12px}
