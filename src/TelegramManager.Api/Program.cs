@@ -45,7 +45,7 @@ static long? VerifyTelegram(string? initData, string token)
 long? Authorized(HttpRequest req) => VerifyTelegram(req.Headers["X-Telegram-Init-Data"].ToString(), token);
 app.MapGet("/api/health", () => Results.Ok(new { status = "ok" }));
 app.MapGet("/api/me", (HttpRequest req) => Authorized(req) is long id
-    ? Results.Ok(new { id }) : Results.Unauthorized());
+    ? Results.Ok(new { id, isDisputeAdmin = (Environment.GetEnvironmentVariable("REKLIO_ADMIN_IDS") ?? "").Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).Any(part => long.TryParse(part,out var adminId) && adminId == id) }) : Results.Unauthorized());
 
 app.MapGet("/api/channels", async (HttpRequest req, MySqlDataSource db, CancellationToken ct) =>
 {
