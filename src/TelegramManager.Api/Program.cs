@@ -242,7 +242,7 @@ app.MapGet("/api/orders", async (HttpRequest req, MySqlDataSource db, Cancellati
     if (Authorized(req) is not long userId) return Results.Unauthorized();
     await using var cmd = db.CreateCommand("""
         SELECT a.id,c.title,a.price_rub,a.status,a.created_at,a.owner_id,
-               a.content_text,a.scheduled_at,r.duration_hours,a.payment_status,a.payout_status,a.is_test_order
+               a.content_text,a.scheduled_at,r.duration_hours,a.payment_status,a.payout_status,a.is_test_order,a.dispute_reason
         FROM ad_requests a JOIN channels c ON c.telegram_id=a.channel_id
         LEFT JOIN channel_duration_rates r ON r.id=a.time_rate_id
         WHERE a.advertiser_id=@user OR a.owner_id=@user
