@@ -9,6 +9,7 @@ var token = Environment.GetEnvironmentVariable("BOT_TOKEN")
 var connectionString = Environment.GetEnvironmentVariable("DATABASE_URL")
     ?? throw new InvalidOperationException("DATABASE_URL is required");
 builder.Services.AddSingleton(new MySqlDataSourceBuilder(connectionString).Build());
+builder.Services.AddHttpClient();
 var allowedOrigin = Environment.GetEnvironmentVariable("MINIAPP_ORIGIN");
 if (!string.IsNullOrWhiteSpace(allowedOrigin))
     builder.Services.AddCors(o => o.AddPolicy("miniapp", p => p.WithOrigins(allowedOrigin).AllowAnyHeader().AllowAnyMethod()));
@@ -271,6 +272,169 @@ app.MapPost("/api/orders/{orderId:long}/reject", async (long orderId, HttpReques
     await notify.ExecuteNonQueryAsync(ct);
     await tx.CommitAsync(ct);
     return Results.Ok(new { id = orderId, status = "Rejected" });
+});
+
+// Payment endpoints are deliberately test-only. Standard test payments are not escrow.
+// The service must be configured with test-shop credentials before this feature is enabled.
+app.MapPost("/api/orders/{orderId:long}/payment", async (long orderId, HttpRequest req, MySqlDataSource db, IHttpClientFactory clients, CancellationToken ct) =>
+{
+    if (Authorized(req) is not long buyer) return Results.Unauthorized();
+    if (Environment.GetEnvironmentVariable("YOOKASSA_MODE") != "test")
+        return Results.Problem("Test payments are disabled", statusCode: 503);
+    var shop = Environment.GetEnvironmentVariable("YOOKASSA_SHOP_ID");
+    var key = Environment.GetEnvironmentVariable("YOOKASSA_SECRET_KEY");
+    if (string.IsNullOrWhiteSpace(shop) || string.IsNullOrWhiteSpace(key))
+        return Results.Problem("Test shop not configured", statusCode: 503);
+    if (orderId <= 0) return Results.BadRequest();
+
+    await using var conn = await db.OpenConnectionAsync(ct);
+    // A database row and unique order lock make repeated taps reuse the same attempt.
+    await using var tx = await conn.BeginTransactionAsync(ct);
+    await using var lookup = new MySqlCommand("""
+        SELECT price_rub FROM ad_requests
+        WHERE id=@id AND advertiser_id=@buyer AND status='AwaitingPayment'
+        FOR UPDATE
+        """, conn, tx);
+    lookup.Parameters.AddWithValue("@id", orderId);
+    lookup.Parameters.AddWithValue("@buyer", buyer);
+    var priceValue = await lookup.ExecuteScalarAsync(ct);
+    if (priceValue is null) { await tx.RollbackAsync(ct); return Results.Conflict(new { error = "Заказ недоступен для оплаты" }); }
+    var price = Convert.ToDecimal(priceValue);
+    if (price < 1m || price > 1000000m) { await tx.RollbackAsync(ct); return Results.BadRequest(new { error = "Некорректная сумма" }); }
+
+    await using var existing = new MySqlCommand("""
+        SELECT id,idempotence_key,provider_payment_id,confirmation_url,status
+        FROM reklio_payment_attempts
+        WHERE order_id=@id AND mode='test' AND status IN ('Created','Pending','Succeeded')
+        ORDER BY id DESC LIMIT 1 FOR UPDATE
+        """, conn, tx);
+    existing.Parameters.AddWithValue("@id", orderId);
+    long attemptId;
+    string idempotence;
+    string? paymentId;
+    string? confirmation;
+    string attemptStatus;
+    await using (var reader = await existing.ExecuteReaderAsync(ct))
+    {
+        if (await reader.ReadAsync(ct))
+        {
+            attemptId = reader.GetInt64(0);
+            idempotence = reader.GetString(1);
+            paymentId = reader.IsDBNull(2) ? null : reader.GetString(2);
+            confirmation = reader.IsDBNull(3) ? null : reader.GetString(3);
+            attemptStatus = reader.GetString(4);
+        }
+        else
+        {
+            attemptId = 0; idempotence = Guid.NewGuid().ToString();
+            paymentId = null; confirmation = null; attemptStatus = "Created";
+        }
+    }
+    if (attemptId == 0)
+    {
+        await using var insert = new MySqlCommand("""
+            INSERT INTO reklio_payment_attempts
+              (order_id,advertiser_id,amount_rub,idempotence_key,status,mode)
+            VALUES (@id,@buyer,@price,@key,'Created','test')
+            """, conn, tx);
+        insert.Parameters.AddWithValue("@id", orderId);
+        insert.Parameters.AddWithValue("@buyer", buyer);
+        insert.Parameters.AddWithValue("@price", price);
+        insert.Parameters.AddWithValue("@key", idempotence);
+        await insert.ExecuteNonQueryAsync(ct);
+        attemptId = insert.LastInsertedId;
+    }
+    await tx.CommitAsync(ct);
+    if (attemptStatus == "Succeeded")
+        return Results.Conflict(new { error = "Платёж уже подтверждён" });
+    if (paymentId is not null && confirmation is not null)
+        return Results.Ok(new { confirmationUrl = confirmation });
+
+    // The provider idempotence key is persisted BEFORE the network request.
+    // Do not mark the order paid based on this response.
+    var client = clients.CreateClient();
+    using var request = new HttpRequestMessage(HttpMethod.Post, "https://api.yookassa.ru/v3/payments");
+    request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue(
+        "Basic", Convert.ToBase64String(Encoding.UTF8.GetBytes(shop + ":" + key)));
+    request.Headers.Add("Idempotence-Key", idempotence);
+    request.Content = System.Net.Http.Json.JsonContent.Create(new {
+        amount = new { value = price.ToString("F2", System.Globalization.CultureInfo.InvariantCulture), currency = "RUB" },
+        capture = true,
+        confirmation = new { type = "redirect", return_url = "https://reklio.site/" },
+        description = "Тестовая оплата Reklio #" + orderId,
+        metadata = new { order_id = orderId.ToString() }
+    });
+    using var response = await client.SendAsync(request, ct);
+    if (!response.IsSuccessStatusCode)
+        return Results.Problem("ЮKassa отклонила создание тестового платежа", statusCode: 502);
+    using var document = await System.Text.Json.JsonDocument.ParseAsync(await response.Content.ReadAsStreamAsync(ct), cancellationToken: ct);
+    var root = document.RootElement;
+    var providerId = root.GetProperty("id").GetString();
+    var url = root.GetProperty("confirmation").GetProperty("confirmation_url").GetString();
+    if (string.IsNullOrWhiteSpace(providerId) || string.IsNullOrWhiteSpace(url))
+        return Results.Problem("Некорректный ответ ЮKassa", statusCode: 502);
+    await using var save = new MySqlCommand("""
+        UPDATE reklio_payment_attempts
+        SET provider_payment_id=@provider,confirmation_url=@url,status='Pending'
+        WHERE id=@attempt AND (provider_payment_id IS NULL OR provider_payment_id=@provider)
+        """, conn);
+    save.Parameters.AddWithValue("@provider", providerId);
+    save.Parameters.AddWithValue("@url", url);
+    save.Parameters.AddWithValue("@attempt", attemptId);
+    await save.ExecuteNonQueryAsync(ct);
+    return Results.Ok(new { confirmationUrl = url });
+});
+
+app.MapPost("/api/orders/{orderId:long}/payment/check", async (long orderId, HttpRequest req, MySqlDataSource db, IHttpClientFactory clients, CancellationToken ct) =>
+{
+    if (Authorized(req) is not long buyer) return Results.Unauthorized();
+    if (Environment.GetEnvironmentVariable("YOOKASSA_MODE") != "test") return Results.Problem(statusCode: 503);
+    var shop = Environment.GetEnvironmentVariable("YOOKASSA_SHOP_ID");
+    var key = Environment.GetEnvironmentVariable("YOOKASSA_SECRET_KEY");
+    if (string.IsNullOrWhiteSpace(shop) || string.IsNullOrWhiteSpace(key)) return Results.Problem(statusCode: 503);
+    await using var conn = await db.OpenConnectionAsync(ct);
+    await using var cmd = new MySqlCommand("""
+        SELECT p.id,p.provider_payment_id,p.amount_rub
+        FROM reklio_payment_attempts p JOIN ad_requests a ON a.id=p.order_id
+        WHERE p.order_id=@id AND a.advertiser_id=@buyer AND p.mode='test'
+          AND p.provider_payment_id IS NOT NULL
+        ORDER BY p.id DESC LIMIT 1
+        """, conn);
+    cmd.Parameters.AddWithValue("@id", orderId);
+    cmd.Parameters.AddWithValue("@buyer", buyer);
+    long attemptId; string providerId; decimal amount;
+    await using (var reader = await cmd.ExecuteReaderAsync(ct))
+    {
+        if (!await reader.ReadAsync(ct)) return Results.NotFound();
+        attemptId = reader.GetInt64(0); providerId = reader.GetString(1); amount = reader.GetDecimal(2);
+    }
+    var client = new TelegramManager.Api.Payments.YooKassaSafeDealClient(clients.CreateClient(), shop, key);
+    var payment = await client.GetPaymentAsync(providerId, ct);
+    if (payment.Id != providerId || payment.Metadata?.GetValueOrDefault("order_id") != orderId.ToString() ||
+        payment.Amount.Currency != "RUB" ||
+        !decimal.TryParse(payment.Amount.Value, System.Globalization.NumberStyles.Number,
+            System.Globalization.CultureInfo.InvariantCulture, out var actual) || actual != amount)
+        return Results.Problem("Данные платежа не совпадают с заказом", statusCode: 502);
+    if (payment.Status == "succeeded" && payment.Paid)
+    {
+        await using var tx = await conn.BeginTransactionAsync(ct);
+        await using var update = new MySqlCommand("""
+            UPDATE ad_requests SET status='Scheduled'
+            WHERE id=@id AND advertiser_id=@buyer AND status='AwaitingPayment'
+            """, conn, tx);
+        update.Parameters.AddWithValue("@id", orderId);
+        update.Parameters.AddWithValue("@buyer", buyer);
+        await update.ExecuteNonQueryAsync(ct);
+        await using var mark = new MySqlCommand("""
+            UPDATE reklio_payment_attempts SET status='Succeeded'
+            WHERE id=@attempt AND status IN ('Created','Pending','Succeeded')
+            """, conn, tx);
+        mark.Parameters.AddWithValue("@attempt", attemptId);
+        await mark.ExecuteNonQueryAsync(ct);
+        await tx.CommitAsync(ct);
+        return Results.Ok(new { status = "Succeeded" });
+    }
+    return Results.Ok(new { status = payment.Status });
 });
 
 app.Run();
