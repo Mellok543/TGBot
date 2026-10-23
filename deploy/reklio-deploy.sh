@@ -71,7 +71,7 @@ cleanup() {
 trap cleanup EXIT
 
 cd "$SOURCE/miniapp"
-npm ci --no-audit --no-fund
+npm install --no-package-lock --no-audit --no-fund
 VITE_API_URL=https://api.reklio.site npm run build
 
 cd "$SOURCE"
