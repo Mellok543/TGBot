@@ -212,6 +212,17 @@ app.MapPost("/api/admin/staff",async(HttpRequest req,MySqlDataSource db,Cancella
         return Results.BadRequest(new {error="Недопустимый пользователь или роль"});
     await using var conn=await db.OpenConnectionAsync(ct);
     await using var tx=await conn.BeginTransactionAsync(ct);
+    if(role!="owner")
+    {
+        await using var checkExisting=new MySqlCommand("SELECT role FROM reklio_staff WHERE telegram_id=@target FOR UPDATE",conn,tx);
+        checkExisting.Parameters.AddWithValue("@target",input.TelegramId);
+        var currentRole=Convert.ToString(await checkExisting.ExecuteScalarAsync(ct));
+        if(currentRole=="admin")
+        {
+            await tx.RollbackAsync(ct);
+            return Results.Forbid();
+        }
+    }
     await using var cmd=new MySqlCommand("""
       INSERT INTO reklio_staff(telegram_id,role,granted_by) VALUES(@target,@role,@actor)
       ON DUPLICATE KEY UPDATE role=VALUES(role),granted_by=VALUES(granted_by)
