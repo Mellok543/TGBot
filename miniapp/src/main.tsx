@@ -6,7 +6,7 @@ import './style.css';
 declare global { interface Window { Telegram?: { WebApp?: { initData: string; ready(): void; expand(): void; colorScheme: string; openTelegramLink(url: string): void } } } }
 
 type Rate = { id: number; hours: number; price: number };
-type Channel = { id: number; title: string; category: string; price: number; description: string; username: string | null };
+type Channel = { id: number; title: string; category: string; price: number; description: string; username: string | null; subscribers: number | null; posts30d: number };
 type Order = { id: number; channel: string; price: number; status: string; createdAt: string; isOwner: boolean };
 type Mine = { id: number; title: string; listed: boolean; price: number };
 type Tab = 'catalog' | 'orders' | 'channels' | 'profile';
@@ -64,7 +64,7 @@ function App() {
   const [search, setSearch] = useState('');
   const [channels, setChannels] = useState<Channel[]>([]);
   const [categoryFilter, setCategoryFilter] = useState('');
-  const [sortBy, setSortBy] = useState<'default' | 'priceAsc' | 'priceDesc' | 'title'>('default');
+  const [sortBy, setSortBy] = useState<'default' | 'priceAsc' | 'priceDesc' | 'subscribers' | 'posts' | 'title'>('default');
   const categories = [...new Set(channels.map(c => c.category).filter(Boolean))].sort((a,b) => a.localeCompare(b, 'ru'));
   const normalizedSearch = search.trim().toLocaleLowerCase('ru');
   const visibleChannels = channels.filter(c =>
@@ -72,6 +72,8 @@ function App() {
     (!normalizedSearch || [c.title, c.category, c.description, c.username || ''].some(value => value.toLocaleLowerCase('ru').includes(normalizedSearch)))
   ).sort((a,b) => sortBy === 'priceAsc' ? a.price - b.price
     : sortBy === 'priceDesc' ? b.price - a.price
+    : sortBy === 'subscribers' ? (b.subscribers ?? -1) - (a.subscribers ?? -1)
+    : sortBy === 'posts' ? b.posts30d - a.posts30d
     : sortBy === 'title' ? a.title.localeCompare(b.title, 'ru') : 0);
   const [orders, setOrders] = useState<Order[]>([]);
   const [processingOrder, setProcessingOrder] = useState<number | null>(null);
@@ -141,7 +143,7 @@ function App() {
         </select></label>
         <label>Сортировка<select aria-label="Сортировка" value={sortBy} onChange={e=>setSortBy(e.target.value as typeof sortBy)}>
           <option value="default">По умолчанию</option><option value="priceAsc">Сначала дешёвые</option>
-          <option value="priceDesc">Сначала дорогие</option><option value="title">По названию</option>
+          <option value="priceDesc">Сначала дорогие</option><option value="subscribers">Больше подписчиков</option><option value="posts">Активность за 30 дней</option><option value="title">По названию</option>
         </select></label>
         <div className="catalogSummary"><span>Найдено каналов: {visibleChannels.length}</span>
           {(search || categoryFilter || sortBy !== 'default') && <button onClick={()=>{setSearch('');setCategoryFilter('');setSortBy('default');}}>Сбросить</button>}
@@ -164,7 +166,7 @@ function App() {
       </div></div>}
       {error && <div className="notice">{error}<button onClick={()=>setRetry(n=>n+1)}>Повторить</button></div>}
       {loading && <div className="muted loading"><RefreshCw size={16}/> Загрузка...</div>}
-      {tab === 'catalog' && <section>{!loading && visibleChannels.length === 0 && !error && <div className="empty">Каналы не найдены. Попробуйте изменить запрос.</div>}{visibleChannels.map(c=><article className="card" key={c.id}><div className="cardTop"><div className="avatar">{c.title.slice(0,1).toUpperCase()}</div><div className="grow"><strong>{c.title}</strong><small>{c.category}</small></div><div className="price">{money(c.price)}</div></div>{c.description && <p className="description">{c.description}</p>}<button className="primary small" onClick={()=>openChannel(c)}>Заказать рекламу</button>{c.username && <button className="link" onClick={()=>tg?.openTelegramLink('https://t.me/'+c.username!.replace(/^@/,''))}>Открыть канал <ArrowUpRight size={15}/></button>}</article>)}</section>}
+      {tab === 'catalog' && <section>{!loading && visibleChannels.length === 0 && !error && <div className="empty">Каналы не найдены. Попробуйте изменить запрос.</div>}{visibleChannels.map(c=><article className="card" key={c.id}><div className="cardTop"><div className="avatar">{c.title.slice(0,1).toUpperCase()}</div><div className="grow"><strong>{c.title}</strong><small>{c.category}</small></div><div className="price">{money(c.price)}</div></div><div className="channelStats"><span>Подписчики: <b>{c.subscribers === null ? "Нет данных" : c.subscribers.toLocaleString("ru-RU")}</b></span><span>Постов за 30 дней: <b>{c.posts30d}</b></span></div>{c.description && <p className="description">{c.description}</p>}<button className="primary small" onClick={()=>openChannel(c)}>Заказать рекламу</button>{c.username && <button className="link" onClick={()=>tg?.openTelegramLink('https://t.me/'+c.username!.replace(/^@/,''))}>Открыть канал <ArrowUpRight size={15}/></button>}</article>)}</section>}
       {tab === 'orders' && <section>{orderMessage && <div className="notice">{orderMessage}</div>}{!loading && !orders.length && !error && <div className="empty">Пока нет заказов</div>}{orders.map(o=><article className="card" key={o.id}><div className="cardTop"><div className="grow"><strong>Заказ #{o.id}</strong><small>{o.channel} · {o.isOwner ? 'Входящая заявка' : 'Моя заявка'}</small></div><div className="price">{money(o.price)}</div></div><span className="status">{({Draft:'Черновик',Pending:'Ожидает согласования',AwaitingPayment:'Ожидает оплаты',Rejected:'Отклонена',Scheduled:'Запланирована',Publishing:'Публикуется',Published:'Опубликована'} as Record<string,string>)[o.status] || o.status}</span>{!o.isOwner && o.status === 'AwaitingPayment' && <div className="orderActions"><button className="primary small" disabled={processingOrder !== null} onClick={()=>payOrder(o)}>Оплатить (тест)</button><button className="secondary small" disabled={processingOrder !== null} onClick={()=>checkPayment(o)}>Проверить оплату</button></div>}{o.isOwner && o.status === 'Pending' && <div className="orderActions"><button className="primary small" disabled={processingOrder !== null} onClick={()=>decideOrder(o,'approve')}>{processingOrder === o.id ? 'Обработка...' : 'Одобрить'}</button><button className="secondary small" disabled={processingOrder !== null} onClick={()=>decideOrder(o,'reject')}>Отклонить</button></div>}</article>)}</section>}
       {tab === 'channels' && <section>{!loading && !mine.length && !error && <div className="empty">Каналы пока не подключены. Добавить первый канал можно через бота.</div>}{mine.map(c=><article className="card" key={c.id}><div className="cardTop"><div className="avatar">{c.title.slice(0,1)}</div><div className="grow"><strong>{c.title}</strong><small>{c.listed?'В каталоге':'Скрыт из каталога'}</small></div><div className="price">{money(c.price)}</div></div></article>)}</section>}
       {tab === 'profile' && <div className="card"><strong>Ваш кабинет</strong><p className="description">Вы вошли через Telegram. Настройки тарифов, создание заказов и платежи будут перенесены сюда на следующих этапах.</p></div>}
