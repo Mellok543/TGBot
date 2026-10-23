@@ -113,10 +113,12 @@ app.MapGet("/api/finance", async (HttpRequest req, MySqlDataSource db, Cancellat
                a.payout_eligible_at
         FROM ad_requests a JOIN channels c ON c.telegram_id=a.channel_id
         WHERE a.owner_id=@owner AND a.payment_status='Paid' AND a.is_test_order=FALSE
-        ORDER BY a.id DESC LIMIT 100
+        ORDER BY a.id DESC
         """);
     cmd.Parameters.Add(new MySqlParameter("@owner",userId));
     var operations=new List<object>();
+    var configuredRate=decimal.TryParse(Environment.GetEnvironmentVariable("REKLIO_COMMISSION_PERCENT"),System.Globalization.NumberStyles.Number,System.Globalization.CultureInfo.InvariantCulture,out var rate) && rate>=0m && rate<=100m ? rate : 0m;
+    decimal paid=0m,refunded=0m;
     decimal pending=0m,ready=0m,blocked=0m;
     await using var reader=await cmd.ExecuteReaderAsync(ct);
     while(await reader.ReadAsync(ct))
@@ -124,17 +126,22 @@ app.MapGet("/api/finance", async (HttpRequest req, MySqlDataSource db, Cancellat
         var amount=reader.GetDecimal(2);
         var payout=reader.GetString(4);
         if(payout=="ReadyForManualReview") ready+=amount;
+        else if(payout=="Paid") paid+=amount;
+        else if(payout=="Refunded") refunded+=amount;
         else if(payout=="Blocked") blocked+=amount;
         else if(payout=="OnHold" || payout=="AwaitingVerification") pending+=amount;
+        if(operations.Count>=100) continue;
+        var commission=decimal.Round(amount*configuredRate/100m,2,MidpointRounding.AwayFromZero);
         operations.Add(new {
-            id=reader.GetInt64(0),channel=reader.GetString(1),amount,
+            id=reader.GetInt64(0),channel=reader.GetString(1),amount,commission,net=amount-commission,
             status=reader.GetString(3),payoutStatus=payout,
             publishedAt=reader.IsDBNull(5)?(DateTime?)null:reader.GetDateTime(5),
             eligibleAt=reader.IsDBNull(6)?(DateTime?)null:reader.GetDateTime(6)
         });
     }
-    return Results.Ok(new {pending,readyForReview=ready,blocked,operations,
-        note="Суммы по последним 100 оплаченных нетестовых заказов; не являются доступным к выводу балансом."});
+    return Results.Ok(new {pending,readyForReview=ready,blocked,paid,refunded,
+        commissionPercent=configuredRate,readyNet=ready-decimal.Round(ready*configuredRate/100m,2,MidpointRounding.AwayFromZero),operations,
+        note="Сводка по всем оплаченным нетестовым заказам; история показывает последние 100. Комиссия является предварительным расчётом, выплаты не инициируются."});
 });
 app.MapGet("/api/orders/summary", async (HttpRequest req, MySqlDataSource db, CancellationToken ct) =>
 {
