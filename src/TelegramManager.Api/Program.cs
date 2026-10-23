@@ -414,6 +414,7 @@ app.MapPost("/api/orders/{orderId:long}/approve", async (long orderId, HttpReque
         UPDATE ad_requests
         SET status='AwaitingPayment'
         WHERE id=@order AND owner_id=@owner AND status='Pending'
+          AND scheduled_at>DATE_ADD(UTC_TIMESTAMP(),INTERVAL 10 MINUTE)
         """, conn, tx);
     update.Parameters.AddWithValue("@order", orderId);
     update.Parameters.AddWithValue("@owner", ownerId);
@@ -484,6 +485,7 @@ app.MapPost("/api/orders/{orderId:long}/payment", async (long orderId, HttpReque
     await using var lookup = new MySqlCommand("""
         SELECT price_rub FROM ad_requests
         WHERE id=@id AND advertiser_id=@buyer AND status='AwaitingPayment'
+          AND scheduled_at>DATE_ADD(UTC_TIMESTAMP(),INTERVAL 10 MINUTE)
         FOR UPDATE
         """, conn, tx);
     lookup.Parameters.AddWithValue("@id", orderId);
