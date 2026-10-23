@@ -28,8 +28,6 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '22'
-          cache: npm
-          cache-dependency-path: miniapp/package-lock.json
       - name: Validate deployment script
         run: bash -n deploy/reklio-deploy.sh
       - name: Build API
