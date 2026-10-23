@@ -143,6 +143,38 @@ app.MapGet("/api/finance", async (HttpRequest req, MySqlDataSource db, Cancellat
         commissionPercent=configuredRate,readyNet=ready,operations,
         note="Сводка по всем оплаченным нетестовым заказам; история показывает последние 100. Комиссия 5% оплачивается покупателем сверх цены продавца. Выплаты не инициируются."});
 });
+app.MapGet("/api/orders/{orderId:long}/deal", async (long orderId, HttpRequest req, MySqlDataSource db, CancellationToken ct) =>
+{
+    if (Authorized(req) is not long userId) return Results.Unauthorized();
+    await using var cmd=db.CreateCommand("""
+        SELECT a.price_rub,a.status,a.payment_status,a.payout_status,a.is_test_order,
+               a.published_at,a.placement_verified_at,a.payout_eligible_at,
+               a.advertiser_id,a.owner_id
+        FROM ad_requests a
+        WHERE a.id=@id AND (a.advertiser_id=@user OR a.owner_id=@user)
+        LIMIT 1
+        """);
+    cmd.Parameters.Add(new MySqlParameter("@id",orderId));
+    cmd.Parameters.Add(new MySqlParameter("@user",userId));
+    await using var reader=await cmd.ExecuteReaderAsync(ct);
+    if (!await reader.ReadAsync(ct)) return Results.NotFound();
+    var sellerPrice=reader.GetDecimal(0);
+    var fee=decimal.Round(sellerPrice*0.05m,2,MidpointRounding.AwayFromZero);
+    var status=reader.GetString(1);
+    var paymentStatus=reader.GetString(2);
+    var payoutStatus=reader.GetString(3);
+    var isTest=reader.GetBoolean(4);
+    return Results.Ok(new {
+        orderId,sellerPrice,serviceFee=fee,total=sellerPrice+fee,
+        status,paymentStatus,payoutStatus,isTest,
+        publishedAt=reader.IsDBNull(5)?(DateTime?)null:reader.GetDateTime(5),
+        verifiedAt=reader.IsDBNull(6)?(DateTime?)null:reader.GetDateTime(6),
+        eligibleAt=reader.IsDBNull(7)?(DateTime?)null:reader.GetDateTime(7),
+        isSeller=reader.GetInt64(9)==userId,
+        providerDealActive=false,
+        message="Режим подготовки: реальные Safe Deal и выплаты YooKassa пока не активированы."
+    });
+});
 app.MapGet("/api/orders/summary", async (HttpRequest req, MySqlDataSource db, CancellationToken ct) =>
 {
     if (Authorized(req) is not long userId) return Results.Unauthorized();
