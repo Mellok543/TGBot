@@ -8,6 +8,8 @@ declare global { interface Window { Telegram?: { WebApp?: { initData: string; re
 type Rate = { id: number; hours: number; price: number };
 type HistoryPoint = { day: string; subscribers: number | null; posts: number };
 type Channel = { id: number; title: string; category: string; price: number; description: string; username: string | null; subscribers: number | null; posts30d: number };
+type FinanceOperation = {id:number;channel:string;amount:number;status:string;payoutStatus:string;publishedAt:string|null;eligibleAt:string|null};
+type FinanceData = {pending:number;readyForReview:number;blocked:number;operations:FinanceOperation[];note:string};
 type OrderSummary = { incomingPending:number; completedSales:number; completedPurchases:number; salesVolume:number; purchaseVolume:number; upcomingSales:number };
 type Order = { id: number; channel: string; price: number; status: string; createdAt: string; isOwner: boolean; text: string; scheduledAt: string | null; durationHours: number | null };
 type Mine = { id: number; title: string; listed: boolean; price: number };
@@ -98,6 +100,8 @@ function App() {
     : sortBy === 'posts' ? b.posts30d - a.posts30d
     : sortBy === 'title' ? a.title.localeCompare(b.title, 'ru') : 0);
   const [orders, setOrders] = useState<Order[]>([]);
+  const [finance, setFinance] = useState<FinanceData | null>(null);
+  const [financeError, setFinanceError] = useState('');
   const [orderSummary, setOrderSummary] = useState<OrderSummary | null>(null);
   const [orderFilter, setOrderFilter] = useState<'incoming' | 'outgoing' | 'all'>('incoming');
   const [expandedOrder, setExpandedOrder] = useState<number | null>(null);
@@ -194,6 +198,14 @@ function App() {
     get<OrderSummary>('/api/orders/summary').then(value=>{if(active)setOrderSummary(value);}).catch(()=>{if(active)setOrderSummary(null);});
     return ()=>{active=false;};
   }, [tab,retry,orders]);
+  useEffect(() => {
+    if(tab!=='profile') return;
+    let active=true;
+    setFinanceError('');
+    get<FinanceData>('/api/finance').then(data=>{if(active)setFinance(data);})
+      .catch(e=>{if(active)setFinanceError(e instanceof Error?e.message:'Ошибка загрузки финансов');});
+    return ()=>{active=false;};
+  },[tab,retry]);
   useEffect(() => { tg?.ready(); tg?.expand(); }, []);
   useEffect(() => {
     let active = true;
@@ -276,7 +288,7 @@ function App() {
         {sellerMessage && <div className="notice">{sellerMessage}</div>}
         <button className="primary" disabled={sellerBusy} onClick={saveSellerRate}>{sellerBusy?'Сохранение...':'Сохранить тариф'}</button>
       </div></div>}
-      {tab === 'profile' && <div className="card"><strong>Ваш кабинет</strong><p className="description">Вы вошли через Telegram. Настройки тарифов, создание заказов и платежи будут перенесены сюда на следующих этапах.</p></div>}
+      {tab === 'profile' && <section><div className="sellerDashboard"><h3>Финансы продавца</h3>{financeError && <div className="notice">{financeError}<button onClick={()=>setRetry(n=>n+1)}>Повторить</button></div>}{finance ? <><div className="dashboardGrid"><div><small>В обработке</small><strong>{money(finance.pending)}</strong></div><div><small>На проверке выплаты</small><strong>{money(finance.readyForReview)}</strong></div><div><small>Заблокировано</small><strong>{money(finance.blocked)}</strong></div></div><p>{finance.note}</p></> : !financeError && <p>Загрузка данных...</p>}</div><h3 className="detailSubtitle">История начислений</h3>{finance && finance.operations.length===0 && <div className="empty">Подтверждённых нетестовых платежей пока нет</div>}{finance?.operations.map(op=><article className="card" key={op.id}><div className="cardTop"><div className="grow"><strong>Заказ #{op.id}</strong><small>{op.channel}</small></div><div className="price">{money(op.amount)}</div></div><span className="status">{({OnHold:'Удерживается',AwaitingVerification:'Проверка размещения',ReadyForManualReview:'Ожидает ручной проверки',Blocked:'Заблокировано',Paid:'Выплачено',Refunded:'Возвращено'} as Record<string,string>)[op.payoutStatus]||op.payoutStatus}</span>{op.publishedAt && <p className="description">Опубликовано: {new Date(op.publishedAt.endsWith('Z')?op.publishedAt:op.publishedAt+'Z').toLocaleString('ru-RU')}</p>}</article>)}</section>}
     </main>
     <nav>{tabs.map(({id,label,icon:Icon})=><button key={id} className={tab===id?'active':''} onClick={()=>setTab(id)}><Icon size={21}/><span>{label}</span></button>)}</nav>
   </div>;
