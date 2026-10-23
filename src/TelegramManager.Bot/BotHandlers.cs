@@ -1125,17 +1125,10 @@ public sealed class BotHandlers(Database database, YooKassaClient yooKassa)
                     await bot.SendMessage(origin.Chat.Id,"Не удалось проверить платёж в ЮKassa. Повторите позже.",cancellationToken:ct);
                 }
                 break;
-            case string testPaymentData when testPaymentData.StartsWith("testpay:") && long.TryParse(testPaymentData[8..], out var testPaymentOrderId):
-                if (await database.CompleteTestCheckoutAsync(testPaymentOrderId, actor.Id, ct))
-                {
-                    await database.RecordOrderEventAsync(testPaymentOrderId, actor.Id, "TestPayment", "Без списания денег", ct);
-                    await bot.SendMessage(origin.Chat.Id, $"🧪 Заказ #{testPaymentOrderId}: тестовая оплата подтверждена. Реальные деньги не списаны. Публикация запланирована.", cancellationToken: ct);
-                    var testOrder = await database.GetAdRequestAsync(testPaymentOrderId, ct);
-                    if (testOrder is not null)
-                        await database.EnqueueNotificationToUserAsync(testPaymentOrderId, testOrder.Value.Owner,
-                            $"🧪 Заказ #{testPaymentOrderId} оплачен в тестовом режиме (без денег).", ct);
-                }
-                else await bot.SendMessage(origin.Chat.Id, "Тестовая оплата недоступна: проверьте статус заказа, время публикации и разрешение тестового аккаунта.", cancellationToken: ct);
+            case string legacyTestData when legacyTestData.StartsWith("testpay:"):
+                await bot.SendMessage(origin.Chat.Id,
+                    "Старая тестовая кнопка отключена. Откройте заказ и используйте тестовую оплату через ЮKassa.",
+                    cancellationToken:ct);
                 break;
             case string adData when adData.StartsWith("ad:") && long.TryParse(adData[3..], out var adId):
                 await ShowAdAsync(bot, origin.Chat.Id, actor.Id, adId, ct);
