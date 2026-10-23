@@ -453,13 +453,16 @@ app.MapPost("/api/orders/{orderId:long}/approve", async (long orderId, HttpReque
 
     await using var notify = new MySqlCommand("""
         INSERT INTO notification_outbox (recipient_id,order_id,body)
-        SELECT advertiser_id,id,CONCAT('Заявка #',id,' одобрена владельцем канала. Ожидается оплата.')
+        SELECT advertiser_id,id,CONCAT('Заявка #',id,' одобрена. ',IF(status='Scheduled','Размещение запланировано.','Ожидается оплата.'))
         FROM ad_requests WHERE id=@order
         """, conn, tx);
     notify.Parameters.AddWithValue("@order", orderId);
     await notify.ExecuteNonQueryAsync(ct);
     await tx.CommitAsync(ct);
-    return Results.Ok(new { id = orderId, status = "AwaitingPayment" });
+    await using var statusCmd=new MySqlCommand("SELECT status FROM ad_requests WHERE id=@order",conn);
+    statusCmd.Parameters.AddWithValue("@order",orderId);
+    var currentStatus=Convert.ToString(await statusCmd.ExecuteScalarAsync(ct)) ?? "AwaitingPayment";
+    return Results.Ok(new { id = orderId, status = currentStatus });
 });
 
 app.MapPost("/api/orders/{orderId:long}/reject", async (long orderId, HttpRequest req, MySqlDataSource db, CancellationToken ct) =>
