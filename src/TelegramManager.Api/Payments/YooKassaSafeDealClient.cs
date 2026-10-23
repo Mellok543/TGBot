@@ -16,6 +16,41 @@ public sealed class YooKassaSafeDealClient(HttpClient http, string shopId, strin
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
+    public async Task<YooKassaDeal> CreateDealAsync(long orderId, string idempotenceKey, CancellationToken ct)
+    {
+        if (orderId <= 0 || !Guid.TryParse(idempotenceKey, out _))
+            throw new ArgumentException("An order and persisted UUID key are required.");
+        using var request = new HttpRequestMessage(HttpMethod.Post, "https://api.yookassa.ru/v3/deals");
+        request.Headers.Authorization = new AuthenticationHeaderValue(
+            "Basic", Convert.ToBase64String(Encoding.UTF8.GetBytes($"{shopId}:{secretKey}")));
+        request.Headers.Add("Idempotence-Key", idempotenceKey);
+        request.Content = JsonContent.Create(new {
+            type = "safe_deal",
+            fee_moment = "deal_closed",
+            description = $"Размещение Reklio #{orderId}",
+            metadata = new { order_id = orderId.ToString(CultureInfo.InvariantCulture) }
+        }, options: JsonOptions);
+        using var response = await http.SendAsync(request, ct);
+        response.EnsureSuccessStatusCode();
+        return await response.Content.ReadFromJsonAsync<YooKassaDeal>(JsonOptions, ct)
+            ?? throw new JsonException("Empty deal response");
+    }
+
+    public async Task<YooKassaDeal> GetDealAsync(string dealId, CancellationToken ct)
+    {
+        if (string.IsNullOrEmpty(dealId) || dealId.Length > 100 ||
+            dealId.Any(c => !(char.IsAsciiLetterOrDigit(c) || c == '-')))
+            throw new ArgumentException("Invalid deal ID.");
+        using var request = new HttpRequestMessage(HttpMethod.Get,
+            $"https://api.yookassa.ru/v3/deals/{dealId}");
+        request.Headers.Authorization = new AuthenticationHeaderValue(
+            "Basic", Convert.ToBase64String(Encoding.UTF8.GetBytes($"{shopId}:{secretKey}")));
+        using var response = await http.SendAsync(request, ct);
+        response.EnsureSuccessStatusCode();
+        return await response.Content.ReadFromJsonAsync<YooKassaDeal>(JsonOptions, ct)
+            ?? throw new JsonException("Empty deal response");
+    }
+
     public async Task<YooKassaPayment> CreatePaymentAsync(
         long orderId, string dealId, decimal totalRub, decimal sellerRub,
         string returnUrl, string idempotenceKey, CancellationToken ct)
@@ -91,3 +126,9 @@ public sealed record YooKassaAmount(
 
 public sealed record YooKassaConfirmation(
     [property: JsonPropertyName("confirmation_url")] string? ConfirmationUrl);
+
+public sealed record YooKassaDeal(
+    [property: JsonPropertyName("id")] string Id,
+    [property: JsonPropertyName("status")] string Status,
+    [property: JsonPropertyName("type")] string Type,
+    [property: JsonPropertyName("expires_at")] DateTimeOffset? ExpiresAt);
