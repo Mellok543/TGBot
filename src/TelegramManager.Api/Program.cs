@@ -28,7 +28,7 @@ static long? VerifyTelegram(string? initData, string token)
     if (hash is null || auth is null || user is null || !long.TryParse(auth, out var unix)) return null;
     var age = DateTimeOffset.UtcNow.ToUnixTimeSeconds() - unix;
     if (age < -60 || age > 3600) return null;
-    var check = string.Join("\n", pairs.Where(x => x.Key != "hash" && x.Key != "signature")
+    var check = string.Join("\n", pairs.Where(x => x.Key != "hash")
         .OrderBy(x => x.Key, StringComparer.Ordinal).Select(x => x.Key + "=" + x.Value));
     var secret = HMACSHA256.HashData(Encoding.UTF8.GetBytes("WebAppData"), Encoding.UTF8.GetBytes(token));
     var actual = HMACSHA256.HashData(secret, Encoding.UTF8.GetBytes(check));
