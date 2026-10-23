@@ -133,15 +133,15 @@ app.MapGet("/api/finance", async (HttpRequest req, MySqlDataSource db, Cancellat
         if(operations.Count>=100) continue;
         var commission=decimal.Round(amount*configuredRate/100m,2,MidpointRounding.AwayFromZero);
         operations.Add(new {
-            id=reader.GetInt64(0),channel=reader.GetString(1),amount,commission,net=amount-commission,
+            id=reader.GetInt64(0),channel=reader.GetString(1),amount,commission,net=amount,
             status=reader.GetString(3),payoutStatus=payout,
             publishedAt=reader.IsDBNull(5)?(DateTime?)null:reader.GetDateTime(5),
             eligibleAt=reader.IsDBNull(6)?(DateTime?)null:reader.GetDateTime(6)
         });
     }
     return Results.Ok(new {pending,readyForReview=ready,blocked,paid,refunded,
-        commissionPercent=configuredRate,readyNet=ready-decimal.Round(ready*configuredRate/100m,2,MidpointRounding.AwayFromZero),operations,
-        note="Сводка по всем оплаченным нетестовым заказам; история показывает последние 100. Комиссия является предварительным расчётом, выплаты не инициируются."});
+        commissionPercent=configuredRate,readyNet=ready,operations,
+        note="Сводка по всем оплаченным нетестовым заказам; история показывает последние 100. Комиссия 5% оплачивается покупателем сверх цены продавца. Выплаты не инициируются."});
 });
 app.MapGet("/api/orders/summary", async (HttpRequest req, MySqlDataSource db, CancellationToken ct) =>
 {
@@ -459,6 +459,8 @@ app.MapPost("/api/orders/{orderId:long}/payment", async (long orderId, HttpReque
     var priceValue = await lookup.ExecuteScalarAsync(ct);
     if (priceValue is null) { await tx.RollbackAsync(ct); return Results.Conflict(new { error = "Заказ недоступен для оплаты" }); }
     var price = Convert.ToDecimal(priceValue);
+    var buyerFee = decimal.Round(price*0.05m,2,MidpointRounding.AwayFromZero);
+    var buyerTotal = price+buyerFee;
     if (price < 1m || price > 1000000m) { await tx.RollbackAsync(ct); return Results.BadRequest(new { error = "Некорректная сумма" }); }
 
     await using var existing = new MySqlCommand("""
@@ -498,7 +500,7 @@ app.MapPost("/api/orders/{orderId:long}/payment", async (long orderId, HttpReque
             """, conn, tx);
         insert.Parameters.AddWithValue("@id", orderId);
         insert.Parameters.AddWithValue("@buyer", buyer);
-        insert.Parameters.AddWithValue("@price", price);
+        insert.Parameters.AddWithValue("@price", buyerTotal);
         insert.Parameters.AddWithValue("@key", idempotence);
         await insert.ExecuteNonQueryAsync(ct);
         attemptId = insert.LastInsertedId;
@@ -524,7 +526,7 @@ app.MapPost("/api/orders/{orderId:long}/payment", async (long orderId, HttpReque
         "Basic", Convert.ToBase64String(Encoding.UTF8.GetBytes(shop + ":" + key)));
     request.Headers.Add("Idempotence-Key", idempotence);
     request.Content = System.Net.Http.Json.JsonContent.Create(new {
-        amount = new { value = price.ToString("F2", System.Globalization.CultureInfo.InvariantCulture), currency = "RUB" },
+        amount = new { value = buyerTotal.ToString("F2", System.Globalization.CultureInfo.InvariantCulture), currency = "RUB" },
         capture = true,
         confirmation = new { type = "redirect", return_url = "https://reklio.site/" },
         description = "Тестовая оплата Reklio #" + orderId,
