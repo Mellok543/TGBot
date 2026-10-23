@@ -117,7 +117,7 @@ app.MapGet("/api/finance", async (HttpRequest req, MySqlDataSource db, Cancellat
         """);
     cmd.Parameters.Add(new MySqlParameter("@owner",userId));
     var operations=new List<object>();
-    var configuredRate=decimal.TryParse(Environment.GetEnvironmentVariable("REKLIO_COMMISSION_PERCENT"),System.Globalization.NumberStyles.Number,System.Globalization.CultureInfo.InvariantCulture,out var rate) && rate>=0m && rate<=100m ? rate : 0m;
+    var configuredRate=decimal.TryParse(Environment.GetEnvironmentVariable("REKLIO_COMMISSION_PERCENT"),System.Globalization.NumberStyles.Number,System.Globalization.CultureInfo.InvariantCulture,out var rate) && rate>=0m && rate<=100m ? rate : 5m;
     decimal paid=0m,refunded=0m;
     decimal pending=0m,ready=0m,blocked=0m;
     await using var reader=await cmd.ExecuteReaderAsync(ct);
@@ -174,7 +174,7 @@ app.MapGet("/api/orders", async (HttpRequest req, MySqlDataSource db, Cancellati
     if (Authorized(req) is not long userId) return Results.Unauthorized();
     await using var cmd = db.CreateCommand("""
         SELECT a.id,c.title,a.price_rub,a.status,a.created_at,a.owner_id,
-               a.content_text,a.scheduled_at,r.duration_hours
+               a.content_text,a.scheduled_at,r.duration_hours,a.payment_status,a.payout_status,a.is_test_order
         FROM ad_requests a JOIN channels c ON c.telegram_id=a.channel_id
         LEFT JOIN channel_duration_rates r ON r.id=a.time_rate_id
         WHERE a.advertiser_id=@user OR a.owner_id=@user
@@ -188,7 +188,8 @@ app.MapGet("/api/orders", async (HttpRequest req, MySqlDataSource db, Cancellati
             price = reader.GetDecimal(2), status = reader.GetString(3), createdAt = reader.GetDateTime(4), isOwner = reader.GetInt64(5) == userId,
             text = reader.IsDBNull(6) ? "" : reader.GetString(6),
             scheduledAt = reader.IsDBNull(7) ? (DateTime?)null : reader.GetDateTime(7),
-            durationHours = reader.IsDBNull(8) ? (int?)null : reader.GetInt32(8) });
+            durationHours = reader.IsDBNull(8) ? (int?)null : reader.GetInt32(8),
+            paymentStatus=reader.GetString(9),payoutStatus=reader.GetString(10),isTest=reader.GetBoolean(11) });
     return Results.Ok(orders);
 });
 app.MapGet("/api/my-channels", async (HttpRequest req, MySqlDataSource db, CancellationToken ct) =>
