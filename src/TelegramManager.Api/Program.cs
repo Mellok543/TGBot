@@ -143,6 +143,71 @@ app.MapGet("/api/finance", async (HttpRequest req, MySqlDataSource db, Cancellat
         commissionPercent=configuredRate,readyNet=ready,operations,
         note="Сводка по всем оплаченным нетестовым заказам; история показывает последние 100. Комиссия 5% оплачивается покупателем сверх цены продавца. Выплаты не инициируются."});
 });
+bool IsDisputeAdmin(long userId) =>
+    (Environment.GetEnvironmentVariable("REKLIO_ADMIN_IDS") ?? "")
+        .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+        .Any(part => long.TryParse(part,out var adminId) && adminId==userId);
+
+app.MapGet("/api/admin/disputes", async (HttpRequest req,MySqlDataSource db,CancellationToken ct) =>
+{
+    if(Authorized(req) is not long userId) return Results.Unauthorized();
+    if(!IsDisputeAdmin(userId)) return Results.Forbid();
+    await using var cmd=db.CreateCommand("""
+        SELECT a.id,c.title,a.price_rub,a.content_text,a.dispute_reason,
+               a.disputed_at,a.status,a.dispute_resolution,a.payment_status,
+               a.is_test_order,a.payout_status
+        FROM ad_requests a JOIN channels c ON c.telegram_id=a.channel_id
+        WHERE a.status IN ('Disputed','DisputeResolved')
+        ORDER BY a.disputed_at DESC LIMIT 100
+        """);
+    var result=new List<object>();
+    await using var reader=await cmd.ExecuteReaderAsync(ct);
+    while(await reader.ReadAsync(ct))
+        result.Add(new {id=reader.GetInt64(0),channel=reader.GetString(1),
+          price=reader.GetDecimal(2),text=reader.IsDBNull(3)?"":reader.GetString(3),
+          reason=reader.IsDBNull(4)?"":reader.GetString(4),
+          openedAt=reader.IsDBNull(5)?(DateTime?)null:reader.GetDateTime(5),
+          status=reader.GetString(6),resolution=reader.IsDBNull(7)?null:reader.GetString(7),
+          paymentStatus=reader.GetString(8),isTest=reader.GetBoolean(9),
+          payoutStatus=reader.GetString(10)});
+    return Results.Ok(result);
+});
+app.MapPost("/api/admin/disputes/{orderId:long}/resolve",async(long orderId,HttpRequest req,MySqlDataSource db,CancellationToken ct) =>
+{
+    if(Authorized(req) is not long userId) return Results.Unauthorized();
+    if(!IsDisputeAdmin(userId)) return Results.Forbid();
+    var input=await req.ReadFromJsonAsync<ResolveDisputeInput>(cancellationToken:ct);
+    if(input?.Decision is not ("RefundRecommended" or "PayoutRecommended"))
+        return Results.BadRequest(new {error="Недопустимое решение"});
+    await using var conn=await db.OpenConnectionAsync(ct);
+    await using var tx=await conn.BeginTransactionAsync(ct);
+    await using var cmd=new MySqlCommand("""
+        UPDATE ad_requests SET status='DisputeResolved',payout_status='Blocked',
+          dispute_resolution=@decision,dispute_resolved_at=UTC_TIMESTAMP(),
+          dispute_resolved_by=@admin
+        WHERE id=@id AND status='Disputed' AND payout_status='Blocked'
+        """,conn,tx);
+    cmd.Parameters.AddWithValue("@decision",input.Decision);
+    cmd.Parameters.AddWithValue("@admin",userId);
+    cmd.Parameters.AddWithValue("@id",orderId);
+    if(await cmd.ExecuteNonQueryAsync(ct)!=1){
+        await tx.RollbackAsync(ct);
+        return Results.Conflict(new {error="Спор уже обработан или недоступен"});
+    }
+    await using var notice=new MySqlCommand("""
+        INSERT IGNORE INTO notification_outbox(recipient_id,order_id,body)
+        SELECT advertiser_id,id,CONCAT('Спор по заказу #',id,' рассмотрен. Решение: ',@decision)
+        FROM ad_requests WHERE id=@id
+        UNION ALL
+        SELECT owner_id,id,CONCAT('Спор по заказу #',id,' рассмотрен. Решение: ',@decision)
+        FROM ad_requests WHERE id=@id
+        """,conn,tx);
+    notice.Parameters.AddWithValue("@id",orderId);
+    notice.Parameters.AddWithValue("@decision",input.Decision=="RefundRecommended"?"рекомендован возврат":"рекомендована выплата");
+    await notice.ExecuteNonQueryAsync(ct);
+    await tx.CommitAsync(ct);
+    return Results.Ok(new {status="DisputeResolved",resolution=input.Decision});
+});
 app.MapPost("/api/orders/{orderId:long}/dispute", async (long orderId, HttpRequest req, MySqlDataSource db, CancellationToken ct) =>
 {
     if (Authorized(req) is not long buyer) return Results.Unauthorized();
@@ -827,6 +892,7 @@ app.MapPost("/api/orders/{orderId:long}/payment/check", async (long orderId, Htt
 app.Run();
 
 record CreateOrderInput(long ChannelId, string Text);
+record ResolveDisputeInput(string Decision);
 record OpenDisputeInput(string Reason);
 record RescheduleInput(DateTimeOffset ScheduledAt);
 record ScheduleOrderInput(long RateId, DateTimeOffset ScheduledAt);
