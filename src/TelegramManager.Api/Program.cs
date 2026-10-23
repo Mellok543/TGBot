@@ -138,6 +138,64 @@ app.MapGet("/api/my-channels", async (HttpRequest req, MySqlDataSource db, Cance
     return Results.Ok(channels);
 });
 
+app.MapGet("/api/my-channels/{channelId:long}/rates", async (long channelId, HttpRequest req, MySqlDataSource db, CancellationToken ct) =>
+{
+    if (Authorized(req) is not long userId) return Results.Unauthorized();
+    await using var cmd=db.CreateCommand("""
+        SELECT r.id,r.duration_hours,r.price_rub,r.is_active
+        FROM channel_duration_rates r JOIN channels c ON c.telegram_id=r.channel_id
+        WHERE c.telegram_id=@channel AND c.connected_by=@owner ORDER BY r.duration_hours
+        """);
+    cmd.Parameters.AddWithValue("@channel",channelId);
+    cmd.Parameters.AddWithValue("@owner",userId);
+    var rates=new List<object>();
+    await using var reader=await cmd.ExecuteReaderAsync(ct);
+    while(await reader.ReadAsync(ct))
+        rates.Add(new {id=reader.GetInt64(0),hours=reader.GetInt32(1),price=reader.GetDecimal(2),active=reader.GetBoolean(3)});
+    return Results.Ok(rates);
+});
+app.MapPost("/api/my-channels/{channelId:long}/rates", async (long channelId, UpdateRateInput input, HttpRequest req, MySqlDataSource db, CancellationToken ct) =>
+{
+    if (Authorized(req) is not long userId) return Results.Unauthorized();
+    if(input.Hours<1 || input.Hours>720 || input.Price<1 || input.Price>1000000)
+        return Results.BadRequest(new {error="Укажите длительность 1–720 ч и цену 1–1000000 ₽"});
+    await using var cmd=db.CreateCommand("""
+        INSERT INTO channel_duration_rates(channel_id,duration_hours,price_rub,is_active)
+        SELECT telegram_id,@hours,@price,TRUE FROM channels
+        WHERE telegram_id=@channel AND connected_by=@owner
+        ON DUPLICATE KEY UPDATE price_rub=VALUES(price_rub),is_active=TRUE
+        """);
+    cmd.Parameters.AddWithValue("@channel",channelId);
+    cmd.Parameters.AddWithValue("@owner",userId);
+    cmd.Parameters.AddWithValue("@hours",input.Hours);
+    cmd.Parameters.AddWithValue("@price",input.Price);
+    var changed=await cmd.ExecuteNonQueryAsync(ct);
+    return changed>0 ? Results.Ok(new {saved=true}) : Results.NotFound();
+});
+app.MapPost("/api/my-channels/{channelId:long}/rates/{rateId:long}/toggle", async (long channelId,long rateId,HttpRequest req,MySqlDataSource db,CancellationToken ct) =>
+{
+    if(Authorized(req) is not long userId) return Results.Unauthorized();
+    await using var cmd=db.CreateCommand("""
+        UPDATE channel_duration_rates r JOIN channels c ON c.telegram_id=r.channel_id
+        SET r.is_active=NOT r.is_active
+        WHERE r.id=@rate AND c.telegram_id=@channel AND c.connected_by=@owner
+        """);
+    cmd.Parameters.AddWithValue("@rate",rateId);
+    cmd.Parameters.AddWithValue("@channel",channelId);
+    cmd.Parameters.AddWithValue("@owner",userId);
+    return await cmd.ExecuteNonQueryAsync(ct)>0 ? Results.Ok(new {saved=true}) : Results.NotFound();
+});
+app.MapPost("/api/my-channels/{channelId:long}/listing", async (long channelId,UpdateListingInput input,HttpRequest req,MySqlDataSource db,CancellationToken ct) =>
+{
+    if(Authorized(req) is not long userId) return Results.Unauthorized();
+    await using var cmd=db.CreateCommand("""
+        UPDATE channels SET is_listed=@listed WHERE telegram_id=@channel AND connected_by=@owner
+        """);
+    cmd.Parameters.AddWithValue("@listed",input.Listed);
+    cmd.Parameters.AddWithValue("@channel",channelId);
+    cmd.Parameters.AddWithValue("@owner",userId);
+    return await cmd.ExecuteNonQueryAsync(ct)>0 ? Results.Ok(new {saved=true}) : Results.NotFound();
+});
 app.MapGet("/api/channels/{channelId:long}/rates", async (long channelId, HttpRequest req, MySqlDataSource db, CancellationToken ct) =>
 {
     if (Authorized(req) is null) return Results.Unauthorized();
@@ -494,3 +552,6 @@ app.Run();
 
 record CreateOrderInput(long ChannelId, string Text);
 record ScheduleOrderInput(long RateId, DateTimeOffset ScheduledAt);
+
+record UpdateRateInput(int Hours, decimal Price);
+record UpdateListingInput(bool Listed);
