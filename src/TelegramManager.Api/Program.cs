@@ -83,6 +83,28 @@ app.MapGet("/api/channels", async (HttpRequest req, MySqlDataSource db, Cancella
         });
     return Results.Ok(channels);
 });
+app.MapGet("/api/channels/{channelId:long}/history", async (long channelId, HttpRequest req, MySqlDataSource db, CancellationToken ct) =>
+{
+    if (Authorized(req) is null) return Results.Unauthorized();
+    await using var cmd = db.CreateCommand("""
+        SELECT m.day,m.subscribers,m.posts
+        FROM channel_daily_metrics m
+        JOIN channels c ON c.telegram_id=m.channel_id
+        WHERE m.channel_id=@channel AND c.is_listed=TRUE
+          AND m.day>=UTC_DATE()-INTERVAL 29 DAY
+        ORDER BY m.day
+        """);
+    cmd.Parameters.Add(new MySqlParameter("@channel", channelId));
+    var history = new List<object>();
+    await using var reader = await cmd.ExecuteReaderAsync(ct);
+    while (await reader.ReadAsync(ct))
+        history.Add(new {
+            day = reader.GetDateTime(0).ToString("yyyy-MM-dd"),
+            subscribers = reader.IsDBNull(1) ? (int?)null : reader.GetInt32(1),
+            posts = reader.GetInt32(2)
+        });
+    return Results.Ok(history);
+});
 app.MapGet("/api/orders", async (HttpRequest req, MySqlDataSource db, CancellationToken ct) =>
 {
     if (Authorized(req) is not long userId) return Results.Unauthorized();
