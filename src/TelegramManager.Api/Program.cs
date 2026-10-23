@@ -105,6 +105,37 @@ app.MapGet("/api/channels/{channelId:long}/history", async (long channelId, Http
         });
     return Results.Ok(history);
 });
+app.MapGet("/api/finance", async (HttpRequest req, MySqlDataSource db, CancellationToken ct) =>
+{
+    if (Authorized(req) is not long userId) return Results.Unauthorized();
+    await using var cmd=db.CreateCommand("""
+        SELECT a.id,c.title,a.price_rub,a.status,a.payout_status,a.published_at,
+               a.payout_eligible_at
+        FROM ad_requests a JOIN channels c ON c.telegram_id=a.channel_id
+        WHERE a.owner_id=@owner AND a.payment_status='Paid' AND a.is_test_order=FALSE
+        ORDER BY a.id DESC LIMIT 100
+        """);
+    cmd.Parameters.Add(new MySqlParameter("@owner",userId));
+    var operations=new List<object>();
+    decimal pending=0m,ready=0m,blocked=0m;
+    await using var reader=await cmd.ExecuteReaderAsync(ct);
+    while(await reader.ReadAsync(ct))
+    {
+        var amount=reader.GetDecimal(2);
+        var payout=reader.GetString(4);
+        if(payout=="ReadyForManualReview") ready+=amount;
+        else if(payout=="Blocked") blocked+=amount;
+        else if(payout=="OnHold" || payout=="AwaitingVerification") pending+=amount;
+        operations.Add(new {
+            id=reader.GetInt64(0),channel=reader.GetString(1),amount,
+            status=reader.GetString(3),payoutStatus=payout,
+            publishedAt=reader.IsDBNull(5)?(DateTime?)null:reader.GetDateTime(5),
+            eligibleAt=reader.IsDBNull(6)?(DateTime?)null:reader.GetDateTime(6)
+        });
+    }
+    return Results.Ok(new {pending,readyForReview=ready,blocked,operations,
+        note="Суммы по последним 100 оплаченных нетестовых заказов; не являются доступным к выводу балансом."});
+});
 app.MapGet("/api/orders/summary", async (HttpRequest req, MySqlDataSource db, CancellationToken ct) =>
 {
     if (Authorized(req) is not long userId) return Results.Unauthorized();
