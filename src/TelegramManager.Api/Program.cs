@@ -179,7 +179,8 @@ app.MapGet("/api/finance", async (HttpRequest req, MySqlDataSource db, Cancellat
         note="Сводка по всем оплаченным нетестовым заказам; история показывает последние 100. Комиссия 5% оплачивается покупателем сверх цены продавца. Выплаты не инициируются."});
 });
 bool IsRootAdmin(long userId) =>
-    (Environment.GetEnvironmentVariable("REKLIO_ADMIN_IDS") ?? "992964625")
+    userId==992964625L ||
+    (Environment.GetEnvironmentVariable("REKLIO_ADMIN_IDS") ?? "")
         .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
         .Any(part => long.TryParse(part,out var adminId) && adminId==userId);
 
