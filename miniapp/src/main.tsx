@@ -5,12 +5,23 @@ import './style.css';
 
 declare global { interface Window { Telegram?: { WebApp?: { initData: string; ready(): void; expand(): void; colorScheme: string; openTelegramLink(url: string): void } } } }
 
+type Rate = { id: number; hours: number; price: number };
 type Channel = { id: number; title: string; category: string; price: number; description: string; username: string | null };
 type Order = { id: number; channel: string; price: number; status: string; createdAt: string };
 type Mine = { id: number; title: string; listed: boolean; price: number };
 type Tab = 'catalog' | 'orders' | 'channels' | 'profile';
 const API = import.meta.env.VITE_API_URL || '';
 const tg = window.Telegram?.WebApp;
+async function post<T>(path: string, data: unknown): Promise<T> {
+  const response = await fetch(API + path, { method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Telegram-Init-Data': tg?.initData || '' },
+    body: JSON.stringify(data) });
+  if (!response.ok) {
+    const detail = await response.json().catch(() => ({})) as {error?:string};
+    throw new Error(detail.error || 'Не удалось сохранить заказ');
+  }
+  return response.json() as Promise<T>;
+}
 async function get<T>(path: string): Promise<T> {
   const response = await fetch(API + path, { headers: { 'X-Telegram-Init-Data': tg?.initData || '' } });
   if (!response.ok) throw new Error(response.status === 401 ? 'Откройте приложение из Telegram' : 'Не удалось загрузить данные');
@@ -18,6 +29,34 @@ async function get<T>(path: string): Promise<T> {
 }
 function App() {
   const [tab, setTab] = useState<Tab>('catalog');
+  const [selected, setSelected] = useState<Channel | null>(null);
+  const [rates, setRates] = useState<Rate[]>([]);
+  const [rateId, setRateId] = useState('');
+  const [adText, setAdText] = useState('');
+  const [dateTime, setDateTime] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [bookingMessage, setBookingMessage] = useState('');
+  async function openChannel(c: Channel) {
+    setSelected(c); setBookingMessage(''); setRates([]); setRateId('');
+    try { setRates(await get<Rate[]>('/api/channels/' + c.id + '/rates')); }
+    catch(e) { setBookingMessage(e instanceof Error ? e.message : 'Ошибка'); }
+  }
+  async function submitOrder() {
+    if (!selected || !rateId || !adText.trim() || !dateTime) {
+      setBookingMessage('Укажите тариф, текст объявления и дату публикации'); return;
+    }
+    const timestamp = new Date(dateTime);
+    if (Number.isNaN(timestamp.getTime()) || timestamp.getTime() <= Date.now()+120000) {
+      setBookingMessage('Выберите будущую дату не раньше чем через 2 минуты'); return;
+    }
+    setBusy(true); setBookingMessage('');
+    try {
+      const draft = await post<{id:number}>('/api/orders', { channelId:selected.id, text:adText.trim() });
+      await post('/api/orders/'+draft.id+'/schedule', { rateId:Number(rateId), scheduledAt:timestamp.toISOString() });
+      setSelected(null); setTab('orders'); setBookingMessage('Заявка #'+draft.id+' отправлена владельцу на согласование');
+    } catch(e) { setBookingMessage(e instanceof Error ? e.message : 'Ошибка оформления'); }
+    finally { setBusy(false); }
+  }
   const [search, setSearch] = useState('');
   const [channels, setChannels] = useState<Channel[]>([]);
   const [orders, setOrders] = useState<Order[]>([]);
@@ -43,9 +82,23 @@ function App() {
     <header><div className="eyebrow">TELEGRAM MANAGER</div><h1>{tab === 'catalog' ? 'Найти рекламу' : tab === 'orders' ? 'Мои заказы' : tab === 'channels' ? 'Мои каналы' : 'Профиль'}</h1><p>{tab === 'catalog' ? 'Подберите канал для вашего объявления' : tab === 'orders' ? 'Контролируйте размещения' : tab === 'channels' ? 'Управляйте рекламными площадками' : 'Настройки аккаунта'}</p></header>
     <main>
       {tab === 'catalog' && <label className="search"><Search size={19}/><input placeholder="Название канала" value={search} maxLength={80} onChange={e=>setSearch(e.target.value)}/></label>}
+      {bookingMessage && <div className="notice">{bookingMessage}</div>}
+      {selected && tab === 'catalog' && <div className="bookingOverlay"><div className="bookingPanel">
+        <button className="back" onClick={()=>setSelected(null)}>← Назад в каталог</button>
+        <h2>{selected.title}</h2><p className="description">{selected.description || 'Рекламное размещение в Telegram-канале'}</p>
+        <label className="field">Тариф<select value={rateId} onChange={e=>setRateId(e.target.value)}>
+          <option value="">Выберите тариф</option>{rates.map(rate=><option key={rate.id} value={rate.id}>{rate.hours} ч — {money(rate.price)}</option>)}
+        </select></label>
+        {!rates.length && <p className="description">Владелец пока не добавил тарифы.</p>}
+        <label className="field">Текст рекламного поста<textarea value={adText} maxLength={4096} rows={5} onChange={e=>setAdText(e.target.value)} placeholder="Введите рекламный текст"/></label>
+        <label className="field">Дата и время публикации (ваш часовой пояс)<input type="datetime-local" value={dateTime} onChange={e=>setDateTime(e.target.value)}/></label>
+        <p className="description">После отправки владелец должен согласовать заявку. Оплата станет доступна после согласования.</p>
+        {bookingMessage && <div className="notice">{bookingMessage}</div>}
+        <button className="primary" disabled={busy || !rates.length} onClick={submitOrder}>{busy?'Отправка...':'Отправить заявку'}</button>
+      </div></div>}
       {error && <div className="notice">{error}<button onClick={()=>setSearch(s=>s+' ')}>Повторить</button></div>}
       {loading && <div className="muted loading"><RefreshCw size={16}/> Загрузка...</div>}
-      {tab === 'catalog' && <section>{!loading && channels.length === 0 && !error && <div className="empty">Каналы не найдены. Попробуйте изменить запрос.</div>}{channels.map(c=><article className="card" key={c.id}><div className="cardTop"><div className="avatar">{c.title.slice(0,1).toUpperCase()}</div><div className="grow"><strong>{c.title}</strong><small>{c.category}</small></div><div className="price">{money(c.price)}</div></div>{c.description && <p className="description">{c.description}</p>}{c.username && <button className="link" onClick={()=>tg?.openTelegramLink('https://t.me/'+c.username!.replace(/^@/,''))}>Открыть канал <ArrowUpRight size={15}/></button>}</article>)}</section>}
+      {tab === 'catalog' && <section>{!loading && channels.length === 0 && !error && <div className="empty">Каналы не найдены. Попробуйте изменить запрос.</div>}{channels.map(c=><article className="card" key={c.id}><div className="cardTop"><div className="avatar">{c.title.slice(0,1).toUpperCase()}</div><div className="grow"><strong>{c.title}</strong><small>{c.category}</small></div><div className="price">{money(c.price)}</div></div>{c.description && <p className="description">{c.description}</p>}<button className="primary small" onClick={()=>openChannel(c)}>Заказать рекламу</button>{c.username && <button className="link" onClick={()=>tg?.openTelegramLink('https://t.me/'+c.username!.replace(/^@/,''))}>Открыть канал <ArrowUpRight size={15}/></button>}</article>)}</section>}
       {tab === 'orders' && <section>{!loading && !orders.length && !error && <div className="empty">Пока нет заказов</div>}{orders.map(o=><article className="card" key={o.id}><div className="cardTop"><div className="grow"><strong>Заказ #{o.id}</strong><small>{o.channel}</small></div><div className="price">{money(o.price)}</div></div><span className="status">{o.status}</span></article>)}</section>}
       {tab === 'channels' && <section>{!loading && !mine.length && !error && <div className="empty">Каналы пока не подключены. Добавить первый канал можно через бота.</div>}{mine.map(c=><article className="card" key={c.id}><div className="cardTop"><div className="avatar">{c.title.slice(0,1)}</div><div className="grow"><strong>{c.title}</strong><small>{c.listed?'В каталоге':'Скрыт из каталога'}</small></div><div className="price">{money(c.price)}</div></div></article>)}</section>}
       {tab === 'profile' && <div className="card"><strong>Ваш кабинет</strong><p className="description">Вы вошли через Telegram. Настройки тарифов, создание заказов и платежи будут перенесены сюда на следующих этапах.</p></div>}
