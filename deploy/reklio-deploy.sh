@@ -6,6 +6,7 @@ BRANCH=feature/miniapp-typescript-foundation
 API_DIR=/opt/reklio/api
 WEB_DIR=/var/www/reklio/app
 HEALTH_URL=https://api.reklio.site/api/health
+WEB_URL=https://reklio.site
 
 if [[ "$(id -u)" -ne 0 ]]; then
   echo "This script must be run via sudo." >&2
@@ -102,6 +103,22 @@ if ! wait_for_api; then
   echo "ERROR: API did not become ready." >&2
   exit 1
 fi
+
+# Validate that nginx serves real JS/CSS assets, not SPA HTML fallbacks.
+# A 200 response alone is insufficient: a wrong document root can serve index.html.
+for extension in js css; do
+  asset="$(find "$WEB_DIR/assets" -maxdepth 1 -type f -name "*.$extension" -print -quit)"
+  if [[ -z "$asset" ]]; then
+    echo "ERROR: Missing $extension build asset" >&2
+    exit 1
+  fi
+  asset_name="${asset##*/}"
+  response_type="$(curl --fail --silent --show-error --max-time 12 -o /dev/null -w '%{content_type}' "$WEB_URL/assets/$asset_name")"
+  case "$extension:$response_type" in
+    js:*javascript*|css:text/css*) echo "Public $extension asset OK ($response_type)" ;;
+    *) echo "ERROR: Public $extension asset served as $response_type; check nginx root /var/www/reklio/app" >&2; exit 1 ;;
+  esac
+done
 
 ROLLBACK_NEEDED=0
 echo "Reklio deployed successfully: $(git -C "$SOURCE" rev-parse --short HEAD)"
