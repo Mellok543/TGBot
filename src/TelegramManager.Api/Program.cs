@@ -105,6 +105,32 @@ app.MapGet("/api/channels/{channelId:long}/history", async (long channelId, Http
         });
     return Results.Ok(history);
 });
+app.MapGet("/api/orders/summary", async (HttpRequest req, MySqlDataSource db, CancellationToken ct) =>
+{
+    if (Authorized(req) is not long userId) return Results.Unauthorized();
+    await using var cmd = db.CreateCommand("""
+        SELECT
+          COALESCE(SUM(CASE WHEN owner_id=@user AND status='Pending' THEN 1 ELSE 0 END),0),
+          COALESCE(SUM(CASE WHEN owner_id=@user AND status IN ('Published','Deleted') THEN 1 ELSE 0 END),0),
+          COALESCE(SUM(CASE WHEN advertiser_id=@user AND status IN ('Published','Deleted') THEN 1 ELSE 0 END),0),
+          COALESCE(SUM(CASE WHEN owner_id=@user AND payment_status='Paid' AND is_test_order=FALSE THEN price_rub ELSE 0 END),0),
+          COALESCE(SUM(CASE WHEN advertiser_id=@user AND payment_status='Paid' AND is_test_order=FALSE THEN price_rub ELSE 0 END),0),
+          COALESCE(SUM(CASE WHEN owner_id=@user AND status IN ('Scheduled','Publishing') THEN 1 ELSE 0 END),0)
+        FROM ad_requests
+        WHERE owner_id=@user OR advertiser_id=@user
+        """);
+    cmd.Parameters.Add(new MySqlParameter("@user",userId));
+    await using var reader=await cmd.ExecuteReaderAsync(ct);
+    if(!await reader.ReadAsync(ct)) return Results.Ok(new {incomingPending=0,completedSales=0,completedPurchases=0,salesVolume=0m,purchaseVolume=0m,upcomingSales=0});
+    return Results.Ok(new {
+        incomingPending=Convert.ToInt32(reader.GetValue(0)),
+        completedSales=Convert.ToInt32(reader.GetValue(1)),
+        completedPurchases=Convert.ToInt32(reader.GetValue(2)),
+        salesVolume=reader.GetDecimal(3),
+        purchaseVolume=reader.GetDecimal(4),
+        upcomingSales=Convert.ToInt32(reader.GetValue(5))
+    });
+});
 app.MapGet("/api/orders", async (HttpRequest req, MySqlDataSource db, CancellationToken ct) =>
 {
     if (Authorized(req) is not long userId) return Results.Unauthorized();
