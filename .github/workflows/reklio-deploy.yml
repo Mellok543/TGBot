@@ -8,6 +8,11 @@ on:
         type: boolean
         required: false
         default: false
+      apply_publications_migration:
+        description: 'Back up Reklio database and apply publications migration (no publishing enabled)'
+        type: boolean
+        required: false
+        default: false
   push:
     branches:
       - feature/miniapp-typescript-foundation
@@ -21,7 +26,7 @@ concurrency:
 
 jobs:
   verify:
-    if: ${{ github.event_name != 'workflow_dispatch' || !inputs.diagnostics_only }}
+    if: ${{ github.event_name != 'workflow_dispatch' || !inputs.diagnostics_only && !inputs.apply_publications_migration }}
     name: Build and validate
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -53,7 +58,7 @@ jobs:
           echo "Database migrations require separate review and are NOT applied automatically."
   deploy:
     needs: verify
-    if: github.ref == 'refs/heads/feature/miniapp-typescript-foundation' && (github.event_name != 'workflow_dispatch' || !inputs.diagnostics_only)
+    if: github.ref == 'refs/heads/feature/miniapp-typescript-foundation' && (github.event_name != 'workflow_dispatch' || !inputs.diagnostics_only && !inputs.apply_publications_migration)
     runs-on: ubuntu-latest
     timeout-minutes: 15
     environment: production
@@ -98,7 +103,7 @@ jobs:
 
   diagnostics:
     name: Read-only VPS diagnostics
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.diagnostics_only }}
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.diagnostics_only && !inputs.apply_publications_migration }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     environment: production
@@ -162,5 +167,58 @@ jobs:
           echo 'MariaDB authentication OK'
           echo '=== REKLIO DATABASE TABLES ==='
           mariadb --defaults-extra-file="$HOME/.my.cnf" --batch --skip-column-names \
-            -e "SELECT TABLE_SCHEMA, TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA NOT IN ('mysql','information_schema','performance_schema','sys') AND TABLE_NAME IN ('ad_requests','notification_outbox','publications') ORDER BY TABLE_SCHEMA,TABLE_NAME;"
+            -e "SELECT TABLE_SCHEMA, TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA NOT IN ('mysql','information_schema','performance_schema','sys') AND TABLE_NAME IN ('ad_requests','notification_outbox','reklio_publications','reklio_payment_attempts','reklio_payment_events') ORDER BY TABLE_SCHEMA,TABLE_NAME;"
+          REMOTE
+
+  migrate_publications:
+    name: Back up database and apply publications migration
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.apply_publications_migration && !inputs.diagnostics_only }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: production
+    steps:
+      - name: Configure SSH
+        env:
+          DEPLOY_KEY_B64: ${{ secrets.REKLIO_DEPLOY_SSH_KEY_B64 }}
+          KNOWN_HOSTS: ${{ secrets.REKLIO_SSH_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          test -n "$DEPLOY_KEY_B64" && test -n "$KNOWN_HOSTS"
+          umask 077
+          mkdir -p ~/.ssh
+          printf '%s' "$DEPLOY_KEY_B64" | base64 --decode > ~/.ssh/id_ed25519
+          ssh-keygen -y -f ~/.ssh/id_ed25519 > /dev/null
+          printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/id_ed25519 ~/.ssh/known_hosts
+      - name: Backup and migrate
+        env:
+          DEPLOY_HOST: ${{ secrets.REKLIO_DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.REKLIO_DEPLOY_USER }}
+          DEPLOY_PORT: ${{ secrets.REKLIO_DEPLOY_PORT }}
+        run: |
+          set -euo pipefail
+          test -n "$DEPLOY_HOST" && test -n "$DEPLOY_USER"
+          PORT="${DEPLOY_PORT:-22}"
+          ssh -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=15 \
+            -p "$PORT" "$DEPLOY_USER@$DEPLOY_HOST" 'bash -s' <<'REMOTE'
+          set -euo pipefail
+          DB=s2_telegram_manager
+          MIGRATION=/opt/reklio/source/deploy/migrations/002_reklio_publications.sql
+          test -r "$HOME/.my.cnf"
+          test -r "$MIGRATION"
+          grep -q 'CREATE TABLE IF NOT EXISTS reklio_publications' "$MIGRATION"
+          mkdir -p "$HOME/reklio-db-backups"
+          chmod 700 "$HOME/reklio-db-backups"
+          BACKUP="$HOME/reklio-db-backups/${DB}-before-publications-$(date -u +%Y%m%dT%H%M%SZ).sql"
+          umask 077
+          echo 'Creating database backup...'
+          mariadb-dump --defaults-extra-file="$HOME/.my.cnf" --single-transaction --routines --triggers --events "$DB" > "$BACKUP"
+          test -s "$BACKUP"
+          echo "Backup created: $BACKUP"
+          echo 'Applying publications migration...'
+          mariadb --defaults-extra-file="$HOME/.my.cnf" "$DB" < "$MIGRATION"
+          echo 'Checking publications table...'
+          mariadb --defaults-extra-file="$HOME/.my.cnf" --batch --skip-column-names \
+            -e "SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA='$DB' AND TABLE_NAME='reklio_publications';" | grep -qx '1'
+          echo 'Publications table exists. Publishing remains disabled.'
           REMOTE
