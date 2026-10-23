@@ -12,8 +12,9 @@ type Mine = { id: number; title: string; listed: boolean; price: number };
 type Tab = 'catalog' | 'orders' | 'channels' | 'profile';
 const API = import.meta.env.VITE_API_URL || '';
 const tg = window.Telegram?.WebApp;
+const REQUEST_TIMEOUT_MS = 12000;
 async function post<T>(path: string, data: unknown): Promise<T> {
-  const response = await fetch(API + path, { method: 'POST',
+  const response = await fetch(API + path, { signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS), method: 'POST',
     headers: { 'Content-Type': 'application/json', 'X-Telegram-Init-Data': tg?.initData || '' },
     body: JSON.stringify(data) });
   if (!response.ok) {
@@ -23,7 +24,7 @@ async function post<T>(path: string, data: unknown): Promise<T> {
   return response.json() as Promise<T>;
 }
 async function get<T>(path: string): Promise<T> {
-  const response = await fetch(API + path, { headers: { 'X-Telegram-Init-Data': tg?.initData || '' } });
+  const response = await fetch(API + path, { signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS), headers: { 'X-Telegram-Init-Data': tg?.initData || '' } });
   if (!response.ok) throw new Error(response.status === 401 ? 'Откройте приложение из Telegram' : 'Не удалось загрузить данные');
   return response.json() as Promise<T>;
 }
@@ -104,6 +105,7 @@ function App() {
   const [mine, setMine] = useState<Mine[]>([]);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const [retry, setRetry] = useState(0);
   useEffect(() => { tg?.ready(); tg?.expand(); }, []);
   useEffect(() => {
     let active = true;
@@ -112,11 +114,11 @@ function App() {
     const timer = setTimeout(() => {
       get<Channel[] | Order[] | Mine[] | {id:number}>(path)
         .then(data => { if (!active) return; if (tab === 'catalog') setChannels(data as Channel[]); if (tab === 'orders') setOrders(data as Order[]); if (tab === 'channels') setMine(data as Mine[]); })
-        .catch(e => { if (active) setError(e instanceof Error ? e.message : 'Ошибка'); })
+        .catch(e => { if (active) setError(e instanceof Error && e.name === 'TimeoutError' ? 'Сервер долго не отвечает. Попробуйте снова.' : e instanceof Error ? e.message : 'Ошибка'); })
         .finally(() => { if (active) setLoading(false); });
     }, tab === 'catalog' ? 250 : 0);
     return () => { active = false; clearTimeout(timer); };
-  }, [tab, search]);
+  }, [tab, search, retry]);
   const money = (n: number) => new Intl.NumberFormat('ru-RU', { style: 'currency', currency: 'RUB', maximumFractionDigits: 0 }).format(n);
   const tabs: {id:Tab;label:string;icon:typeof Search}[] = [ {id:'catalog',label:'Каталог',icon:Search}, {id:'orders',label:'Заказы',icon:ClipboardList}, {id:'channels',label:'Каналы',icon:Megaphone}, {id:'profile',label:'Профиль',icon:UserRound} ];
   return <div className="app">
@@ -138,7 +140,7 @@ function App() {
         {bookingMessage && <div className="notice">{bookingMessage}</div>}
         <button className="primary" disabled={busy || !rates.length} onClick={submitOrder}>{busy?'Отправка...':'Отправить заявку'}</button>
       </div></div>}
-      {error && <div className="notice">{error}<button onClick={()=>setSearch(s=>s+' ')}>Повторить</button></div>}
+      {error && <div className="notice">{error}<button onClick={()=>setRetry(n=>n+1)}>Повторить</button></div>}
       {loading && <div className="muted loading"><RefreshCw size={16}/> Загрузка...</div>}
       {tab === 'catalog' && <section>{!loading && channels.length === 0 && !error && <div className="empty">Каналы не найдены. Попробуйте изменить запрос.</div>}{channels.map(c=><article className="card" key={c.id}><div className="cardTop"><div className="avatar">{c.title.slice(0,1).toUpperCase()}</div><div className="grow"><strong>{c.title}</strong><small>{c.category}</small></div><div className="price">{money(c.price)}</div></div>{c.description && <p className="description">{c.description}</p>}<button className="primary small" onClick={()=>openChannel(c)}>Заказать рекламу</button>{c.username && <button className="link" onClick={()=>tg?.openTelegramLink('https://t.me/'+c.username!.replace(/^@/,''))}>Открыть канал <ArrowUpRight size={15}/></button>}</article>)}</section>}
       {tab === 'orders' && <section>{orderMessage && <div className="notice">{orderMessage}</div>}{!loading && !orders.length && !error && <div className="empty">Пока нет заказов</div>}{orders.map(o=><article className="card" key={o.id}><div className="cardTop"><div className="grow"><strong>Заказ #{o.id}</strong><small>{o.channel} · {o.isOwner ? 'Входящая заявка' : 'Моя заявка'}</small></div><div className="price">{money(o.price)}</div></div><span className="status">{({Draft:'Черновик',Pending:'Ожидает согласования',AwaitingPayment:'Ожидает оплаты',Rejected:'Отклонена',Scheduled:'Запланирована',Publishing:'Публикуется',Published:'Опубликована'} as Record<string,string>)[o.status] || o.status}</span>{!o.isOwner && o.status === 'AwaitingPayment' && <div className="orderActions"><button className="primary small" disabled={processingOrder !== null} onClick={()=>payOrder(o)}>Оплатить (тест)</button><button className="secondary small" disabled={processingOrder !== null} onClick={()=>checkPayment(o)}>Проверить оплату</button></div>}{o.isOwner && o.status === 'Pending' && <div className="orderActions"><button className="primary small" disabled={processingOrder !== null} onClick={()=>decideOrder(o,'approve')}>{processingOrder === o.id ? 'Обработка...' : 'Одобрить'}</button><button className="secondary small" disabled={processingOrder !== null} onClick={()=>decideOrder(o,'reject')}>Отклонить</button></div>}</article>)}</section>}
