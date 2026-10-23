@@ -587,6 +587,84 @@ app.MapPost("/api/orders/{orderId:long}/payment", async (long orderId, HttpReque
     return Results.Ok(new { confirmationUrl = url });
 });
 
+app.MapPost("/api/payments/yookassa/notification", async (HttpRequest req, MySqlDataSource db, IHttpClientFactory clients, CancellationToken ct) =>
+{
+    if (Environment.GetEnvironmentVariable("YOOKASSA_MODE") != "test")
+        return Results.StatusCode(503);
+    var shop=Environment.GetEnvironmentVariable("YOOKASSA_SHOP_ID");
+    var key=Environment.GetEnvironmentVariable("YOOKASSA_SECRET_KEY");
+    if (string.IsNullOrWhiteSpace(shop) || string.IsNullOrWhiteSpace(key))
+        return Results.StatusCode(503);
+
+    // Webhook JSON is untrusted. Verify its payment ID with YooKassa before changing an order.
+    System.Text.Json.JsonDocument notification;
+    try { notification=await System.Text.Json.JsonDocument.ParseAsync(req.Body, cancellationToken:ct); }
+    catch (System.Text.Json.JsonException) { return Results.BadRequest(); }
+    using (notification)
+    {
+        var root=notification.RootElement;
+        if (!root.TryGetProperty("type",out var type) || type.GetString()!="notification" ||
+            !root.TryGetProperty("event",out var ev) || ev.GetString()!="payment.succeeded" ||
+            !root.TryGetProperty("object",out var obj) ||
+            !obj.TryGetProperty("id",out var paymentIdJson))
+            return Results.Ok(new {ignored=true});
+        var paymentId=paymentIdJson.GetString();
+        if (string.IsNullOrEmpty(paymentId) || paymentId.Length>100)
+            return Results.BadRequest();
+
+        await using var conn=await db.OpenConnectionAsync(ct);
+        await using var lookup=new MySqlCommand("""
+            SELECT p.id,p.order_id,p.amount_rub
+            FROM reklio_payment_attempts p
+            WHERE p.provider_payment_id=@payment AND p.mode='test' LIMIT 1
+            """,conn);
+        lookup.Parameters.AddWithValue("@payment",paymentId);
+        long attemptId,orderId;decimal expected;
+        await using(var reader=await lookup.ExecuteReaderAsync(ct))
+        {
+            if(!await reader.ReadAsync(ct)) return Results.Ok(new {ignored=true});
+            attemptId=reader.GetInt64(0);orderId=reader.GetInt64(1);expected=reader.GetDecimal(2);
+        }
+        var client=new TelegramManager.Api.Payments.YooKassaSafeDealClient(clients.CreateClient(),shop,key);
+        var payment=await client.GetPaymentAsync(paymentId,ct);
+        if(payment.Id!=paymentId || payment.Status!="succeeded" || !payment.Paid ||
+            payment.Metadata?.GetValueOrDefault("order_id")!=orderId.ToString() ||
+            payment.Amount.Currency!="RUB" ||
+            !decimal.TryParse(payment.Amount.Value,System.Globalization.NumberStyles.Number,
+                System.Globalization.CultureInfo.InvariantCulture,out var actual) || actual!=expected)
+            return Results.Ok(new {ignored=true});
+        await using var tx=await conn.BeginTransactionAsync(ct);
+        await using var update=new MySqlCommand("""
+            UPDATE ad_requests SET status='Scheduled',paid_confirmed=TRUE,
+              payment_status='TestPaid',is_test_order=TRUE,payout_status='NotEligible'
+            WHERE id=@order AND status='AwaitingPayment'
+            """,conn,tx);
+        update.Parameters.AddWithValue("@order",orderId);
+        var transitioned=await update.ExecuteNonQueryAsync(ct);
+        if(transitioned==1)
+        {
+            await using var notice=new MySqlCommand("""
+                INSERT IGNORE INTO notification_outbox(recipient_id,order_id,body)
+                SELECT advertiser_id,id,CONCAT('Тестовая оплата заказа #',id,' подтверждена. Реклама запланирована.')
+                  FROM ad_requests WHERE id=@order
+                UNION ALL
+                SELECT owner_id,id,CONCAT('Тестовый заказ #',id,' оплачен. Ожидается публикация.')
+                  FROM ad_requests WHERE id=@order
+                """,conn,tx);
+            notice.Parameters.AddWithValue("@order",orderId);
+            await notice.ExecuteNonQueryAsync(ct);
+        }
+        await using var mark=new MySqlCommand("""
+            UPDATE reklio_payment_attempts SET status='Succeeded'
+            WHERE id=@attempt AND status IN ('Created','Pending','Succeeded')
+            """,conn,tx);
+        mark.Parameters.AddWithValue("@attempt",attemptId);
+        await mark.ExecuteNonQueryAsync(ct);
+        await tx.CommitAsync(ct);
+        return Results.Ok(new {received=true});
+    }
+});
+
 app.MapPost("/api/orders/{orderId:long}/payment/check", async (long orderId, HttpRequest req, MySqlDataSource db, IHttpClientFactory clients, CancellationToken ct) =>
 {
     if (Authorized(req) is not long buyer) return Results.Unauthorized();
@@ -621,7 +699,8 @@ app.MapPost("/api/orders/{orderId:long}/payment/check", async (long orderId, Htt
     {
         await using var tx = await conn.BeginTransactionAsync(ct);
         await using var update = new MySqlCommand("""
-            UPDATE ad_requests SET status='Scheduled'
+            UPDATE ad_requests SET status='Scheduled', paid_confirmed=TRUE,
+                payment_status='TestPaid', is_test_order=TRUE, payout_status='NotEligible'
             WHERE id=@id AND advertiser_id=@buyer AND status='AwaitingPayment'
             """, conn, tx);
         update.Parameters.AddWithValue("@id", orderId);
