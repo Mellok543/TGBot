@@ -77,7 +77,7 @@ app.MapGet("/api/orders", async (HttpRequest req, MySqlDataSource db, Cancellati
 {
     if (Authorized(req) is not long userId) return Results.Unauthorized();
     await using var cmd = db.CreateCommand("""
-        SELECT a.id,c.title,a.price_rub,a.status,a.created_at
+        SELECT a.id,c.title,a.price_rub,a.status,a.created_at,a.owner_id,a.advertiser_id,a.content_text,a.scheduled_at
         FROM ad_requests a JOIN channels c ON c.telegram_id=a.channel_id
         WHERE a.advertiser_id=@user OR a.owner_id=@user
         ORDER BY a.created_at DESC LIMIT 50
@@ -87,7 +87,9 @@ app.MapGet("/api/orders", async (HttpRequest req, MySqlDataSource db, Cancellati
     await using var reader = await cmd.ExecuteReaderAsync(ct);
     while (await reader.ReadAsync(ct))
         orders.Add(new { id = reader.GetInt64(0), channel = reader.GetString(1),
-            price = reader.GetDecimal(2), status = reader.GetString(3), createdAt = reader.GetDateTime(4) });
+            price = reader.GetDecimal(2), status = reader.GetString(3), createdAt = reader.GetDateTime(4),
+            isOwner = reader.GetInt64(5) == userId, text = reader.IsDBNull(7) ? "" : reader.GetString(7),
+            scheduledAt = reader.IsDBNull(8) ? (DateTime?)null : reader.GetDateTime(8) });
     return Results.Ok(orders);
 });
 app.MapGet("/api/my-channels", async (HttpRequest req, MySqlDataSource db, CancellationToken ct) =>
@@ -209,7 +211,39 @@ app.MapPost("/api/orders/{orderId:long}/schedule", async (long orderId, HttpRequ
     try { await notice.ExecuteNonQueryAsync(ct); } catch (MySqlException) { }
     return Results.Ok(new { id = orderId, status = "Pending" });
 });
+app.MapPost("/api/orders/{orderId:long}/decision", async (long orderId, HttpRequest req, MySqlDataSource db, CancellationToken ct) =>
+{
+    if (Authorized(req) is not long userId) return Results.Unauthorized();
+    var input = await req.ReadFromJsonAsync<OrderDecisionInput>(cancellationToken: ct);
+    if (input is null || input.Decision is not ("Approved" or "Rejected"))
+        return Results.BadRequest(new { error = "Укажите Approved или Rejected" });
+    await using var conn = await db.OpenConnectionAsync(ct);
+    await using var transaction = await conn.BeginTransactionAsync(ct);
+    await using var cmd = new MySqlCommand("""
+        UPDATE ad_requests
+        SET status=CASE WHEN @decision='Approved' THEN 'AwaitingPayment' ELSE 'Rejected' END
+        WHERE id=@order AND owner_id=@owner AND status='Pending'
+        """, conn, transaction);
+    cmd.Parameters.Add(new MySqlParameter("@decision", input.Decision));
+    cmd.Parameters.Add(new MySqlParameter("@order", orderId));
+    cmd.Parameters.Add(new MySqlParameter("@owner", userId));
+    if (await cmd.ExecuteNonQueryAsync(ct) != 1)
+        return Results.Conflict(new { error = "Заявка уже обработана или недоступна владельцу" });
+    await using var notice = new MySqlCommand("""
+        INSERT INTO notification_outbox (recipient_id,order_id,body)
+        SELECT advertiser_id,id,CASE WHEN @decision='Approved'
+          THEN CONCAT('Заявка #',id,' одобрена. Откройте бота для оплаты.')
+          ELSE CONCAT('Заявка #',id,' отклонена владельцем.') END
+        FROM ad_requests WHERE id=@order
+        """, conn, transaction);
+    notice.Parameters.Add(new MySqlParameter("@decision", input.Decision));
+    notice.Parameters.Add(new MySqlParameter("@order", orderId));
+    await notice.ExecuteNonQueryAsync(ct);
+    await transaction.CommitAsync(ct);
+    return Results.Ok(new { id = orderId, status = input.Decision == "Approved" ? "AwaitingPayment" : "Rejected" });
+});
 app.Run();
 
 record CreateOrderInput(long ChannelId, string Text);
 record ScheduleOrderInput(long RateId, DateTimeOffset ScheduledAt);
+record OrderDecisionInput(string Decision);
