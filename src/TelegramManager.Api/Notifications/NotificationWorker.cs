@@ -32,8 +32,8 @@ public sealed class NotificationWorker(MySqlDataSource database, IHttpClientFact
         await using var tx = await conn.BeginTransactionAsync(ct);
         await using var select = new MySqlCommand("""
             SELECT id,recipient_id,body FROM notification_outbox
-            WHERE delivery_state='Pending'
-              AND (delivery_next_at IS NULL OR delivery_next_at<=UTC_TIMESTAMP())
+            WHERE state='Pending'
+              AND (next_attempt_at IS NULL OR next_attempt_at<=UTC_TIMESTAMP())
             ORDER BY id LIMIT 1 FOR UPDATE
             """, conn, tx);
         long id, recipient;
@@ -47,9 +47,8 @@ public sealed class NotificationWorker(MySqlDataSource database, IHttpClientFact
         }
         await using var claim = new MySqlCommand("""
             UPDATE notification_outbox
-            SET delivery_state='Sending',delivery_claimed_at=UTC_TIMESTAMP(),
-                delivery_attempts=delivery_attempts+1
-            WHERE id=@id AND delivery_state='Pending'
+            SET state='Sending',attempts=attempts+1
+            WHERE id=@id AND state='Pending'
             """, conn, tx);
         claim.Parameters.AddWithValue("@id", id);
         if (await claim.ExecuteNonQueryAsync(ct) != 1) { await tx.RollbackAsync(ct); return; }
@@ -91,10 +90,9 @@ public sealed class NotificationWorker(MySqlDataSource database, IHttpClientFact
     {
         await using var cmd = new MySqlCommand("""
             UPDATE notification_outbox
-            SET delivery_state=@state,delivery_last_error=@error,
-                delivery_sent_at=IF(@state='Sent',UTC_TIMESTAMP(),delivery_sent_at),
-                delivery_next_at=IF(@retry=1,DATE_ADD(UTC_TIMESTAMP(),INTERVAL 1 MINUTE),NULL)
-            WHERE id=@id AND delivery_state='Sending'
+            SET state=@state,last_error=@error,
+                next_attempt_at=IF(@retry=1,DATE_ADD(UTC_TIMESTAMP(),INTERVAL 1 MINUTE),next_attempt_at)
+            WHERE id=@id AND state='Sending'
             """, conn);
         cmd.Parameters.AddWithValue("@id", id);
         cmd.Parameters.AddWithValue("@state", state);
