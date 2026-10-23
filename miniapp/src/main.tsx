@@ -63,6 +63,16 @@ function App() {
   }
   const [search, setSearch] = useState('');
   const [channels, setChannels] = useState<Channel[]>([]);
+  const [categoryFilter, setCategoryFilter] = useState('');
+  const [sortBy, setSortBy] = useState<'default' | 'priceAsc' | 'priceDesc' | 'title'>('default');
+  const categories = [...new Set(channels.map(c => c.category).filter(Boolean))].sort((a,b) => a.localeCompare(b, 'ru'));
+  const normalizedSearch = search.trim().toLocaleLowerCase('ru');
+  const visibleChannels = channels.filter(c =>
+    (!categoryFilter || c.category === categoryFilter) &&
+    (!normalizedSearch || [c.title, c.category, c.description, c.username || ''].some(value => value.toLocaleLowerCase('ru').includes(normalizedSearch)))
+  ).sort((a,b) => sortBy === 'priceAsc' ? a.price - b.price
+    : sortBy === 'priceDesc' ? b.price - a.price
+    : sortBy === 'title' ? a.title.localeCompare(b.title, 'ru') : 0);
   const [orders, setOrders] = useState<Order[]>([]);
   const [processingOrder, setProcessingOrder] = useState<number | null>(null);
   const [orderMessage, setOrderMessage] = useState('');
@@ -110,7 +120,7 @@ function App() {
   useEffect(() => {
     let active = true;
     setLoading(true); setError('');
-    const path = tab === 'catalog' ? '/api/channels?search=' + encodeURIComponent(search) : tab === 'orders' ? '/api/orders' : tab === 'channels' ? '/api/my-channels' : '/api/me';
+    const path = tab === 'catalog' ? '/api/channels' : tab === 'orders' ? '/api/orders' : tab === 'channels' ? '/api/my-channels' : '/api/me';
     const timer = setTimeout(() => {
       get<Channel[] | Order[] | Mine[] | {id:number}>(path)
         .then(data => { if (!active) return; if (tab === 'catalog') setChannels(data as Channel[]); if (tab === 'orders') setOrders(data as Order[]); if (tab === 'channels') setMine(data as Mine[]); })
@@ -118,13 +128,25 @@ function App() {
         .finally(() => { if (active) setLoading(false); });
     }, tab === 'catalog' ? 250 : 0);
     return () => { active = false; clearTimeout(timer); };
-  }, [tab, search, retry]);
+  }, [tab, retry]);
   const money = (n: number) => new Intl.NumberFormat('ru-RU', { style: 'currency', currency: 'RUB', maximumFractionDigits: 0 }).format(n);
   const tabs: {id:Tab;label:string;icon:typeof Search}[] = [ {id:'catalog',label:'Каталог',icon:Search}, {id:'orders',label:'Заказы',icon:ClipboardList}, {id:'channels',label:'Каналы',icon:Megaphone}, {id:'profile',label:'Профиль',icon:UserRound} ];
   return <div className="app">
     <header><div className="eyebrow">TELEGRAM MANAGER</div><h1>{tab === 'catalog' ? 'Найти рекламу' : tab === 'orders' ? 'Мои заказы' : tab === 'channels' ? 'Мои каналы' : 'Профиль'}</h1><p>{tab === 'catalog' ? 'Подберите канал для вашего объявления' : tab === 'orders' ? 'Контролируйте размещения' : tab === 'channels' ? 'Управляйте рекламными площадками' : 'Настройки аккаунта'}</p></header>
     <main>
       {tab === 'catalog' && <label className="search"><Search size={19}/><input placeholder="Название канала" value={search} maxLength={80} onChange={e=>setSearch(e.target.value)}/></label>}
+      {tab === 'catalog' && <div className="catalogControls">
+        <label>Категория<select aria-label="Категория" value={categoryFilter} onChange={e=>setCategoryFilter(e.target.value)}>
+          <option value="">Все категории</option>{categories.map(category=><option key={category} value={category}>{category}</option>)}
+        </select></label>
+        <label>Сортировка<select aria-label="Сортировка" value={sortBy} onChange={e=>setSortBy(e.target.value as typeof sortBy)}>
+          <option value="default">По умолчанию</option><option value="priceAsc">Сначала дешёвые</option>
+          <option value="priceDesc">Сначала дорогие</option><option value="title">По названию</option>
+        </select></label>
+        <div className="catalogSummary"><span>Найдено каналов: {visibleChannels.length}</span>
+          {(search || categoryFilter || sortBy !== 'default') && <button onClick={()=>{setSearch('');setCategoryFilter('');setSortBy('default');}}>Сбросить</button>}
+        </div>
+      </div>}
       {bookingMessage && <div className="notice">{bookingMessage}</div>}
       {selected && tab === 'catalog' && <div className="bookingOverlay"><div className="bookingPanel">
         <button className="back" onClick={()=>setSelected(null)}>← Назад в каталог</button>
@@ -142,7 +164,7 @@ function App() {
       </div></div>}
       {error && <div className="notice">{error}<button onClick={()=>setRetry(n=>n+1)}>Повторить</button></div>}
       {loading && <div className="muted loading"><RefreshCw size={16}/> Загрузка...</div>}
-      {tab === 'catalog' && <section>{!loading && channels.length === 0 && !error && <div className="empty">Каналы не найдены. Попробуйте изменить запрос.</div>}{channels.map(c=><article className="card" key={c.id}><div className="cardTop"><div className="avatar">{c.title.slice(0,1).toUpperCase()}</div><div className="grow"><strong>{c.title}</strong><small>{c.category}</small></div><div className="price">{money(c.price)}</div></div>{c.description && <p className="description">{c.description}</p>}<button className="primary small" onClick={()=>openChannel(c)}>Заказать рекламу</button>{c.username && <button className="link" onClick={()=>tg?.openTelegramLink('https://t.me/'+c.username!.replace(/^@/,''))}>Открыть канал <ArrowUpRight size={15}/></button>}</article>)}</section>}
+      {tab === 'catalog' && <section>{!loading && visibleChannels.length === 0 && !error && <div className="empty">Каналы не найдены. Попробуйте изменить запрос.</div>}{visibleChannels.map(c=><article className="card" key={c.id}><div className="cardTop"><div className="avatar">{c.title.slice(0,1).toUpperCase()}</div><div className="grow"><strong>{c.title}</strong><small>{c.category}</small></div><div className="price">{money(c.price)}</div></div>{c.description && <p className="description">{c.description}</p>}<button className="primary small" onClick={()=>openChannel(c)}>Заказать рекламу</button>{c.username && <button className="link" onClick={()=>tg?.openTelegramLink('https://t.me/'+c.username!.replace(/^@/,''))}>Открыть канал <ArrowUpRight size={15}/></button>}</article>)}</section>}
       {tab === 'orders' && <section>{orderMessage && <div className="notice">{orderMessage}</div>}{!loading && !orders.length && !error && <div className="empty">Пока нет заказов</div>}{orders.map(o=><article className="card" key={o.id}><div className="cardTop"><div className="grow"><strong>Заказ #{o.id}</strong><small>{o.channel} · {o.isOwner ? 'Входящая заявка' : 'Моя заявка'}</small></div><div className="price">{money(o.price)}</div></div><span className="status">{({Draft:'Черновик',Pending:'Ожидает согласования',AwaitingPayment:'Ожидает оплаты',Rejected:'Отклонена',Scheduled:'Запланирована',Publishing:'Публикуется',Published:'Опубликована'} as Record<string,string>)[o.status] || o.status}</span>{!o.isOwner && o.status === 'AwaitingPayment' && <div className="orderActions"><button className="primary small" disabled={processingOrder !== null} onClick={()=>payOrder(o)}>Оплатить (тест)</button><button className="secondary small" disabled={processingOrder !== null} onClick={()=>checkPayment(o)}>Проверить оплату</button></div>}{o.isOwner && o.status === 'Pending' && <div className="orderActions"><button className="primary small" disabled={processingOrder !== null} onClick={()=>decideOrder(o,'approve')}>{processingOrder === o.id ? 'Обработка...' : 'Одобрить'}</button><button className="secondary small" disabled={processingOrder !== null} onClick={()=>decideOrder(o,'reject')}>Отклонить</button></div>}</article>)}</section>}
       {tab === 'channels' && <section>{!loading && !mine.length && !error && <div className="empty">Каналы пока не подключены. Добавить первый канал можно через бота.</div>}{mine.map(c=><article className="card" key={c.id}><div className="cardTop"><div className="avatar">{c.title.slice(0,1)}</div><div className="grow"><strong>{c.title}</strong><small>{c.listed?'В каталоге':'Скрыт из каталога'}</small></div><div className="price">{money(c.price)}</div></div></article>)}</section>}
       {tab === 'profile' && <div className="card"><strong>Ваш кабинет</strong><p className="description">Вы вошли через Telegram. Настройки тарифов, создание заказов и платежи будут перенесены сюда на следующих этапах.</p></div>}
