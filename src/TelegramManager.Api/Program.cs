@@ -209,6 +209,70 @@ app.MapPost("/api/orders/{orderId:long}/schedule", async (long orderId, HttpRequ
     try { await notice.ExecuteNonQueryAsync(ct); } catch (MySqlException) { }
     return Results.Ok(new { id = orderId, status = "Pending" });
 });
+// The channel owner may make a decision only once while the request is pending.
+// A conditional UPDATE prevents double approval/rejection and cross-account access.
+app.MapPost("/api/orders/{orderId:long}/approve", async (long orderId, HttpRequest req, MySqlDataSource db, CancellationToken ct) =>
+{
+    if (Authorized(req) is not long ownerId) return Results.Unauthorized();
+    if (orderId <= 0) return Results.BadRequest(new { error = "Некорректный заказ" });
+
+    await using var conn = await db.OpenConnectionAsync(ct);
+    await using var tx = await conn.BeginTransactionAsync(ct);
+    await using var update = new MySqlCommand("""
+        UPDATE ad_requests
+        SET status='AwaitingPayment'
+        WHERE id=@order AND owner_id=@owner AND status='Pending'
+        """, conn, tx);
+    update.Parameters.AddWithValue("@order", orderId);
+    update.Parameters.AddWithValue("@owner", ownerId);
+    if (await update.ExecuteNonQueryAsync(ct) != 1)
+    {
+        await tx.RollbackAsync(ct);
+        return Results.Conflict(new { error = "Заявка уже обработана или недоступна" });
+    }
+
+    await using var notify = new MySqlCommand("""
+        INSERT INTO notification_outbox (recipient_id,order_id,body)
+        SELECT advertiser_id,id,CONCAT('Заявка #',id,' одобрена владельцем канала. Ожидается оплата.')
+        FROM ad_requests WHERE id=@order
+        """, conn, tx);
+    notify.Parameters.AddWithValue("@order", orderId);
+    await notify.ExecuteNonQueryAsync(ct);
+    await tx.CommitAsync(ct);
+    return Results.Ok(new { id = orderId, status = "AwaitingPayment" });
+});
+
+app.MapPost("/api/orders/{orderId:long}/reject", async (long orderId, HttpRequest req, MySqlDataSource db, CancellationToken ct) =>
+{
+    if (Authorized(req) is not long ownerId) return Results.Unauthorized();
+    if (orderId <= 0) return Results.BadRequest(new { error = "Некорректный заказ" });
+
+    await using var conn = await db.OpenConnectionAsync(ct);
+    await using var tx = await conn.BeginTransactionAsync(ct);
+    await using var update = new MySqlCommand("""
+        UPDATE ad_requests
+        SET status='Rejected'
+        WHERE id=@order AND owner_id=@owner AND status='Pending'
+        """, conn, tx);
+    update.Parameters.AddWithValue("@order", orderId);
+    update.Parameters.AddWithValue("@owner", ownerId);
+    if (await update.ExecuteNonQueryAsync(ct) != 1)
+    {
+        await tx.RollbackAsync(ct);
+        return Results.Conflict(new { error = "Заявка уже обработана или недоступна" });
+    }
+
+    await using var notify = new MySqlCommand("""
+        INSERT INTO notification_outbox (recipient_id,order_id,body)
+        SELECT advertiser_id,id,CONCAT('Заявка #',id,' отклонена владельцем канала.')
+        FROM ad_requests WHERE id=@order
+        """, conn, tx);
+    notify.Parameters.AddWithValue("@order", orderId);
+    await notify.ExecuteNonQueryAsync(ct);
+    await tx.CommitAsync(ct);
+    return Results.Ok(new { id = orderId, status = "Rejected" });
+});
+
 app.Run();
 
 record CreateOrderInput(long ChannelId, string Text);
