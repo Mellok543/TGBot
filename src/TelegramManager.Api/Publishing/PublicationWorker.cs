@@ -22,14 +22,18 @@ public sealed class PublicationWorker(MySqlDataSource database, IHttpClientFacto
         var token = Environment.GetEnvironmentVariable("BOT_TOKEN");
         if (string.IsNullOrWhiteSpace(token)) throw new InvalidOperationException("BOT_TOKEN missing");
         var allowTest = Environment.GetEnvironmentVariable("REKLIO_ALLOW_TEST_PUBLICATIONS") == "true";
+        var testChannelIdText = Environment.GetEnvironmentVariable("REKLIO_TEST_CHANNEL_ID");
+        long? testChannelId = long.TryParse(testChannelIdText, out var parsedChannelId) && parsedChannelId < 0 ? parsedChannelId : null;
+        if (allowTest && testChannelId is null)
+            throw new InvalidOperationException("REKLIO_TEST_CHANNEL_ID must be a negative Telegram channel ID when test publishing is enabled");
         log.LogInformation("Publication worker enabled; test-order publication permitted: {AllowTest}", allowTest);
         using var http = clients.CreateClient();
         while (!stoppingToken.IsCancellationRequested)
         {
             try
             {
-                await PublishOneAsync(http, token, allowTest, stoppingToken);
-                await DeleteOneAsync(http, token, stoppingToken);
+                await PublishOneAsync(http, token, allowTest, testChannelId, stoppingToken);
+                await DeleteOneAsync(http, token, testChannelId, stoppingToken);
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested) { break; }
             catch (Exception ex) { log.LogError(ex, "Reklio publication cycle failed"); }
@@ -37,7 +41,7 @@ public sealed class PublicationWorker(MySqlDataSource database, IHttpClientFacto
         }
     }
 
-    private async Task PublishOneAsync(HttpClient http, string token, bool allowTest, CancellationToken ct)
+    private async Task PublishOneAsync(HttpClient http, string token, bool allowTest, long? testChannelId, CancellationToken ct)
     {
         await using var conn = await database.OpenConnectionAsync(ct);
         await using var tx = await conn.BeginTransactionAsync(ct);
@@ -46,6 +50,7 @@ public sealed class PublicationWorker(MySqlDataSource database, IHttpClientFacto
             SELECT a.id,a.channel_id,a.content_text,a.delete_after_hours
             FROM ad_requests a
             WHERE a.status='Scheduled' AND a.scheduled_at<=UTC_TIMESTAMP()
+              AND (@testChannelId IS NULL OR a.channel_id=@testChannelId)
               AND EXISTS (
                 SELECT 1 FROM reklio_payment_attempts p
                 WHERE p.order_id=a.id AND p.status='Succeeded'
@@ -55,6 +60,7 @@ public sealed class PublicationWorker(MySqlDataSource database, IHttpClientFacto
             ORDER BY a.scheduled_at ASC LIMIT 1 FOR UPDATE
             """, conn, tx);
         candidate.Parameters.AddWithValue("@allowTest", allowTest ? 1 : 0);
+        candidate.Parameters.AddWithValue("@testChannelId", (object?)testChannelId ?? DBNull.Value);
         long id, channel;
         string message;
         int? hours;
@@ -126,7 +132,7 @@ public sealed class PublicationWorker(MySqlDataSource database, IHttpClientFacto
         }
     }
 
-    private async Task DeleteOneAsync(HttpClient http, string token, CancellationToken ct)
+    private async Task DeleteOneAsync(HttpClient http, string token, long? testChannelId, CancellationToken ct)
     {
         await using var conn = await database.OpenConnectionAsync(ct);
         await using var tx = await conn.BeginTransactionAsync(ct);
@@ -134,10 +140,12 @@ public sealed class PublicationWorker(MySqlDataSource database, IHttpClientFacto
             SELECT order_id,channel_id,telegram_message_id
             FROM reklio_publications
             WHERE state='Published' AND deleted_at IS NULL
+              AND (@testChannelId IS NULL OR channel_id=@testChannelId)
               AND delete_after_hours>0
               AND DATE_ADD(published_at, INTERVAL delete_after_hours HOUR)<=UTC_TIMESTAMP()
             ORDER BY published_at LIMIT 1 FOR UPDATE
             """, conn, tx);
+        select.Parameters.AddWithValue("@testChannelId", (object?)testChannelId ?? DBNull.Value);
         long id, channel, message;
         await using (var reader = await select.ExecuteReaderAsync(ct))
         {
