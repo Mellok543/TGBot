@@ -65,6 +65,30 @@ function App() {
   const [orders, setOrders] = useState<Order[]>([]);
   const [processingOrder, setProcessingOrder] = useState<number | null>(null);
   const [orderMessage, setOrderMessage] = useState('');
+  async function payOrder(order: Order) {
+    if (processingOrder !== null) return;
+    setProcessingOrder(order.id); setOrderMessage('');
+    try {
+      const payment = await post<{confirmationUrl:string}>('/api/orders/' + order.id + '/payment', {});
+      const url = new URL(payment.confirmationUrl);
+      if (url.protocol !== 'https:') throw new Error('Некорректная ссылка оплаты');
+      window.location.assign(url.href);
+    } catch (e) {
+      setOrderMessage(e instanceof Error ? e.message : 'Ошибка оплаты');
+    } finally { setProcessingOrder(null); }
+  }
+  async function checkPayment(order: Order) {
+    if (processingOrder !== null) return;
+    setProcessingOrder(order.id); setOrderMessage('');
+    try {
+      const payment = await post<{status:string}>('/api/orders/' + order.id + '/payment/check', {});
+      if (payment.status === 'Succeeded') {
+        setOrders(previous => previous.map(item => item.id === order.id ? {...item, status:'Scheduled'} : item));
+        setOrderMessage('Тестовая оплата подтверждена');
+      } else setOrderMessage('Статус ЮKassa: ' + payment.status);
+    } catch(e) { setOrderMessage(e instanceof Error ? e.message : 'Ошибка проверки'); }
+    finally { setProcessingOrder(null); }
+  }
   async function decideOrder(order: Order, decision: 'approve' | 'reject') {
     if (processingOrder !== null) return;
     setProcessingOrder(order.id); setOrderMessage('');
@@ -117,7 +141,7 @@ function App() {
       {error && <div className="notice">{error}<button onClick={()=>setSearch(s=>s+' ')}>Повторить</button></div>}
       {loading && <div className="muted loading"><RefreshCw size={16}/> Загрузка...</div>}
       {tab === 'catalog' && <section>{!loading && channels.length === 0 && !error && <div className="empty">Каналы не найдены. Попробуйте изменить запрос.</div>}{channels.map(c=><article className="card" key={c.id}><div className="cardTop"><div className="avatar">{c.title.slice(0,1).toUpperCase()}</div><div className="grow"><strong>{c.title}</strong><small>{c.category}</small></div><div className="price">{money(c.price)}</div></div>{c.description && <p className="description">{c.description}</p>}<button className="primary small" onClick={()=>openChannel(c)}>Заказать рекламу</button>{c.username && <button className="link" onClick={()=>tg?.openTelegramLink('https://t.me/'+c.username!.replace(/^@/,''))}>Открыть канал <ArrowUpRight size={15}/></button>}</article>)}</section>}
-      {tab === 'orders' && <section>{orderMessage && <div className="notice">{orderMessage}</div>}{!loading && !orders.length && !error && <div className="empty">Пока нет заказов</div>}{orders.map(o=><article className="card" key={o.id}><div className="cardTop"><div className="grow"><strong>Заказ #{o.id}</strong><small>{o.channel} · {o.isOwner ? 'Входящая заявка' : 'Моя заявка'}</small></div><div className="price">{money(o.price)}</div></div><span className="status">{({Draft:'Черновик',Pending:'Ожидает согласования',AwaitingPayment:'Ожидает оплаты',Rejected:'Отклонена',Scheduled:'Запланирована',Publishing:'Публикуется',Published:'Опубликована'} as Record<string,string>)[o.status] || o.status}</span>{o.isOwner && o.status === 'Pending' && <div className="orderActions"><button className="primary small" disabled={processingOrder !== null} onClick={()=>decideOrder(o,'approve')}>{processingOrder === o.id ? 'Обработка...' : 'Одобрить'}</button><button className="secondary small" disabled={processingOrder !== null} onClick={()=>decideOrder(o,'reject')}>Отклонить</button></div>}</article>)}</section>}
+      {tab === 'orders' && <section>{orderMessage && <div className="notice">{orderMessage}</div>}{!loading && !orders.length && !error && <div className="empty">Пока нет заказов</div>}{orders.map(o=><article className="card" key={o.id}><div className="cardTop"><div className="grow"><strong>Заказ #{o.id}</strong><small>{o.channel} · {o.isOwner ? 'Входящая заявка' : 'Моя заявка'}</small></div><div className="price">{money(o.price)}</div></div><span className="status">{({Draft:'Черновик',Pending:'Ожидает согласования',AwaitingPayment:'Ожидает оплаты',Rejected:'Отклонена',Scheduled:'Запланирована',Publishing:'Публикуется',Published:'Опубликована'} as Record<string,string>)[o.status] || o.status}</span>{!o.isOwner && o.status === 'AwaitingPayment' && <div className="orderActions"><button className="primary small" disabled={processingOrder !== null} onClick={()=>payOrder(o)}>Оплатить (тест)</button><button className="secondary small" disabled={processingOrder !== null} onClick={()=>checkPayment(o)}>Проверить оплату</button></div>}{o.isOwner && o.status === 'Pending' && <div className="orderActions"><button className="primary small" disabled={processingOrder !== null} onClick={()=>decideOrder(o,'approve')}>{processingOrder === o.id ? 'Обработка...' : 'Одобрить'}</button><button className="secondary small" disabled={processingOrder !== null} onClick={()=>decideOrder(o,'reject')}>Отклонить</button></div>}</article>)}</section>}
       {tab === 'channels' && <section>{!loading && !mine.length && !error && <div className="empty">Каналы пока не подключены. Добавить первый канал можно через бота.</div>}{mine.map(c=><article className="card" key={c.id}><div className="cardTop"><div className="avatar">{c.title.slice(0,1)}</div><div className="grow"><strong>{c.title}</strong><small>{c.listed?'В каталоге':'Скрыт из каталога'}</small></div><div className="price">{money(c.price)}</div></div></article>)}</section>}
       {tab === 'profile' && <div className="card"><strong>Ваш кабинет</strong><p className="description">Вы вошли через Telegram. Настройки тарифов, создание заказов и платежи будут перенесены сюда на следующих этапах.</p></div>}
     </main>
