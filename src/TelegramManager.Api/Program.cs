@@ -273,6 +273,67 @@ app.MapGet("/api/admin/overview",async(HttpRequest req,MySqlDataSource db,Cancel
     await reader.ReadAsync(ct);
     return Results.Ok(new {channels=reader.GetInt64(0),listed=reader.GetInt64(1),orders=reader.GetInt64(2),openDisputes=reader.GetInt64(3),failedPublications=reader.GetInt64(4)});
 });
+app.MapGet("/api/admin/channels",async(HttpRequest req,MySqlDataSource db,CancellationToken ct) =>
+{
+    if(Authorized(req) is not long uid) return Results.Unauthorized();
+    if(await StaffRole(db,uid,ct) is null) return Results.Forbid();
+    await using var cmd=db.CreateCommand("""
+      SELECT telegram_id,title,category,is_listed,connected_by,ad_price_rub
+      FROM channels ORDER BY connected_at DESC LIMIT 100
+      """);
+    var channels=new List<object>();
+    await using var reader=await cmd.ExecuteReaderAsync(ct);
+    while(await reader.ReadAsync(ct))
+        channels.Add(new {id=reader.GetInt64(0),title=reader.GetString(1),
+          category=reader.IsDBNull(2)?"":reader.GetString(2),listed=reader.GetBoolean(3),
+          ownerId=reader.GetInt64(4),price=reader.GetDecimal(5)});
+    return Results.Ok(channels);
+});
+app.MapPost("/api/admin/channels/{channelId:long}/listing",async(long channelId,HttpRequest req,MySqlDataSource db,CancellationToken ct) =>
+{
+    if(Authorized(req) is not long uid) return Results.Unauthorized();
+    if(await StaffRole(db,uid,ct) is null) return Results.Forbid();
+    var input=await req.ReadFromJsonAsync<UpdateListingInput>(cancellationToken:ct);
+    if(input is null) return Results.BadRequest();
+    await using var conn=await db.OpenConnectionAsync(ct);
+    await using var tx=await conn.BeginTransactionAsync(ct);
+    await using var cmd=new MySqlCommand("UPDATE channels SET is_listed=@listed WHERE telegram_id=@id",conn,tx);
+    cmd.Parameters.AddWithValue("@listed",input.Listed);
+    cmd.Parameters.AddWithValue("@id",channelId);
+    if(await cmd.ExecuteNonQueryAsync(ct)==0)
+    {
+        await using var check=new MySqlCommand("SELECT COUNT(*) FROM channels WHERE telegram_id=@id",conn,tx);
+        check.Parameters.AddWithValue("@id",channelId);
+        if(Convert.ToInt64(await check.ExecuteScalarAsync(ct))==0)
+        {await tx.RollbackAsync(ct);return Results.NotFound();}
+    }
+    await using var audit=new MySqlCommand("INSERT INTO reklio_admin_audit(actor_id,action,target_id,details) VALUES(@actor,'ChannelListing',@target,@details)",conn,tx);
+    audit.Parameters.AddWithValue("@actor",uid);audit.Parameters.AddWithValue("@target",channelId);
+    audit.Parameters.AddWithValue("@details",input.Listed?"Listed":"Hidden");
+    await audit.ExecuteNonQueryAsync(ct);
+    await tx.CommitAsync(ct);
+    return Results.Ok(new {id=channelId,listed=input.Listed});
+});
+app.MapGet("/api/admin/publication-issues",async(HttpRequest req,MySqlDataSource db,CancellationToken ct) =>
+{
+    if(Authorized(req) is not long uid) return Results.Unauthorized();
+    if(await StaffRole(db,uid,ct) is null) return Results.Forbid();
+    await using var cmd=db.CreateCommand("""
+      SELECT a.id,c.title,a.status,a.last_error,a.scheduled_at,a.published_at
+      FROM ad_requests a JOIN channels c ON c.telegram_id=a.channel_id
+      WHERE a.status IN ('PublishFailed','DeleteFailed')
+         OR (a.status IN ('Disputed','DisputeResolved') AND a.last_error IS NOT NULL)
+      ORDER BY a.updated_at DESC LIMIT 100
+      """);
+    var issues=new List<object>();
+    await using var reader=await cmd.ExecuteReaderAsync(ct);
+    while(await reader.ReadAsync(ct))
+        issues.Add(new {id=reader.GetInt64(0),channel=reader.GetString(1),
+          status=reader.GetString(2),error=reader.IsDBNull(3)?"":reader.GetString(3),
+          scheduledAt=reader.IsDBNull(4)?(DateTime?)null:reader.GetDateTime(4),
+          publishedAt=reader.IsDBNull(5)?(DateTime?)null:reader.GetDateTime(5)});
+    return Results.Ok(issues);
+});
 app.MapGet("/api/admin/disputes", async (HttpRequest req,MySqlDataSource db,CancellationToken ct) =>
 {
     if(Authorized(req) is not long userId) return Results.Unauthorized();
