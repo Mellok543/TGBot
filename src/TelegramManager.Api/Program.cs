@@ -59,10 +59,10 @@ app.MapGet("/api/channels", async (HttpRequest req, MySqlDataSource db, Cancella
           AND (@search='' OR title LIKE @pattern)
         ORDER BY connected_at DESC LIMIT @limit
         """);
-    cmd.Parameters.AddWithValue("@category", category);
-    cmd.Parameters.AddWithValue("@search", search);
-    cmd.Parameters.AddWithValue("@pattern", "%" + search + "%");
-    cmd.Parameters.AddWithValue("@limit", limit);
+    cmd.Parameters.Add(new MySqlParameter("@category", category));
+    cmd.Parameters.Add(new MySqlParameter("@search", search));
+    cmd.Parameters.Add(new MySqlParameter("@pattern", "%" + search + "%"));
+    cmd.Parameters.Add(new MySqlParameter("@limit", limit));
     var channels = new List<object>();
     await using var reader = await cmd.ExecuteReaderAsync(ct);
     while (await reader.ReadAsync(ct))
@@ -82,7 +82,7 @@ app.MapGet("/api/orders", async (HttpRequest req, MySqlDataSource db, Cancellati
         WHERE a.advertiser_id=@user OR a.owner_id=@user
         ORDER BY a.created_at DESC LIMIT 50
         """);
-    cmd.Parameters.AddWithValue("@user", userId);
+    cmd.Parameters.Add(new MySqlParameter("@user", userId));
     var orders = new List<object>();
     await using var reader = await cmd.ExecuteReaderAsync(ct);
     while (await reader.ReadAsync(ct))
@@ -97,7 +97,7 @@ app.MapGet("/api/my-channels", async (HttpRequest req, MySqlDataSource db, Cance
         SELECT telegram_id,title,is_listed,ad_price_rub FROM channels
         WHERE connected_by=@user ORDER BY connected_at DESC LIMIT 50
         """);
-    cmd.Parameters.AddWithValue("@user", userId);
+    cmd.Parameters.Add(new MySqlParameter("@user", userId));
     var channels = new List<object>();
     await using var reader = await cmd.ExecuteReaderAsync(ct);
     while (await reader.ReadAsync(ct))
@@ -115,7 +115,7 @@ app.MapGet("/api/channels/{channelId:long}/rates", async (long channelId, HttpRe
         WHERE r.channel_id=@channel AND r.is_active=TRUE AND c.is_listed=TRUE
         ORDER BY r.duration_hours
         """);
-    cmd.Parameters.AddWithValue("@channel", channelId);
+    cmd.Parameters.Add(new MySqlParameter("@channel", channelId));
     var rates = new List<object>();
     await using var reader = await cmd.ExecuteReaderAsync(ct);
     while (await reader.ReadAsync(ct))
@@ -132,7 +132,7 @@ app.MapGet("/api/channels/{channelId:long}/availability", async (long channelId,
           AND status IN ('Pending','AwaitingPayment','Scheduled','Publishing','Published')
         ORDER BY scheduled_at LIMIT 200
         """);
-    cmd.Parameters.AddWithValue("@channel", channelId);
+    cmd.Parameters.Add(new MySqlParameter("@channel", channelId));
     var slots = new List<DateTime>();
     await using var reader = await cmd.ExecuteReaderAsync(ct);
     while (await reader.ReadAsync(ct)) slots.Add(reader.GetDateTime(0));
@@ -153,9 +153,9 @@ app.MapPost("/api/orders", async (HttpRequest req, MySqlDataSource db, Cancellat
           AND ((u.subscription_until>UTC_TIMESTAMP() OR u.pro_granted_until>UTC_TIMESTAMP())
                OR u.created_at>UTC_TIMESTAMP()-INTERVAL 30 DAY)
         """, conn);
-    cmd.Parameters.AddWithValue("@buyer", userId);
-    cmd.Parameters.AddWithValue("@channel", input.ChannelId);
-    cmd.Parameters.AddWithValue("@text", input.Text.Trim());
+    cmd.Parameters.Add(new MySqlParameter("@buyer", userId));
+    cmd.Parameters.Add(new MySqlParameter("@channel", input.ChannelId));
+    cmd.Parameters.Add(new MySqlParameter("@text", input.Text.Trim()));
     if (await cmd.ExecuteNonQueryAsync(ct) != 1) return Results.BadRequest(new { error = "Канал недоступен для заказа" });
     return Results.Ok(new { id = cmd.LastInsertedId, status = "Draft" });
 });
@@ -179,10 +179,10 @@ app.MapPost("/api/orders/{orderId:long}/schedule", async (long orderId, HttpRequ
             WHERE other.channel_id=a.channel_id AND other.scheduled_at=@at
               AND other.status IN ('Pending','AwaitingPayment','Scheduled','Publishing','Published'))
         """);
-    cmd.Parameters.AddWithValue("@rate", input.RateId);
-    cmd.Parameters.AddWithValue("@at", at);
-    cmd.Parameters.AddWithValue("@order", orderId);
-    cmd.Parameters.AddWithValue("@user", userId);
+    cmd.Parameters.Add(new MySqlParameter("@rate", input.RateId));
+    cmd.Parameters.Add(new MySqlParameter("@at", at));
+    cmd.Parameters.Add(new MySqlParameter("@order", orderId));
+    cmd.Parameters.Add(new MySqlParameter("@user", userId));
     if (await cmd.ExecuteNonQueryAsync(ct) != 1)
         return Results.Conflict(new { error = "Время занято, заказ недоступен или срок некорректен" });
     await using var notice = db.CreateCommand("""
@@ -190,8 +190,8 @@ app.MapPost("/api/orders/{orderId:long}/schedule", async (long orderId, HttpRequ
         SELECT owner_id,id,CONCAT('Новая заявка #',id,' на рекламу. Откройте бота для согласования.')
         FROM ad_requests WHERE id=@order AND advertiser_id=@user
         """);
-    notice.Parameters.AddWithValue("@order", orderId);
-    notice.Parameters.AddWithValue("@user", userId);
+    notice.Parameters.Add(new MySqlParameter("@order", orderId));
+    notice.Parameters.Add(new MySqlParameter("@user", userId));
     // A failed notification must not undo an accepted booking.
     try { await notice.ExecuteNonQueryAsync(ct); } catch (MySqlException) { }
     return Results.Ok(new { id = orderId, status = "Pending" });
