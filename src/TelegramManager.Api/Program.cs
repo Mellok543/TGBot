@@ -142,8 +142,10 @@ app.MapPost("/api/orders", async (HttpRequest req, MySqlDataSource db, Cancellat
 {
     if (Authorized(req) is not long userId) return Results.Unauthorized();
     var input = await req.ReadFromJsonAsync<CreateOrderInput>(cancellationToken: ct);
-    if (input is null || input.ChannelId <= 0 || string.IsNullOrWhiteSpace(input.Text)
-        || input.Text.Length > 4096) return Results.BadRequest(new { error = "Текст объявления должен содержать от 1 до 4096 символов" });
+    if (input is null || string.IsNullOrWhiteSpace(input.Text) || input.Text.Length > 4096)
+        return Results.BadRequest(new { error = "Текст объявления должен содержать от 1 до 4096 символов" });
+    if (input.ChannelId == 0)
+        return Results.BadRequest(new { error = "Некорректный идентификатор канала" });
     await using var conn = await db.OpenConnectionAsync(ct);
     await using var cmd = new MySqlCommand("""
         INSERT INTO ad_requests (channel_id,advertiser_id,owner_id,content_type,content_text,media_file_id,price_rub,status)
