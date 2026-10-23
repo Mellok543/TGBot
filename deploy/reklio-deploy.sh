@@ -84,6 +84,17 @@ cp -a miniapp/dist/. "$STAGE/web/"
 cp -a "$API_DIR/." "$STAGE/previous-api/"
 cp -a "$WEB_DIR/." "$STAGE/previous-web/"
 
+# Enable test-only Telegram publication for the connected Reklio test channel.
+# Keep this separate from the existing secret-bearing environment files.
+install -d -m 755 /etc/systemd/system/reklio-api.service.d
+cat > /etc/systemd/system/reklio-api.service.d/30-test-publications.conf <<'EOF'
+[Service]
+Environment="REKLIO_PUBLISH_ENABLED=true"
+Environment="REKLIO_ALLOW_TEST_PUBLICATIONS=true"
+Environment="REKLIO_TEST_CHANNEL_ID=-1004357250006"
+EOF
+systemctl daemon-reload
+
 ROLLBACK_NEEDED=1
 systemctl stop reklio-api.service
 clear_directory "$API_DIR"
