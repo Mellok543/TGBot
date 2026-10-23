@@ -85,10 +85,8 @@ cp -a miniapp/dist/. "$STAGE/web/"
 cp -a "$API_DIR/." "$STAGE/previous-api/"
 cp -a "$WEB_DIR/." "$STAGE/previous-web/"
 
-# Disable the temporary publication override from the prior deployment.
-# A service restart is required to restore the previous worker configuration.
-rm -f /etc/systemd/system/reklio-api.service.d/30-test-publications.conf
-systemctl daemon-reload
+# Keep operator-managed systemd worker flags across deployments.
+# Never enable or disable publication as a side effect of updating code.
 
 ROLLBACK_NEEDED=1
 systemctl stop reklio-api.service
