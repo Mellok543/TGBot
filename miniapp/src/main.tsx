@@ -33,6 +33,8 @@ function App() {
   const [tab, setTab] = useState<Tab>('catalog');
   const [selected, setSelected] = useState<Channel | null>(null);
   const [rates, setRates] = useState<Rate[]>([]);
+  const [reservedSlots, setReservedSlots] = useState<string[]>([]);
+  const [availabilityKnown, setAvailabilityKnown] = useState(false);
   const [history, setHistory] = useState<HistoryPoint[]>([]);
   const [detailsLoading, setDetailsLoading] = useState(false);
   const [rateId, setRateId] = useState('');
@@ -44,16 +46,24 @@ function App() {
   const [busy, setBusy] = useState(false);
   const [bookingMessage, setBookingMessage] = useState('');
   async function openChannel(c: Channel) {
-    setSelected(c); setBookingMessage(''); setRates([]); setHistory([]); setRateId(''); setDetailsLoading(true);
-    const [ratesResult, historyResult] = await Promise.allSettled([
+    setSelected(c); setBookingMessage(''); setRates([]); setHistory([]); setRateId(''); setReservedSlots([]); setAvailabilityKnown(false); setDetailsLoading(true);
+    const [ratesResult, historyResult, slotsResult] = await Promise.allSettled([
       get<Rate[]>('/api/channels/' + c.id + '/rates'),
-      get<HistoryPoint[]>('/api/channels/' + c.id + '/history')
+      get<HistoryPoint[]>('/api/channels/' + c.id + '/history'),
+      get<string[]>('/api/channels/' + c.id + '/availability')
     ]);
     if (ratesResult.status === 'fulfilled') setRates(ratesResult.value);
     else setBookingMessage(ratesResult.reason instanceof Error ? ratesResult.reason.message : 'Не удалось загрузить тарифы');
     if (historyResult.status === 'fulfilled') setHistory(historyResult.value);
+    if (slotsResult.status === 'fulfilled') { setReservedSlots(slotsResult.value); setAvailabilityKnown(true); }
     setDetailsLoading(false);
   }
+  const chosenRate = rates.find(r => String(r.id) === rateId);
+  const selectedDateTime = day ? new Date(`${day}T${hour}:${minute}:00`) : null;
+  const conflicts = (dateTime: Date | null) => !!dateTime && reservedSlots.some(value => {
+    const booked = new Date(value.endsWith('Z') ? value : value + 'Z');
+    return !Number.isNaN(booked.getTime()) && Math.abs(booked.getTime() - dateTime.getTime()) < 60000;
+  });
   async function submitOrder() {
     if (!selected || !rateId || !adText.trim() || !day) {
       setBookingMessage('Укажите тариф, текст объявления и дату публикации'); return;
@@ -62,6 +72,7 @@ function App() {
     if (Number.isNaN(timestamp.getTime()) || timestamp.getTime() <= Date.now()+120000) {
       setBookingMessage('Выберите время минимум через 2 минуты от текущего и не позднее 90 дней'); return;
     }
+    if (conflicts(timestamp)) { setBookingMessage('Это время уже занято. Выберите другое.'); return; }
     setBusy(true); setBookingMessage('');
     try {
       const draft = await post<{id:number}>('/api/orders', { channelId:selected.id, text:adText.trim() });
@@ -179,16 +190,15 @@ function App() {
           return <div className="historyCard"><svg viewBox="0 0 100 100" preserveAspectRatio="none" role="img" aria-label="График числа подписчиков за последние 30 дней"><polyline points={coordinates} fill="none" stroke="#80b5ff" strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" vectorEffect="non-scaling-stroke"/></svg><div className="historyLabels"><span>{points[0].day}</span><span>{points[points.length-1].day}</span></div><small>От {values[0].toLocaleString('ru-RU')} до {values[values.length-1].toLocaleString('ru-RU')} подписчиков</small></div>;
         })()}
         <h3 className="detailSubtitle">Выберите тариф размещения</h3>
-        <label className="field">Тариф<select value={rateId} onChange={e=>setRateId(e.target.value)}>
-          <option value="">Выберите тариф</option>{rates.map(rate=><option key={rate.id} value={rate.id}>{rate.hours} ч — {money(rate.price)}</option>)}
-        </select></label>
+        <div className="rateCards">{rates.map(rate=><button type="button" key={rate.id} aria-pressed={rateId===String(rate.id)} className={rateId===String(rate.id)?'rateCard picked':'rateCard'} onClick={()=>setRateId(String(rate.id))}><span>{rate.hours} ч размещения</span><strong>{money(rate.price)}</strong><small>{rateId===String(rate.id)?'✓ Выбрано':'Выбрать тариф'}</small></button>)}</div>
         {!rates.length && <p className="description">Владелец пока не добавил тарифы.</p>}
         <label className="field">Текст рекламного поста<textarea value={adText} maxLength={4096} rows={5} onChange={e=>setAdText(e.target.value)} placeholder="Введите рекламный текст"/></label>
-        <div className="field"><span>Дата публикации (ваш часовой пояс)</span><select value={day} onChange={e=>setDay(e.target.value)}><option value="">Выберите день</option>{days.map(d=><option key={d.value} value={d.value}>{d.label}</option>)}</select></div>
-        <div className="field"><span>Время публикации</span><div className="timeGrid"><select aria-label="Часы" value={hour} onChange={e=>setHour(e.target.value)}>{Array.from({length:24},(_,i)=>String(i).padStart(2,'0')).map(h=><option key={h} value={h}>{h} ч</option>)}</select><select aria-label="Минуты" value={minute} onChange={e=>setMinute(e.target.value)}>{Array.from({length:12},(_,i)=>String(i*5).padStart(2,'0')).map(m=><option key={m} value={m}>{m} мин</option>)}</select></div><small className="hint">Доступные даты — ближайшие 90 дней. Время по часам вашего телефона.</small></div>
+        <div className="field"><span>Дата публикации (ваш часовой пояс)</span><div className="dayScroller">{days.map(d=><button type="button" key={d.value} className={day===d.value?'dayTile chosen':'dayTile'} onClick={()=>setDay(d.value)}>{new Date(d.value+'T12:00:00').toLocaleDateString('ru-RU',{weekday:'short'})}<strong>{new Date(d.value+'T12:00:00').getDate()}</strong><small>{new Date(d.value+'T12:00:00').toLocaleDateString('ru-RU',{month:'short'})}</small></button>)}</div></div>
+        <div className="field"><span>Время публикации</span><div className="timeGrid"><select aria-label="Часы" value={hour} onChange={e=>setHour(e.target.value)}>{Array.from({length:24},(_,i)=>String(i).padStart(2,'0')).map(h=><option key={h} value={h}>{h} ч</option>)}</select><select aria-label="Минуты" value={minute} onChange={e=>setMinute(e.target.value)}>{Array.from({length:12},(_,i)=>String(i*5).padStart(2,'0')).map(m=><option key={m} value={m}>{m} мин</option>)}</select></div><small className="hint">Ближайшие 90 дней, время по часам вашего телефона. {availabilityKnown ? 'Занятые слоты проверяются.' : 'Доступность будет проверена при оформлении.'}</small>{availabilityKnown && conflicts(selectedDateTime) && <span className="slotWarning">Выбранное время уже занято.</span>}</div>
+        <div className="orderPreview"><h3>Ваш заказ</h3><div><span>Канал</span><b>{selected.title}</b></div><div><span>Тариф</span><b>{chosenRate ? chosenRate.hours+' ч' : 'Не выбран'}</b></div><div><span>Размещение</span><b>{day ? new Date(day+'T12:00:00').toLocaleDateString('ru-RU')+' · '+hour+':'+minute : 'Дата не выбрана'}</b></div><div className="previewTotal"><span>Стоимость</span><strong>{chosenRate ? money(chosenRate.price) : '—'}</strong></div></div>
         <p className="description">После отправки владелец должен согласовать заявку. Оплата станет доступна после согласования.</p>
         {bookingMessage && <div className="notice">{bookingMessage}</div>}
-        <button className="primary" disabled={busy || !rates.length} onClick={submitOrder}>{busy?'Отправка...':'Отправить заявку'}</button>
+        <button className="primary" disabled={busy || !chosenRate || conflicts(selectedDateTime)} onClick={submitOrder}>{busy?'Отправка...':'Отправить заявку'}</button>
       </div></div>}
       {error && <div className="notice">{error}<button onClick={()=>setRetry(n=>n+1)}>Повторить</button></div>}
       {loading && <div className="muted loading"><RefreshCw size={16}/> Загрузка...</div>}
