@@ -18,7 +18,7 @@ async function post<T>(path: string, data: unknown): Promise<T> {
     body: JSON.stringify(data) });
   if (!response.ok) {
     const detail = await response.json().catch(() => ({})) as {error?:string};
-    throw new Error(detail.error || 'Не удалось сохранить заказ');
+    throw new Error(detail.error || `Ошибка сервера (${response.status}) при оформлении заказа`);
   }
   return response.json() as Promise<T>;
 }
@@ -33,7 +33,10 @@ function App() {
   const [rates, setRates] = useState<Rate[]>([]);
   const [rateId, setRateId] = useState('');
   const [adText, setAdText] = useState('');
-  const [dateTime, setDateTime] = useState('');
+  const [day, setDay] = useState('');
+  const [hour, setHour] = useState('12');
+  const [minute, setMinute] = useState('00');
+  const days = Array.from({length:90}, (_, i) => { const d = new Date(); d.setHours(12,0,0,0); d.setDate(d.getDate()+i); return {value:`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`, label:d.toLocaleDateString('ru-RU',{weekday:'short',day:'numeric',month:'long',year:'numeric'})}; });
   const [busy, setBusy] = useState(false);
   const [bookingMessage, setBookingMessage] = useState('');
   async function openChannel(c: Channel) {
@@ -42,12 +45,12 @@ function App() {
     catch(e) { setBookingMessage(e instanceof Error ? e.message : 'Ошибка'); }
   }
   async function submitOrder() {
-    if (!selected || !rateId || !adText.trim() || !dateTime) {
+    if (!selected || !rateId || !adText.trim() || !day) {
       setBookingMessage('Укажите тариф, текст объявления и дату публикации'); return;
     }
-    const timestamp = new Date(dateTime);
+    const timestamp = new Date(`${day}T${hour}:${minute}:00`);
     if (Number.isNaN(timestamp.getTime()) || timestamp.getTime() <= Date.now()+120000) {
-      setBookingMessage('Выберите будущую дату не раньше чем через 2 минуты'); return;
+      setBookingMessage('Выберите время минимум через 2 минуты от текущего и не позднее 90 дней'); return;
     }
     setBusy(true); setBookingMessage('');
     try {
@@ -91,7 +94,8 @@ function App() {
         </select></label>
         {!rates.length && <p className="description">Владелец пока не добавил тарифы.</p>}
         <label className="field">Текст рекламного поста<textarea value={adText} maxLength={4096} rows={5} onChange={e=>setAdText(e.target.value)} placeholder="Введите рекламный текст"/></label>
-        <label className="field">Дата и время публикации (ваш часовой пояс)<input type="datetime-local" value={dateTime} onChange={e=>setDateTime(e.target.value)}/></label>
+        <div className="field"><span>Дата публикации (ваш часовой пояс)</span><select value={day} onChange={e=>setDay(e.target.value)}><option value="">Выберите день</option>{days.map(d=><option key={d.value} value={d.value}>{d.label}</option>)}</select></div>
+        <div className="field"><span>Время публикации</span><div className="timeGrid"><select aria-label="Часы" value={hour} onChange={e=>setHour(e.target.value)}>{Array.from({length:24},(_,i)=>String(i).padStart(2,'0')).map(h=><option key={h} value={h}>{h} ч</option>)}</select><select aria-label="Минуты" value={minute} onChange={e=>setMinute(e.target.value)}>{Array.from({length:12},(_,i)=>String(i*5).padStart(2,'0')).map(m=><option key={m} value={m}>{m} мин</option>)}</select></div><small className="hint">Доступные даты — ближайшие 90 дней. Время по часам вашего телефона.</small></div>
         <p className="description">После отправки владелец должен согласовать заявку. Оплата станет доступна после согласования.</p>
         {bookingMessage && <div className="notice">{bookingMessage}</div>}
         <button className="primary" disabled={busy || !rates.length} onClick={submitOrder}>{busy?'Отправка...':'Отправить заявку'}</button>
