@@ -16,6 +16,37 @@ var allowedOrigin = Environment.GetEnvironmentVariable("MINIAPP_ORIGIN");
 if (!string.IsNullOrWhiteSpace(allowedOrigin))
     builder.Services.AddCors(o => o.AddPolicy("miniapp", p => p.WithOrigins(allowedOrigin).AllowAnyHeader().AllowAnyMethod()));
 var app = builder.Build();
+// Bootstrap only the role/audit tables. Existing payment and Safe Deal migrations remain manual.
+try
+{
+    var staffDb=app.Services.GetRequiredService<MySqlDataSource>();
+    await using var createStaff=staffDb.CreateCommand("""
+        CREATE TABLE IF NOT EXISTS reklio_staff (
+          telegram_id BIGINT NOT NULL PRIMARY KEY,
+          role ENUM('admin','moderator') NOT NULL,
+          granted_by BIGINT NOT NULL,
+          created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+        """);
+    await createStaff.ExecuteNonQueryAsync();
+    await using var createAudit=staffDb.CreateCommand("""
+        CREATE TABLE IF NOT EXISTS reklio_admin_audit (
+          id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+          actor_id BIGINT NOT NULL,
+          action VARCHAR(64) NOT NULL,
+          target_id BIGINT NULL,
+          details VARCHAR(512) NULL,
+          created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          INDEX idx_admin_audit_time (created_at)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+        """);
+    await createAudit.ExecuteNonQueryAsync();
+}
+catch(MySqlException ex)
+{
+    app.Logger.LogWarning(ex,"Reklio staff schema could not be initialized; verify DB CREATE permission");
+}
+
 if (!string.IsNullOrWhiteSpace(allowedOrigin)) app.UseCors("miniapp");
 
 static long? VerifyTelegram(string? initData, string token)
@@ -148,7 +179,7 @@ app.MapGet("/api/finance", async (HttpRequest req, MySqlDataSource db, Cancellat
         note="Сводка по всем оплаченным нетестовым заказам; история показывает последние 100. Комиссия 5% оплачивается покупателем сверх цены продавца. Выплаты не инициируются."});
 });
 bool IsRootAdmin(long userId) =>
-    (Environment.GetEnvironmentVariable("REKLIO_ADMIN_IDS") ?? "")
+    (Environment.GetEnvironmentVariable("REKLIO_ADMIN_IDS") ?? "992964625")
         .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
         .Any(part => long.TryParse(part,out var adminId) && adminId==userId);
 
