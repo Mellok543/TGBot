@@ -60,7 +60,7 @@ app.MapGet("/api/channels", async (HttpRequest req, MySqlDataSource db, Cancella
                (SELECT m.subscribers FROM channel_daily_metrics m
                 WHERE m.channel_id=c.telegram_id AND m.subscribers IS NOT NULL
                 ORDER BY m.day DESC LIMIT 1) AS subscribers,
-               (SELECT COALESCE(SUM(m.posts),0) FROM channel_daily_metrics m
+               (SELECT CAST(COALESCE(SUM(m.posts),0) AS SIGNED) FROM channel_daily_metrics m
                 WHERE m.channel_id=c.telegram_id AND m.day>=UTC_DATE()-INTERVAL 29 DAY) AS posts30d
         FROM channels c WHERE c.is_listed=TRUE
           AND (@category='' OR c.category=@category)
