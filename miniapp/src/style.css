@@ -5,3 +5,9 @@
 .timeGrid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.timeGrid select{min-width:0;font-size:16px}.hint{font-size:12px;line-height:1.5;color:#9eacc2;font-weight:400}.bookingPanel .notice{margin:14px 0;padding:16px;color:#f3d4a0;border-color:#92714c;background:#3a302638}
 
 .orderActions{display:flex;gap:10px;flex-wrap:wrap;margin-top:12px;align-items:center}.orderActions .primary.small{margin-top:0}.secondary.small{border:1px solid #62738d;background:#26354b;color:#dbe5f7;border-radius:12px;padding:9px 13px;font-size:12px;font-weight:750;cursor:pointer}.secondary:disabled{opacity:.5;cursor:not-allowed}
+
+.catalogControls{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:-5px 0 16px}
+.catalogControls label{display:flex;flex-direction:column;gap:7px;color:#aab8cd;font-size:12px;min-width:0}
+.catalogControls select{min-width:0;width:100%;background:#202c41;border:1px solid #344158;border-radius:11px;padding:11px 8px;color:#edf3ff;font-size:13px;color-scheme:dark}
+.catalogSummary{grid-column:1/-1;display:flex;justify-content:space-between;align-items:center;gap:12px;color:#9baac2;font-size:12px}
+.catalogSummary button{border:0;background:transparent;color:#91bcff;padding:6px;cursor:pointer}
