@@ -10,6 +10,7 @@ type HistoryPoint = { day: string; subscribers: number | null; posts: number };
 type Channel = { id: number; title: string; category: string; price: number; description: string; username: string | null; subscribers: number | null; posts30d: number };
 type Order = { id: number; channel: string; price: number; status: string; createdAt: string; isOwner: boolean };
 type Mine = { id: number; title: string; listed: boolean; price: number };
+type SellerRate = Rate & { active: boolean };
 type Tab = 'catalog' | 'orders' | 'channels' | 'profile';
 const API = import.meta.env.VITE_API_URL || '';
 const tg = window.Telegram?.WebApp;
@@ -135,6 +136,50 @@ function App() {
     } finally { setProcessingOrder(null); }
   }
   const [mine, setMine] = useState<Mine[]>([]);
+  const [editingChannel, setEditingChannel] = useState<Mine | null>(null);
+  const [sellerRates, setSellerRates] = useState<SellerRate[]>([]);
+  const [sellerHours, setSellerHours] = useState('24');
+  const [sellerPrice, setSellerPrice] = useState('');
+  const [sellerBusy, setSellerBusy] = useState(false);
+  const [sellerMessage, setSellerMessage] = useState('');
+  async function loadSellerRates(channel: Mine) {
+    setEditingChannel(channel); setSellerMessage(''); setSellerRates([]);
+    try { setSellerRates(await get<SellerRate[]>('/api/my-channels/'+channel.id+'/rates')); }
+    catch(e) { setSellerMessage(e instanceof Error ? e.message : 'Ошибка загрузки тарифов'); }
+  }
+  async function saveSellerRate() {
+    if (!editingChannel || sellerBusy) return;
+    const hours=Number(sellerHours), price=Number(sellerPrice);
+    if (!Number.isInteger(hours) || hours<1 || hours>720 || !Number.isFinite(price) || price<1 || price>1000000) {
+      setSellerMessage('Укажите длительность 1–720 часов и цену от 1 до 1 000 000 ₽'); return;
+    }
+    setSellerBusy(true); setSellerMessage('');
+    try {
+      await post('/api/my-channels/'+editingChannel.id+'/rates',{hours,price});
+      setSellerRates(await get<SellerRate[]>('/api/my-channels/'+editingChannel.id+'/rates'));
+      setSellerPrice(''); setSellerMessage('Тариф сохранён');
+    } catch(e) { setSellerMessage(e instanceof Error ? e.message : 'Ошибка сохранения'); }
+    finally { setSellerBusy(false); }
+  }
+  async function toggleSellerRate(rate: SellerRate) {
+    if (!editingChannel || sellerBusy) return;
+    setSellerBusy(true); setSellerMessage('');
+    try {
+      await post('/api/my-channels/'+editingChannel.id+'/rates/'+rate.id+'/toggle',{});
+      setSellerRates(await get<SellerRate[]>('/api/my-channels/'+editingChannel.id+'/rates'));
+    } catch(e) { setSellerMessage(e instanceof Error ? e.message : 'Ошибка'); }
+    finally { setSellerBusy(false); }
+  }
+  async function toggleListing(channel: Mine) {
+    if (sellerBusy) return;
+    setSellerBusy(true); setSellerMessage('');
+    try {
+      await post('/api/my-channels/'+channel.id+'/listing',{listed:!channel.listed});
+      setMine(prev=>prev.map(c=>c.id===channel.id?{...c,listed:!c.listed}:c));
+      setEditingChannel({...channel,listed:!channel.listed});
+    } catch(e) { setSellerMessage(e instanceof Error ? e.message : 'Ошибка'); }
+    finally { setSellerBusy(false); }
+  }
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const [retry, setRetry] = useState(0);
@@ -204,7 +249,22 @@ function App() {
       {loading && <div className="muted loading"><RefreshCw size={16}/> Загрузка...</div>}
       {tab === 'catalog' && <section>{!loading && visibleChannels.length === 0 && !error && <div className="empty">Каналы не найдены. Попробуйте изменить запрос.</div>}{visibleChannels.map(c=><article className="card" key={c.id}><div className="cardTop"><div className="avatar">{c.title.slice(0,1).toUpperCase()}</div><div className="grow"><strong>{c.title}</strong><small>{c.category}</small></div><div className="price">{money(c.price)}</div></div><div className="channelStats"><span>Подписчики: <b>{c.subscribers === null ? "Нет данных" : c.subscribers.toLocaleString("ru-RU")}</b></span><span>Постов за 30 дней: <b>{c.posts30d}</b></span></div>{c.description && <p className="description">{c.description}</p>}<button className="primary small" onClick={()=>openChannel(c)}>Подробнее и заказать</button>{c.username && <button className="link" onClick={()=>tg?.openTelegramLink('https://t.me/'+c.username!.replace(/^@/,''))}>Открыть канал <ArrowUpRight size={15}/></button>}</article>)}</section>}
       {tab === 'orders' && <section>{orderMessage && <div className="notice">{orderMessage}</div>}{!loading && !orders.length && !error && <div className="empty">Пока нет заказов</div>}{orders.map(o=><article className="card" key={o.id}><div className="cardTop"><div className="grow"><strong>Заказ #{o.id}</strong><small>{o.channel} · {o.isOwner ? 'Входящая заявка' : 'Моя заявка'}</small></div><div className="price">{money(o.price)}</div></div><span className="status">{({Draft:'Черновик',Pending:'Ожидает согласования',AwaitingPayment:'Ожидает оплаты',Rejected:'Отклонена',Scheduled:'Запланирована',Publishing:'Публикуется',Published:'Опубликована'} as Record<string,string>)[o.status] || o.status}</span>{!o.isOwner && o.status === 'AwaitingPayment' && <div className="orderActions"><button className="primary small" disabled={processingOrder !== null} onClick={()=>payOrder(o)}>Оплатить (тест)</button><button className="secondary small" disabled={processingOrder !== null} onClick={()=>checkPayment(o)}>Проверить оплату</button></div>}{o.isOwner && o.status === 'Pending' && <div className="orderActions"><button className="primary small" disabled={processingOrder !== null} onClick={()=>decideOrder(o,'approve')}>{processingOrder === o.id ? 'Обработка...' : 'Одобрить'}</button><button className="secondary small" disabled={processingOrder !== null} onClick={()=>decideOrder(o,'reject')}>Отклонить</button></div>}</article>)}</section>}
-      {tab === 'channels' && <section>{!loading && !mine.length && !error && <div className="empty">Каналы пока не подключены. Добавить первый канал можно через бота.</div>}{mine.map(c=><article className="card" key={c.id}><div className="cardTop"><div className="avatar">{c.title.slice(0,1)}</div><div className="grow"><strong>{c.title}</strong><small>{c.listed?'В каталоге':'Скрыт из каталога'}</small></div><div className="price">{money(c.price)}</div></div></article>)}</section>}
+      {tab === 'channels' && <section>{!loading && !mine.length && !error && <div className="empty">Каналы пока не подключены. Добавить первый канал можно через бота.</div>}{mine.map(c=><article className="card" key={c.id}><div className="cardTop"><div className="avatar">{c.title.slice(0,1)}</div><div className="grow"><strong>{c.title}</strong><small>{c.listed?'В каталоге':'Скрыт из каталога'}</small></div><div className="price">{money(c.price)}</div></div><button className="primary small" onClick={()=>loadSellerRates(c)}>Управлять каналом</button></article>)}</section>}
+      {editingChannel && tab === 'channels' && <div className="bookingOverlay"><div className="bookingPanel">
+        <button className="back" onClick={()=>setEditingChannel(null)}>← К моим каналам</button>
+        <h2>{editingChannel.title}</h2>
+        <p className="description">{editingChannel.listed?'Канал виден покупателям':'Канал скрыт из каталога'}</p>
+        <button className="secondary sellerToggle" disabled={sellerBusy} onClick={()=>toggleListing(editingChannel)}>{editingChannel.listed?'Скрыть из каталога':'Опубликовать в каталоге'}</button>
+        <h3 className="detailSubtitle">Рекламные тарифы</h3>
+        {sellerRates.length===0 && <p className="description">Нет тарифов. Добавьте первый ниже.</p>}
+        {sellerRates.map(rate=><div className="sellerRate" key={rate.id}><div><strong>{rate.hours} ч — {money(rate.price)}</strong><small>{rate.active?'Активен':'Отключён'}</small></div><button disabled={sellerBusy} className="secondary small" onClick={()=>toggleSellerRate(rate)}>{rate.active?'Отключить':'Включить'}</button></div>)}
+        <h3 className="detailSubtitle">Добавить или изменить тариф</h3>
+        <p className="description">Если тариф с указанной длительностью уже существует, его цена обновится.</p>
+        <label className="field">Длительность (часы)<input type="number" inputMode="numeric" min="1" max="720" value={sellerHours} onChange={e=>setSellerHours(e.target.value)}/></label>
+        <label className="field">Цена (₽)<input type="number" inputMode="decimal" min="1" max="1000000" value={sellerPrice} onChange={e=>setSellerPrice(e.target.value)}/></label>
+        {sellerMessage && <div className="notice">{sellerMessage}</div>}
+        <button className="primary" disabled={sellerBusy} onClick={saveSellerRate}>{sellerBusy?'Сохранение...':'Сохранить тариф'}</button>
+      </div></div>}
       {tab === 'profile' && <div className="card"><strong>Ваш кабинет</strong><p className="description">Вы вошли через Telegram. Настройки тарифов, создание заказов и платежи будут перенесены сюда на следующих этапах.</p></div>}
     </main>
     <nav>{tabs.map(({id,label,icon:Icon})=><button key={id} className={tab===id?'active':''} onClick={()=>setTab(id)}><Icon size={21}/><span>{label}</span></button>)}</nav>
