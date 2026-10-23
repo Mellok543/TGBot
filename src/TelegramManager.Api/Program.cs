@@ -105,4 +105,98 @@ app.MapGet("/api/my-channels", async (HttpRequest req, MySqlDataSource db, Cance
             listed = reader.GetBoolean(2), price = reader.GetDecimal(3) });
     return Results.Ok(channels);
 });
+
+app.MapGet("/api/channels/{channelId:long}/rates", async (long channelId, HttpRequest req, MySqlDataSource db, CancellationToken ct) =>
+{
+    if (Authorized(req) is null) return Results.Unauthorized();
+    await using var cmd = db.CreateCommand("""
+        SELECT r.id,r.duration_hours,r.price_rub FROM channel_duration_rates r
+        JOIN channels c ON c.telegram_id=r.channel_id
+        WHERE r.channel_id=@channel AND r.is_active=TRUE AND c.is_listed=TRUE
+        ORDER BY r.duration_hours
+        """);
+    cmd.Parameters.AddWithValue("@channel", channelId);
+    var rates = new List<object>();
+    await using var reader = await cmd.ExecuteReaderAsync(ct);
+    while (await reader.ReadAsync(ct))
+        rates.Add(new { id = reader.GetInt64(0), hours = reader.GetInt32(1), price = reader.GetDecimal(2) });
+    return Results.Ok(rates);
+});
+app.MapGet("/api/channels/{channelId:long}/availability", async (long channelId, HttpRequest req, MySqlDataSource db, CancellationToken ct) =>
+{
+    if (Authorized(req) is null) return Results.Unauthorized();
+    await using var cmd = db.CreateCommand("""
+        SELECT scheduled_at FROM ad_requests
+        WHERE channel_id=@channel AND scheduled_at>=UTC_TIMESTAMP()
+          AND scheduled_at<DATE_ADD(UTC_TIMESTAMP(), INTERVAL 90 DAY)
+          AND status IN ('Pending','AwaitingPayment','Scheduled','Publishing','Published')
+        ORDER BY scheduled_at LIMIT 200
+        """);
+    cmd.Parameters.AddWithValue("@channel", channelId);
+    var slots = new List<DateTime>();
+    await using var reader = await cmd.ExecuteReaderAsync(ct);
+    while (await reader.ReadAsync(ct)) slots.Add(reader.GetDateTime(0));
+    return Results.Ok(slots);
+});
+app.MapPost("/api/orders", async (HttpRequest req, MySqlDataSource db, CancellationToken ct) =>
+{
+    if (Authorized(req) is not long userId) return Results.Unauthorized();
+    var input = await req.ReadFromJsonAsync<CreateOrderInput>(cancellationToken: ct);
+    if (input is null || input.ChannelId <= 0 || string.IsNullOrWhiteSpace(input.Text)
+        || input.Text.Length > 4096) return Results.BadRequest(new { error = "Текст объявления должен содержать от 1 до 4096 символов" });
+    await using var conn = await db.OpenConnectionAsync(ct);
+    await using var cmd = new MySqlCommand("""
+        INSERT INTO ad_requests (channel_id,advertiser_id,owner_id,content_type,content_text,media_file_id,price_rub,status)
+        SELECT c.telegram_id,@buyer,c.connected_by,'text',@text,NULL,c.ad_price_rub,'Draft'
+        FROM channels c JOIN users u ON u.telegram_id=c.connected_by
+        WHERE c.telegram_id=@channel AND c.connected_by<>@buyer AND c.is_listed=TRUE
+          AND ((u.subscription_until>UTC_TIMESTAMP() OR u.pro_granted_until>UTC_TIMESTAMP())
+               OR u.created_at>UTC_TIMESTAMP()-INTERVAL 30 DAY)
+        """, conn);
+    cmd.Parameters.AddWithValue("@buyer", userId);
+    cmd.Parameters.AddWithValue("@channel", input.ChannelId);
+    cmd.Parameters.AddWithValue("@text", input.Text.Trim());
+    if (await cmd.ExecuteNonQueryAsync(ct) != 1) return Results.BadRequest(new { error = "Канал недоступен для заказа" });
+    return Results.Ok(new { id = cmd.LastInsertedId, status = "Draft" });
+});
+app.MapPost("/api/orders/{orderId:long}/schedule", async (long orderId, HttpRequest req, MySqlDataSource db, CancellationToken ct) =>
+{
+    if (Authorized(req) is not long userId) return Results.Unauthorized();
+    var input = await req.ReadFromJsonAsync<ScheduleOrderInput>(cancellationToken: ct);
+    if (input is null || input.RateId <= 0 || input.ScheduledAt.Offset != TimeSpan.Zero)
+        return Results.BadRequest(new { error = "Укажите тариф и время в UTC" });
+    var at = input.ScheduledAt.UtcDateTime;
+    await using var cmd = db.CreateCommand("""
+        UPDATE ad_requests a
+        JOIN channel_duration_rates r ON r.channel_id=a.channel_id AND r.id=@rate AND r.is_active=TRUE
+        SET a.status='Pending',a.scheduled_at=@at,a.time_rate_id=r.id,a.price_rub=r.price_rub,
+            a.delete_after_hours=r.duration_hours
+        WHERE a.id=@order AND a.advertiser_id=@user AND a.status='Draft'
+          AND @at>DATE_ADD(UTC_TIMESTAMP(),INTERVAL 2 MINUTE)
+          AND @at<DATE_ADD(UTC_TIMESTAMP(),INTERVAL 90 DAY)
+          AND NOT EXISTS (
+            SELECT 1 FROM (SELECT channel_id,scheduled_at,status FROM ad_requests) other
+            WHERE other.channel_id=a.channel_id AND other.scheduled_at=@at
+              AND other.status IN ('Pending','AwaitingPayment','Scheduled','Publishing','Published'))
+        """);
+    cmd.Parameters.AddWithValue("@rate", input.RateId);
+    cmd.Parameters.AddWithValue("@at", at);
+    cmd.Parameters.AddWithValue("@order", orderId);
+    cmd.Parameters.AddWithValue("@user", userId);
+    if (await cmd.ExecuteNonQueryAsync(ct) != 1)
+        return Results.Conflict(new { error = "Время занято, заказ недоступен или срок некорректен" });
+    await using var notice = db.CreateCommand("""
+        INSERT INTO notification_outbox (recipient_id,order_id,body)
+        SELECT owner_id,id,CONCAT('Новая заявка #',id,' на рекламу. Откройте бота для согласования.')
+        FROM ad_requests WHERE id=@order AND advertiser_id=@user
+        """);
+    notice.Parameters.AddWithValue("@order", orderId);
+    notice.Parameters.AddWithValue("@user", userId);
+    // A failed notification must not undo an accepted booking.
+    try { await notice.ExecuteNonQueryAsync(ct); } catch (MySqlException) { }
+    return Results.Ok(new { id = orderId, status = "Pending" });
+});
 app.Run();
+
+record CreateOrderInput(long ChannelId, string Text);
+record ScheduleOrderInput(long RateId, DateTimeOffset ScheduledAt);
