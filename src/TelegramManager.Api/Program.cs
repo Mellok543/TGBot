@@ -10,6 +10,7 @@ var connectionString = Environment.GetEnvironmentVariable("DATABASE_URL")
     ?? throw new InvalidOperationException("DATABASE_URL is required");
 builder.Services.AddSingleton(new MySqlDataSourceBuilder(connectionString).Build());
 builder.Services.AddHttpClient();
+builder.Services.AddHostedService<TelegramManager.Api.Publishing.PublicationWorker>();
 var allowedOrigin = Environment.GetEnvironmentVariable("MINIAPP_ORIGIN");
 if (!string.IsNullOrWhiteSpace(allowedOrigin))
     builder.Services.AddCors(o => o.AddPolicy("miniapp", p => p.WithOrigins(allowedOrigin).AllowAnyHeader().AllowAnyMethod()));
