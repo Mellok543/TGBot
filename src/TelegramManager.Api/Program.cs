@@ -11,6 +11,7 @@ var connectionString = Environment.GetEnvironmentVariable("DATABASE_URL")
 builder.Services.AddSingleton(new MySqlDataSourceBuilder(connectionString).Build());
 builder.Services.AddHttpClient();
 builder.Services.AddHostedService<TelegramManager.Api.Publishing.PublicationWorker>();
+builder.Services.AddHostedService<TelegramManager.Api.Notifications.NotificationWorker>();
 var allowedOrigin = Environment.GetEnvironmentVariable("MINIAPP_ORIGIN");
 if (!string.IsNullOrWhiteSpace(allowedOrigin))
     builder.Services.AddCors(o => o.AddPolicy("miniapp", p => p.WithOrigins(allowedOrigin).AllowAnyHeader().AllowAnyMethod()));
