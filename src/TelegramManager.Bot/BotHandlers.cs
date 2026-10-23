@@ -228,15 +228,22 @@ public sealed class BotHandlers(Database database)
     }
 
     private static readonly TimeSpan DisplayOffset = TimeSpan.FromHours(3);
-    private static InlineKeyboardMarkup Home() => new(new[]
+    private static InlineKeyboardMarkup Home()
     {
-        new[] { InlineKeyboardButton.WithCallbackData("📺 Мои каналы", "owner_home") },
-        new[] { InlineKeyboardButton.WithCallbackData("🛒 Покупка рекламы", "buyer_home") },
-        new[] { InlineKeyboardButton.WithCallbackData("🔎 Каталог каналов", "catalog") },
-        new[] { InlineKeyboardButton.WithCallbackData("📅 Мои размещения", "placements") },
-        new[] { InlineKeyboardButton.WithCallbackData("👤 Мой профиль", "profile") },
-        new[] { InlineKeyboardButton.WithCallbackData("⚙️ Настройки", "profile_settings") }
-    });
+        var rows = new List<InlineKeyboardButton[]>();
+        var miniAppUrl = Environment.GetEnvironmentVariable("MINIAPP_URL");
+        if (Uri.TryCreate(miniAppUrl,UriKind.Absolute,out var uri) && uri.Scheme==Uri.UriSchemeHttps)
+            rows.Add(new[] { new InlineKeyboardButton("🚀 Открыть приложение")
+            {
+                WebApp = new WebAppInfo { Url = uri.ToString() }
+            } });
+        // Legacy bot controls remain available until all write workflows move to Mini App.
+        rows.Add(new[] { InlineKeyboardButton.WithCallbackData("📺 Мои каналы", "owner_home") });
+        rows.Add(new[] { InlineKeyboardButton.WithCallbackData("🛒 Покупка рекламы", "buyer_home") });
+        rows.Add(new[] { InlineKeyboardButton.WithCallbackData("📅 Мои размещения", "placements") });
+        rows.Add(new[] { InlineKeyboardButton.WithCallbackData("👤 Мой профиль", "profile") });
+        return new InlineKeyboardMarkup(rows);
+    }
     private static InlineKeyboardMarkup ForRole(string? role) => Home();
     private static InlineKeyboardMarkup OwnerHome() => new(new[]
     {

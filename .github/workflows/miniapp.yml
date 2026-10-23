@@ -1,0 +1,28 @@
+name: Reklio Mini App checks
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+jobs:
+  api:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Build API
+        run: dotnet build src/TelegramManager.Api/TelegramManager.Api.csproj --configuration Release
+  miniapp:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install dependencies
+        working-directory: miniapp
+        run: npm install --no-audit --no-fund
+      - name: Type-check and build
+        working-directory: miniapp
+        run: npm run build
