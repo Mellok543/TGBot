@@ -50,6 +50,20 @@ fi
 # Only update the public UI once the API service has started.
 cp -a "$STAGE/web/." "$WEB_DIR/"
 systemctl is-active --quiet reklio-api.service
-curl --fail --silent --show-error --max-time 10 https://api.reklio.site/api/health
+echo "Waiting for Reklio API..."
+for attempt in $(seq 1 30); do
+  if curl --fail --silent --show-error --max-time 5 \
+    https://api.reklio.site/api/health >/dev/null 2>&1; then
+    echo "API is ready"
+    break
+  fi
+
+  if [[ "$attempt" -eq 30 ]]; then
+    echo "ERROR: API did not become ready"
+    exit 1
+  fi
+
+  sleep 2
+done
 echo
 echo "Reklio deployed successfully: $(git -C "$SOURCE" rev-parse --short HEAD)"
