@@ -21,12 +21,14 @@ public sealed class PublicationWorker(MySqlDataSource database, IHttpClientFacto
 
         var token = Environment.GetEnvironmentVariable("BOT_TOKEN");
         if (string.IsNullOrWhiteSpace(token)) throw new InvalidOperationException("BOT_TOKEN missing");
+        var allowTest = Environment.GetEnvironmentVariable("REKLIO_ALLOW_TEST_PUBLICATIONS") == "true";
+        log.LogInformation("Publication worker enabled; test-order publication permitted: {AllowTest}", allowTest);
         using var http = clients.CreateClient();
         while (!stoppingToken.IsCancellationRequested)
         {
             try
             {
-                await PublishOneAsync(http, token, stoppingToken);
+                await PublishOneAsync(http, token, allowTest, stoppingToken);
                 await DeleteOneAsync(http, token, stoppingToken);
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested) { break; }
@@ -35,7 +37,7 @@ public sealed class PublicationWorker(MySqlDataSource database, IHttpClientFacto
         }
     }
 
-    private async Task PublishOneAsync(HttpClient http, string token, CancellationToken ct)
+    private async Task PublishOneAsync(HttpClient http, string token, bool allowTest, CancellationToken ct)
     {
         await using var conn = await database.OpenConnectionAsync(ct);
         await using var tx = await conn.BeginTransactionAsync(ct);
@@ -47,10 +49,12 @@ public sealed class PublicationWorker(MySqlDataSource database, IHttpClientFacto
               AND EXISTS (
                 SELECT 1 FROM reklio_payment_attempts p
                 WHERE p.order_id=a.id AND p.status='Succeeded'
+                  AND (p.mode='live' OR (p.mode='test' AND @allowTest=1))
               )
               AND NOT EXISTS (SELECT 1 FROM reklio_publications j WHERE j.order_id=a.id)
             ORDER BY a.scheduled_at ASC LIMIT 1 FOR UPDATE
             """, conn, tx);
+        candidate.Parameters.AddWithValue("@allowTest", allowTest ? 1 : 0);
         long id, channel;
         string message;
         int? hours;
