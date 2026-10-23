@@ -63,15 +63,21 @@ public sealed class PublicationWorker(MySqlDataSource database, IHttpClientFacto
         candidate.Parameters.AddWithValue("@testChannelId", (object?)testChannelId ?? DBNull.Value);
         long id, channel;
         string message;
-        int? hours;
+        int? hours = null;
+        bool found;
         await using (var reader = await candidate.ExecuteReaderAsync(ct))
         {
-            if (!await reader.ReadAsync(ct)) { await tx.RollbackAsync(ct); return; }
-            id = reader.GetInt64(0);
-            channel = reader.GetInt64(1);
-            message = reader.GetString(2);
-            hours = reader.IsDBNull(3) ? null : reader.GetInt32(3);
+            found = await reader.ReadAsync(ct);
+            if (found)
+            {
+                id = reader.GetInt64(0);
+                channel = reader.GetInt64(1);
+                message = reader.GetString(2);
+                hours = reader.IsDBNull(3) ? null : reader.GetInt32(3);
+            }
         }
+        // Dispose the reader before rolling back or issuing another command.
+        if (!found) { await tx.RollbackAsync(ct); return; }
         await using var claim = new MySqlCommand("""
             INSERT INTO reklio_publications(order_id,channel_id,state,delete_after_hours)
             VALUES (@id,@channel,'Claimed',@hours)
@@ -147,11 +153,17 @@ public sealed class PublicationWorker(MySqlDataSource database, IHttpClientFacto
             """, conn, tx);
         select.Parameters.AddWithValue("@testChannelId", (object?)testChannelId ?? DBNull.Value);
         long id, channel, message;
+        bool found;
         await using (var reader = await select.ExecuteReaderAsync(ct))
         {
-            if (!await reader.ReadAsync(ct)) { await tx.RollbackAsync(ct); return; }
-            id = reader.GetInt64(0); channel = reader.GetInt64(1); message = reader.GetInt64(2);
+            found = await reader.ReadAsync(ct);
+            if (found)
+            {
+                id = reader.GetInt64(0); channel = reader.GetInt64(1); message = reader.GetInt64(2);
+            }
         }
+        // MySqlConnector cannot rollback a transaction while a reader is active.
+        if (!found) { await tx.RollbackAsync(ct); return; }
         await using var claim = new MySqlCommand("""
             UPDATE reklio_publications SET state='Deleting' WHERE order_id=@id AND state='Published'
             """, conn, tx);
