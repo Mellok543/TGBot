@@ -6,7 +6,7 @@ using Telegram.Bot.Types.Payments;
 
 namespace TelegramManager.Bot;
 
-public sealed class BotHandlers(Database database)
+public sealed class BotHandlers(Database database, YooKassaClient yooKassa)
 {
     private readonly System.Collections.Concurrent.ConcurrentDictionary<long, (long ChannelId, string Field)> _pending = new();
     private readonly System.Collections.Concurrent.ConcurrentDictionary<long, long> _pendingAds = new();
@@ -178,8 +178,13 @@ public sealed class BotHandlers(Database database)
                     }),cancellationToken:ct);
         }
         if (a.Advertiser == userId && a.Status == "AwaitingPayment")
-            await bot.SendMessage(chatId, $"💳 Заказ #{a.Id}: к оплате {a.Price:0.##} ₽. Реальная оплата пока недоступна. Тестовая оплата разрешена только тестовым аккаунтам.",
-                replyMarkup: new InlineKeyboardMarkup(new[] { new[] { InlineKeyboardButton.WithCallbackData("🧪 Тестовая оплата (без списания)", $"testpay:{a.Id}") } }), cancellationToken: ct);
+            await bot.SendMessage(chatId, $"💳 Заказ #{a.Id}: к оплате {a.Price:0.##} ₽. " +
+                (yooKassa.Enabled ? "Оплата через тестовый магазин ЮKassa (без реального списания)." : "ЮKassa не настроена."),
+                replyMarkup: yooKassa.Enabled ? new InlineKeyboardMarkup(new[]
+                {
+                    new[] { InlineKeyboardButton.WithCallbackData("💳 Создать тестовый платёж", $"yoopay:{a.Id}") },
+                    new[] { InlineKeyboardButton.WithCallbackData("🔄 Проверить оплату", $"yoocheck:{a.Id}") }
+                }) : null, cancellationToken: ct);
         if (a.Owner == userId && a.Status == "Pending")
             await bot.SendMessage(chatId, "Подтвердите размещение. Рекламодатель затем должен оплатить заказ; подтверждение не считается оплатой.", replyMarkup: new InlineKeyboardMarkup(new[]
             {
@@ -1060,6 +1065,65 @@ public sealed class BotHandlers(Database database)
                             $"⚖️ Новый спор #{reasonOrderId}: {reason}. Откройте /admin → Спорные заказы.", ct);
                 }
                 else await bot.SendMessage(origin.Chat.Id, "Не удалось открыть спор: заказ недоступен или спор уже открыт.", cancellationToken: ct);
+                break;
+            case string yooCreateData when yooCreateData.StartsWith("yoopay:") &&
+                long.TryParse(yooCreateData[7..],out var yooOrderId):
+                if(!yooKassa.Enabled)break;
+                var checkout=await database.GetOrCreateYooCheckoutAsync(yooOrderId,actor.Id,ct);
+                var payable=await database.GetAdRequestAsync(yooOrderId,ct);
+                if(checkout is null || payable is null || payable.Value.Advertiser!=actor.Id)break;
+                try
+                {
+                    var payment=checkout.Value;
+                    if(payment.PaymentId is null || payment.Url is null)
+                    {
+                        var created=await yooKassa.CreateAsync(yooOrderId,payable.Value.Price,payment.Key,ct);
+                        await database.SaveYooCheckoutAsync(yooOrderId,created.Id,created.Url,ct);
+                        payment=(payment.Key,created.Id,created.Url);
+                    }
+                    await bot.SendMessage(origin.Chat.Id,$"🧪 Тестовый платёж по заказу #{yooOrderId}: {payable.Value.Price:0.##} ₽. Реальные деньги не списываются.",
+                        replyMarkup:new InlineKeyboardMarkup(new[]
+                        {
+                            new[]{InlineKeyboardButton.WithUrl("💳 Оплатить в ЮKassa",payment.Url!)},
+                            new[]{InlineKeyboardButton.WithCallbackData("🔄 Проверить оплату",$"yoocheck:{yooOrderId}")}
+                        }),cancellationToken:ct);
+                }
+                catch(System.Net.Http.HttpRequestException ex)
+                {
+                    Console.Error.WriteLine($"YooKassa create payment failed for order {yooOrderId}: {ex.Message}");
+                    await bot.SendMessage(origin.Chat.Id,"ЮKassa временно недоступна. Попробуйте позже.",cancellationToken:ct);
+                }
+                break;
+            case string yooCheckData when yooCheckData.StartsWith("yoocheck:") &&
+                long.TryParse(yooCheckData[9..],out var yooCheckId):
+                if(!yooKassa.Enabled)break;
+                var saved=await database.GetYooPaymentForBuyerAsync(yooCheckId,actor.Id,ct);
+                if(saved is null)
+                {
+                    await bot.SendMessage(origin.Chat.Id,"Сначала создайте платёж в карточке заказа.",cancellationToken:ct);
+                    break;
+                }
+                try
+                {
+                    var state=await yooKassa.GetAsync(saved.Value.PaymentId,ct);
+                    if(state.Status=="succeeded" && state.Paid && state.Currency=="RUB" && state.Amount==saved.Value.Amount &&
+                        await database.CompleteYooTestCheckoutAsync(yooCheckId,actor.Id,saved.Value.PaymentId,state.Amount,ct))
+                    {
+                        await database.RecordOrderEventAsync(yooCheckId,actor.Id,"YooKassaTestPaid",saved.Value.PaymentId,ct);
+                        await bot.SendMessage(origin.Chat.Id,$"✅ ЮKassa подтвердила тестовую оплату заказа #{yooCheckId}. Публикация запланирована.",cancellationToken:ct);
+                        var paidOrder=await database.GetAdRequestAsync(yooCheckId,ct);
+                        if(paidOrder is not null)
+                            await database.EnqueueNotificationToUserAsync(yooCheckId,paidOrder.Value.Owner,
+                                $"🧪 Заказ #{yooCheckId} оплачен через тестовую ЮKassa.",ct);
+                    }
+                    else
+                        await bot.SendMessage(origin.Chat.Id,$"Статус платежа: {state.Status}. Если платёж завершён, откройте заказ и повторите проверку.",cancellationToken:ct);
+                }
+                catch(System.Net.Http.HttpRequestException ex)
+                {
+                    Console.Error.WriteLine($"YooKassa check failed for order {yooCheckId}: {ex.Message}");
+                    await bot.SendMessage(origin.Chat.Id,"Не удалось проверить платёж в ЮKassa. Повторите позже.",cancellationToken:ct);
+                }
                 break;
             case string testPaymentData when testPaymentData.StartsWith("testpay:") && long.TryParse(testPaymentData[8..], out var testPaymentOrderId):
                 if (await database.CompleteTestCheckoutAsync(testPaymentOrderId, actor.Id, ct))
