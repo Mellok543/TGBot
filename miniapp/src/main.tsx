@@ -217,6 +217,13 @@ function App() {
       .catch(e=>{if(active)setFinanceError(e instanceof Error?e.message:'Ошибка загрузки финансов');});
     return ()=>{active=false;};
   },[tab,retry]);
+  useEffect(() => {
+    if (tab !== 'orders') return;
+    let active=true;
+    const poll=() => get<Order[]>('/api/orders').then(data=>{if(active)setOrders(data);}).catch(()=>{});
+    const interval=window.setInterval(poll,15000);
+    return ()=>{active=false;window.clearInterval(interval);};
+  },[tab]);
   useEffect(() => { tg?.ready(); tg?.expand(); }, []);
   useEffect(() => {
     let active = true;
