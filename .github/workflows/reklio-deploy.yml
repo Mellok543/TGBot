@@ -14,7 +14,40 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  verify:
+    name: Build and validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: miniapp/package-lock.json
+      - name: Validate deployment script
+        run: bash -n deploy/reklio-deploy.sh
+      - name: Build API
+        run: dotnet publish src/TelegramManager.Api/TelegramManager.Api.csproj -c Release -o /tmp/reklio-api-verify
+      - name: Build Mini App
+        working-directory: miniapp
+        env:
+          VITE_API_URL: https://api.reklio.site
+        run: |
+          npm ci --no-audit --no-fund
+          npm run build
+      - name: Confirm migrations are versioned
+        run: |
+          test -f deploy/migrations/001_reklio_payments.sql
+          test -f deploy/migrations/002_reklio_publications.sql
+          echo "Database migrations require separate review and are NOT applied automatically."
   deploy:
+    needs: verify
     if: github.ref == 'refs/heads/feature/miniapp-typescript-foundation'
     runs-on: ubuntu-latest
     timeout-minutes: 15
