@@ -54,13 +54,18 @@ app.MapGet("/api/channels", async (HttpRequest req, MySqlDataSource db, Cancella
     if (search.Length > 80) return Results.BadRequest();
     var category = req.Query["category"].ToString();
     if (category.Length > 32) return Results.BadRequest();
-    var limit = int.TryParse(req.Query["limit"], out var n) ? Math.Clamp(n, 1, 30) : 20;
+    var limit = int.TryParse(req.Query["limit"], out var n) ? Math.Clamp(n, 1, 100) : 100;
     await using var cmd = db.CreateCommand("""
-        SELECT telegram_id,title,category,ad_price_rub,ad_description,username
-        FROM channels WHERE is_listed=TRUE
-          AND (@category='' OR category=@category)
-          AND (@search='' OR title LIKE @pattern)
-        ORDER BY connected_at DESC LIMIT @limit
+        SELECT c.telegram_id,c.title,c.category,c.ad_price_rub,c.ad_description,c.username,
+               (SELECT m.subscribers FROM channel_daily_metrics m
+                WHERE m.channel_id=c.telegram_id AND m.subscribers IS NOT NULL
+                ORDER BY m.day DESC LIMIT 1) AS subscribers,
+               (SELECT COALESCE(SUM(m.posts),0) FROM channel_daily_metrics m
+                WHERE m.channel_id=c.telegram_id AND m.day>=UTC_DATE()-INTERVAL 29 DAY) AS posts30d
+        FROM channels c WHERE c.is_listed=TRUE
+          AND (@category='' OR c.category=@category)
+          AND (@search='' OR c.title LIKE @pattern)
+        ORDER BY c.connected_at DESC LIMIT @limit
         """);
     cmd.Parameters.Add(new MySqlParameter("@category", category));
     cmd.Parameters.Add(new MySqlParameter("@search", search));
@@ -72,7 +77,9 @@ app.MapGet("/api/channels", async (HttpRequest req, MySqlDataSource db, Cancella
         channels.Add(new {
             id = reader.GetInt64(0), title = reader.GetString(1), category = reader.GetString(2),
             price = reader.GetDecimal(3), description = reader.IsDBNull(4) ? "" : reader.GetString(4),
-            username = reader.IsDBNull(5) ? null : reader.GetString(5)
+            username = reader.IsDBNull(5) ? null : reader.GetString(5),
+            subscribers = reader.IsDBNull(6) ? (int?)null : reader.GetInt32(6),
+            posts30d = reader.IsDBNull(7) ? 0L : reader.GetInt64(7)
         });
     return Results.Ok(channels);
 });
