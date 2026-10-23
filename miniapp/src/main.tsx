@@ -7,7 +7,7 @@ declare global { interface Window { Telegram?: { WebApp?: { initData: string; re
 
 type Rate = { id: number; hours: number; price: number };
 type Channel = { id: number; title: string; category: string; price: number; description: string; username: string | null };
-type Order = { id: number; channel: string; price: number; status: string; createdAt: string };
+type Order = { id: number; channel: string; price: number; status: string; createdAt: string; isOwner: boolean };
 type Mine = { id: number; title: string; listed: boolean; price: number };
 type Tab = 'catalog' | 'orders' | 'channels' | 'profile';
 const API = import.meta.env.VITE_API_URL || '';
@@ -63,6 +63,20 @@ function App() {
   const [search, setSearch] = useState('');
   const [channels, setChannels] = useState<Channel[]>([]);
   const [orders, setOrders] = useState<Order[]>([]);
+  const [processingOrder, setProcessingOrder] = useState<number | null>(null);
+  const [orderMessage, setOrderMessage] = useState('');
+  async function decideOrder(order: Order, decision: 'approve' | 'reject') {
+    if (processingOrder !== null) return;
+    setProcessingOrder(order.id); setOrderMessage('');
+    try {
+      const result = await post<{status:string}>('/api/orders/' + order.id + '/' + decision, {});
+      setOrders(previous => previous.map(item => item.id === order.id ? {...item, status: result.status} : item));
+      setOrderMessage(decision === 'approve' ? 'Заявка #' + order.id + ' одобрена' : 'Заявка #' + order.id + ' отклонена');
+    } catch (e) {
+      setOrderMessage(e instanceof Error ? e.message : 'Не удалось обработать заявку');
+      try { setOrders(await get<Order[]>('/api/orders')); } catch { /* Preserve the last known list. */ }
+    } finally { setProcessingOrder(null); }
+  }
   const [mine, setMine] = useState<Mine[]>([]);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
@@ -103,7 +117,7 @@ function App() {
       {error && <div className="notice">{error}<button onClick={()=>setSearch(s=>s+' ')}>Повторить</button></div>}
       {loading && <div className="muted loading"><RefreshCw size={16}/> Загрузка...</div>}
       {tab === 'catalog' && <section>{!loading && channels.length === 0 && !error && <div className="empty">Каналы не найдены. Попробуйте изменить запрос.</div>}{channels.map(c=><article className="card" key={c.id}><div className="cardTop"><div className="avatar">{c.title.slice(0,1).toUpperCase()}</div><div className="grow"><strong>{c.title}</strong><small>{c.category}</small></div><div className="price">{money(c.price)}</div></div>{c.description && <p className="description">{c.description}</p>}<button className="primary small" onClick={()=>openChannel(c)}>Заказать рекламу</button>{c.username && <button className="link" onClick={()=>tg?.openTelegramLink('https://t.me/'+c.username!.replace(/^@/,''))}>Открыть канал <ArrowUpRight size={15}/></button>}</article>)}</section>}
-      {tab === 'orders' && <section>{!loading && !orders.length && !error && <div className="empty">Пока нет заказов</div>}{orders.map(o=><article className="card" key={o.id}><div className="cardTop"><div className="grow"><strong>Заказ #{o.id}</strong><small>{o.channel}</small></div><div className="price">{money(o.price)}</div></div><span className="status">{o.status}</span></article>)}</section>}
+      {tab === 'orders' && <section>{orderMessage && <div className="notice">{orderMessage}</div>}{!loading && !orders.length && !error && <div className="empty">Пока нет заказов</div>}{orders.map(o=><article className="card" key={o.id}><div className="cardTop"><div className="grow"><strong>Заказ #{o.id}</strong><small>{o.channel} · {o.isOwner ? 'Входящая заявка' : 'Моя заявка'}</small></div><div className="price">{money(o.price)}</div></div><span className="status">{({Draft:'Черновик',Pending:'Ожидает согласования',AwaitingPayment:'Ожидает оплаты',Rejected:'Отклонена',Scheduled:'Запланирована',Publishing:'Публикуется',Published:'Опубликована'} as Record<string,string>)[o.status] || o.status}</span>{o.isOwner && o.status === 'Pending' && <div className="orderActions"><button className="primary small" disabled={processingOrder !== null} onClick={()=>decideOrder(o,'approve')}>{processingOrder === o.id ? 'Обработка...' : 'Одобрить'}</button><button className="secondary small" disabled={processingOrder !== null} onClick={()=>decideOrder(o,'reject')}>Отклонить</button></div>}</article>)}</section>}
       {tab === 'channels' && <section>{!loading && !mine.length && !error && <div className="empty">Каналы пока не подключены. Добавить первый канал можно через бота.</div>}{mine.map(c=><article className="card" key={c.id}><div className="cardTop"><div className="avatar">{c.title.slice(0,1)}</div><div className="grow"><strong>{c.title}</strong><small>{c.listed?'В каталоге':'Скрыт из каталога'}</small></div><div className="price">{money(c.price)}</div></div></article>)}</section>}
       {tab === 'profile' && <div className="card"><strong>Ваш кабинет</strong><p className="description">Вы вошли через Telegram. Настройки тарифов, создание заказов и платежи будут перенесены сюда на следующих этапах.</p></div>}
     </main>
