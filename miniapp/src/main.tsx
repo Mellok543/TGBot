@@ -6,6 +6,7 @@ import './style.css';
 declare global { interface Window { Telegram?: { WebApp?: { initData: string; ready(): void; expand(): void; colorScheme: string; openTelegramLink(url: string): void } } } }
 
 type Rate = { id: number; hours: number; price: number };
+type HistoryPoint = { day: string; subscribers: number | null; posts: number };
 type Channel = { id: number; title: string; category: string; price: number; description: string; username: string | null; subscribers: number | null; posts30d: number };
 type Order = { id: number; channel: string; price: number; status: string; createdAt: string; isOwner: boolean };
 type Mine = { id: number; title: string; listed: boolean; price: number };
@@ -32,6 +33,8 @@ function App() {
   const [tab, setTab] = useState<Tab>('catalog');
   const [selected, setSelected] = useState<Channel | null>(null);
   const [rates, setRates] = useState<Rate[]>([]);
+  const [history, setHistory] = useState<HistoryPoint[]>([]);
+  const [detailsLoading, setDetailsLoading] = useState(false);
   const [rateId, setRateId] = useState('');
   const [adText, setAdText] = useState('');
   const [day, setDay] = useState('');
@@ -41,9 +44,15 @@ function App() {
   const [busy, setBusy] = useState(false);
   const [bookingMessage, setBookingMessage] = useState('');
   async function openChannel(c: Channel) {
-    setSelected(c); setBookingMessage(''); setRates([]); setRateId('');
-    try { setRates(await get<Rate[]>('/api/channels/' + c.id + '/rates')); }
-    catch(e) { setBookingMessage(e instanceof Error ? e.message : 'Ошибка'); }
+    setSelected(c); setBookingMessage(''); setRates([]); setHistory([]); setRateId(''); setDetailsLoading(true);
+    const [ratesResult, historyResult] = await Promise.allSettled([
+      get<Rate[]>('/api/channels/' + c.id + '/rates'),
+      get<HistoryPoint[]>('/api/channels/' + c.id + '/history')
+    ]);
+    if (ratesResult.status === 'fulfilled') setRates(ratesResult.value);
+    else setBookingMessage(ratesResult.reason instanceof Error ? ratesResult.reason.message : 'Не удалось загрузить тарифы');
+    if (historyResult.status === 'fulfilled') setHistory(historyResult.value);
+    setDetailsLoading(false);
   }
   async function submitOrder() {
     if (!selected || !rateId || !adText.trim() || !day) {
@@ -152,7 +161,24 @@ function App() {
       {bookingMessage && <div className="notice">{bookingMessage}</div>}
       {selected && tab === 'catalog' && <div className="bookingOverlay"><div className="bookingPanel">
         <button className="back" onClick={()=>setSelected(null)}>← Назад в каталог</button>
-        <h2>{selected.title}</h2><p className="description">{selected.description || 'Рекламное размещение в Telegram-канале'}</p>
+        <div className="detailHeading"><div className="avatar">{selected.title.slice(0,1).toUpperCase()}</div><div><h2>{selected.title}</h2><span className="detailCategory">{selected.category}</span></div></div>
+        {selected.username && <button className="link" onClick={()=>tg?.openTelegramLink('https://t.me/'+selected.username!.replace(/^@/,''))}>Перейти в канал <ArrowUpRight size={15}/></button>}
+        <p className="description">{selected.description || 'Рекламное размещение в Telegram-канале'}</p>
+        <h3 className="detailSubtitle">Статистика канала</h3>
+        <div className="detailStats">
+          <div><small>Подписчики</small><strong>{selected.subscribers === null ? 'Нет данных' : selected.subscribers.toLocaleString('ru-RU')}</strong></div>
+          <div><small>Постов за 30 дней</small><strong>{selected.posts30d}</strong></div>
+        </div>
+        <h3 className="detailSubtitle">Динамика подписчиков · 30 дней</h3>
+        {detailsLoading ? <p className="description">Загрузка статистики...</p> : (() => {
+          const points = history.filter((p): p is HistoryPoint & {subscribers:number} => p.subscribers !== null);
+          if (points.length < 2) return <p className="description">Пока недостаточно измерений для графика.</p>;
+          const values = points.map(p=>p.subscribers);
+          const min = Math.min(...values), max = Math.max(...values);
+          const coordinates = points.map((p,i)=>`${(i/(points.length-1)*100).toFixed(2)},${(95-(p.subscribers-min)/Math.max(1,max-min)*85).toFixed(2)}`).join(' ');
+          return <div className="historyCard"><svg viewBox="0 0 100 100" preserveAspectRatio="none" role="img" aria-label="График числа подписчиков за последние 30 дней"><polyline points={coordinates} fill="none" stroke="#80b5ff" strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" vectorEffect="non-scaling-stroke"/></svg><div className="historyLabels"><span>{points[0].day}</span><span>{points[points.length-1].day}</span></div><small>От {values[0].toLocaleString('ru-RU')} до {values[values.length-1].toLocaleString('ru-RU')} подписчиков</small></div>;
+        })()}
+        <h3 className="detailSubtitle">Выберите тариф размещения</h3>
         <label className="field">Тариф<select value={rateId} onChange={e=>setRateId(e.target.value)}>
           <option value="">Выберите тариф</option>{rates.map(rate=><option key={rate.id} value={rate.id}>{rate.hours} ч — {money(rate.price)}</option>)}
         </select></label>
@@ -166,7 +192,7 @@ function App() {
       </div></div>}
       {error && <div className="notice">{error}<button onClick={()=>setRetry(n=>n+1)}>Повторить</button></div>}
       {loading && <div className="muted loading"><RefreshCw size={16}/> Загрузка...</div>}
-      {tab === 'catalog' && <section>{!loading && visibleChannels.length === 0 && !error && <div className="empty">Каналы не найдены. Попробуйте изменить запрос.</div>}{visibleChannels.map(c=><article className="card" key={c.id}><div className="cardTop"><div className="avatar">{c.title.slice(0,1).toUpperCase()}</div><div className="grow"><strong>{c.title}</strong><small>{c.category}</small></div><div className="price">{money(c.price)}</div></div><div className="channelStats"><span>Подписчики: <b>{c.subscribers === null ? "Нет данных" : c.subscribers.toLocaleString("ru-RU")}</b></span><span>Постов за 30 дней: <b>{c.posts30d}</b></span></div>{c.description && <p className="description">{c.description}</p>}<button className="primary small" onClick={()=>openChannel(c)}>Заказать рекламу</button>{c.username && <button className="link" onClick={()=>tg?.openTelegramLink('https://t.me/'+c.username!.replace(/^@/,''))}>Открыть канал <ArrowUpRight size={15}/></button>}</article>)}</section>}
+      {tab === 'catalog' && <section>{!loading && visibleChannels.length === 0 && !error && <div className="empty">Каналы не найдены. Попробуйте изменить запрос.</div>}{visibleChannels.map(c=><article className="card" key={c.id}><div className="cardTop"><div className="avatar">{c.title.slice(0,1).toUpperCase()}</div><div className="grow"><strong>{c.title}</strong><small>{c.category}</small></div><div className="price">{money(c.price)}</div></div><div className="channelStats"><span>Подписчики: <b>{c.subscribers === null ? "Нет данных" : c.subscribers.toLocaleString("ru-RU")}</b></span><span>Постов за 30 дней: <b>{c.posts30d}</b></span></div>{c.description && <p className="description">{c.description}</p>}<button className="primary small" onClick={()=>openChannel(c)}>Подробнее и заказать</button>{c.username && <button className="link" onClick={()=>tg?.openTelegramLink('https://t.me/'+c.username!.replace(/^@/,''))}>Открыть канал <ArrowUpRight size={15}/></button>}</article>)}</section>}
       {tab === 'orders' && <section>{orderMessage && <div className="notice">{orderMessage}</div>}{!loading && !orders.length && !error && <div className="empty">Пока нет заказов</div>}{orders.map(o=><article className="card" key={o.id}><div className="cardTop"><div className="grow"><strong>Заказ #{o.id}</strong><small>{o.channel} · {o.isOwner ? 'Входящая заявка' : 'Моя заявка'}</small></div><div className="price">{money(o.price)}</div></div><span className="status">{({Draft:'Черновик',Pending:'Ожидает согласования',AwaitingPayment:'Ожидает оплаты',Rejected:'Отклонена',Scheduled:'Запланирована',Publishing:'Публикуется',Published:'Опубликована'} as Record<string,string>)[o.status] || o.status}</span>{!o.isOwner && o.status === 'AwaitingPayment' && <div className="orderActions"><button className="primary small" disabled={processingOrder !== null} onClick={()=>payOrder(o)}>Оплатить (тест)</button><button className="secondary small" disabled={processingOrder !== null} onClick={()=>checkPayment(o)}>Проверить оплату</button></div>}{o.isOwner && o.status === 'Pending' && <div className="orderActions"><button className="primary small" disabled={processingOrder !== null} onClick={()=>decideOrder(o,'approve')}>{processingOrder === o.id ? 'Обработка...' : 'Одобрить'}</button><button className="secondary small" disabled={processingOrder !== null} onClick={()=>decideOrder(o,'reject')}>Отклонить</button></div>}</article>)}</section>}
       {tab === 'channels' && <section>{!loading && !mine.length && !error && <div className="empty">Каналы пока не подключены. Добавить первый канал можно через бота.</div>}{mine.map(c=><article className="card" key={c.id}><div className="cardTop"><div className="avatar">{c.title.slice(0,1)}</div><div className="grow"><strong>{c.title}</strong><small>{c.listed?'В каталоге':'Скрыт из каталога'}</small></div><div className="price">{money(c.price)}</div></div></article>)}</section>}
       {tab === 'profile' && <div className="card"><strong>Ваш кабинет</strong><p className="description">Вы вошли через Telegram. Настройки тарифов, создание заказов и платежи будут перенесены сюда на следующих этапах.</p></div>}
