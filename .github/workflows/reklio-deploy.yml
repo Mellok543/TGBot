@@ -2,6 +2,9 @@ name: Deploy Reklio to VPS
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - feature/miniapp-typescript-foundation
 
 permissions:
   contents: read
