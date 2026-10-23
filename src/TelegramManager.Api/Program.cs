@@ -143,15 +143,93 @@ app.MapGet("/api/finance", async (HttpRequest req, MySqlDataSource db, Cancellat
         commissionPercent=configuredRate,readyNet=ready,operations,
         note="Сводка по всем оплаченным нетестовым заказам; история показывает последние 100. Комиссия 5% оплачивается покупателем сверх цены продавца. Выплаты не инициируются."});
 });
-bool IsDisputeAdmin(long userId) =>
+bool IsRootAdmin(long userId) =>
     (Environment.GetEnvironmentVariable("REKLIO_ADMIN_IDS") ?? "")
         .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
         .Any(part => long.TryParse(part,out var adminId) && adminId==userId);
 
+async Task<string?> StaffRole(MySqlDataSource db,long userId,CancellationToken ct)
+{
+    if(IsRootAdmin(userId)) return "owner";
+    await using var cmd=db.CreateCommand("SELECT role FROM reklio_staff WHERE telegram_id=@id");
+    cmd.Parameters.Add(new MySqlParameter("@id",userId));
+    return (string?)await cmd.ExecuteScalarAsync(ct);
+}
+app.MapGet("/api/admin/staff",async(HttpRequest req,MySqlDataSource db,CancellationToken ct) =>
+{
+    if(Authorized(req) is not long uid) return Results.Unauthorized();
+    if(await StaffRole(db,uid,ct) is not ("owner" or "admin")) return Results.Forbid();
+    await using var cmd=db.CreateCommand("SELECT telegram_id,role,granted_by,created_at FROM reklio_staff ORDER BY created_at DESC LIMIT 100");
+    var staff=new List<object>();
+    await using var reader=await cmd.ExecuteReaderAsync(ct);
+    while(await reader.ReadAsync(ct)) staff.Add(new {id=reader.GetInt64(0),role=reader.GetString(1),grantedBy=reader.GetInt64(2),createdAt=reader.GetDateTime(3)});
+    return Results.Ok(staff);
+});
+app.MapPost("/api/admin/staff",async(HttpRequest req,MySqlDataSource db,CancellationToken ct) =>
+{
+    if(Authorized(req) is not long uid) return Results.Unauthorized();
+    var role=await StaffRole(db,uid,ct);
+    if(role is not ("owner" or "admin")) return Results.Forbid();
+    var input=await req.ReadFromJsonAsync<StaffInput>(cancellationToken:ct);
+    if(input is null || input.TelegramId<=0 || input.TelegramId==uid ||
+       input.Role is not ("admin" or "moderator") || IsRootAdmin(input.TelegramId) ||
+       (input.Role=="admin" && role!="owner"))
+        return Results.BadRequest(new {error="Недопустимый пользователь или роль"});
+    await using var conn=await db.OpenConnectionAsync(ct);
+    await using var tx=await conn.BeginTransactionAsync(ct);
+    await using var cmd=new MySqlCommand("""
+      INSERT INTO reklio_staff(telegram_id,role,granted_by) VALUES(@target,@role,@actor)
+      ON DUPLICATE KEY UPDATE role=VALUES(role),granted_by=VALUES(granted_by)
+      """,conn,tx);
+    cmd.Parameters.AddWithValue("@target",input.TelegramId);
+    cmd.Parameters.AddWithValue("@role",input.Role);
+    cmd.Parameters.AddWithValue("@actor",uid);
+    await cmd.ExecuteNonQueryAsync(ct);
+    await using var audit=new MySqlCommand("INSERT INTO reklio_admin_audit(actor_id,action,target_id,details) VALUES(@actor,'StaffGranted',@target,@role)",conn,tx);
+    audit.Parameters.AddWithValue("@actor",uid);
+    audit.Parameters.AddWithValue("@target",input.TelegramId);
+    audit.Parameters.AddWithValue("@role",input.Role);
+    await audit.ExecuteNonQueryAsync(ct);
+    await tx.CommitAsync(ct);
+    return Results.Ok(new {id=input.TelegramId,role=input.Role});
+});
+app.MapPost("/api/admin/staff/{staffId:long}/revoke",async(long staffId,HttpRequest req,MySqlDataSource db,CancellationToken ct) =>
+{
+    if(Authorized(req) is not long uid) return Results.Unauthorized();
+    var role=await StaffRole(db,uid,ct);
+    if(role is not ("owner" or "admin")) return Results.Forbid();
+    if(staffId<=0 || staffId==uid || IsRootAdmin(staffId)) return Results.BadRequest();
+    await using var conn=await db.OpenConnectionAsync(ct);
+    await using var tx=await conn.BeginTransactionAsync(ct);
+    await using var cmd=new MySqlCommand("DELETE FROM reklio_staff WHERE telegram_id=@id AND (@owner=1 OR role='moderator')",conn,tx);
+    cmd.Parameters.AddWithValue("@id",staffId);
+    cmd.Parameters.AddWithValue("@owner",role=="owner"?1:0);
+    if(await cmd.ExecuteNonQueryAsync(ct)!=1){await tx.RollbackAsync(ct);return Results.NotFound();}
+    await using var audit=new MySqlCommand("INSERT INTO reklio_admin_audit(actor_id,action,target_id) VALUES(@actor,'StaffRevoked',@target)",conn,tx);
+    audit.Parameters.AddWithValue("@actor",uid);audit.Parameters.AddWithValue("@target",staffId);
+    await audit.ExecuteNonQueryAsync(ct);
+    await tx.CommitAsync(ct);
+    return Results.Ok(new {removed=true});
+});
+app.MapGet("/api/admin/overview",async(HttpRequest req,MySqlDataSource db,CancellationToken ct) =>
+{
+    if(Authorized(req) is not long uid) return Results.Unauthorized();
+    if(await StaffRole(db,uid,ct) is null) return Results.Forbid();
+    await using var cmd=db.CreateCommand("""
+      SELECT (SELECT COUNT(*) FROM channels),
+             (SELECT COUNT(*) FROM channels WHERE is_listed=TRUE),
+             (SELECT COUNT(*) FROM ad_requests),
+             (SELECT COUNT(*) FROM ad_requests WHERE status='Disputed'),
+             (SELECT COUNT(*) FROM ad_requests WHERE status IN ('PublishFailed','DeleteFailed'))
+      """);
+    await using var reader=await cmd.ExecuteReaderAsync(ct);
+    await reader.ReadAsync(ct);
+    return Results.Ok(new {channels=reader.GetInt64(0),listed=reader.GetInt64(1),orders=reader.GetInt64(2),openDisputes=reader.GetInt64(3),failedPublications=reader.GetInt64(4)});
+});
 app.MapGet("/api/admin/disputes", async (HttpRequest req,MySqlDataSource db,CancellationToken ct) =>
 {
     if(Authorized(req) is not long userId) return Results.Unauthorized();
-    if(!IsDisputeAdmin(userId)) return Results.Forbid();
+    if(await StaffRole(db,userId,ct) is null) return Results.Forbid();
     await using var cmd=db.CreateCommand("""
         SELECT a.id,c.title,a.price_rub,a.content_text,a.dispute_reason,
                a.disputed_at,a.status,a.dispute_resolution,a.payment_status,
@@ -892,6 +970,7 @@ app.MapPost("/api/orders/{orderId:long}/payment/check", async (long orderId, Htt
 app.Run();
 
 record CreateOrderInput(long ChannelId, string Text);
+record StaffInput(long TelegramId,string Role);
 record ResolveDisputeInput(string Decision);
 record OpenDisputeInput(string Reason);
 record RescheduleInput(DateTimeOffset ScheduledAt);
