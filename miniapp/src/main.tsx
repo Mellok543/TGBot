@@ -8,6 +8,8 @@ declare global { interface Window { Telegram?: { WebApp?: { initData: string; re
 type Rate = { id: number; hours: number; price: number };
 type HistoryPoint = { day: string; subscribers: number | null; posts: number };
 type Channel = { id: number; title: string; category: string; price: number; description: string; username: string | null; subscribers: number | null; posts30d: number };
+type StaffMember={id:number;role:string;grantedBy:number;createdAt:string};
+type AdminOverview={channels:number;listed:number;orders:number;openDisputes:number;failedPublications:number};
 type AdminDispute = {id:number;channel:string;price:number;text:string;reason:string;openedAt:string|null;status:string;resolution:string|null;paymentStatus:string;isTest:boolean;payoutStatus:string};
 type DealInfo = {orderId:number;sellerPrice:number;serviceFee:number;total:number;status:string;paymentStatus:string;payoutStatus:string;isTest:boolean;isSeller:boolean;providerDealActive:boolean;message:string};
 type FinanceOperation = {id:number;channel:string;amount:number;commission:number;net:number;status:string;payoutStatus:string;publishedAt:string|null;eligibleAt:string|null};
@@ -42,6 +44,11 @@ function App() {
   const [adminBusy, setAdminBusy] = useState<number | null>(null);
   const [adminError, setAdminError] = useState('');
   const [adminOpen, setAdminOpen] = useState(false);
+  const [adminRole,setAdminRole]=useState<string|null>(null);
+  const [staff,setStaff]=useState<StaffMember[]>([]);
+  const [staffId,setStaffId]=useState('');
+  const [staffRole,setStaffRole]=useState('moderator');
+  const [overview,setOverview]=useState<AdminOverview|null>(null);
   const [isDisputeAdmin, setIsDisputeAdmin] = useState(false);
   const [selected, setSelected] = useState<Channel | null>(null);
   const [rates, setRates] = useState<Rate[]>([]);
@@ -261,8 +268,19 @@ function App() {
   },[tab]);
   async function loadAdminDisputes(){
     setAdminError('');
-    try{setAdminDisputes(await get<AdminDispute[]>('/api/admin/disputes'));setAdminOpen(true);}
+    try{const [disputes,stats]=await Promise.all([get<AdminDispute[]>('/api/admin/disputes'),get<AdminOverview>('/api/admin/overview')]);setAdminDisputes(disputes);setOverview(stats);if(adminRole==='owner'||adminRole==='admin')setStaff(await get<StaffMember[]>('/api/admin/staff'));setAdminOpen(true);}
     catch(e){setAdminError(e instanceof Error?e.message:'Доступ к спорам недоступен');}
+  }
+  async function saveStaff() {
+    if(!/^\\d+$/.test(staffId)){setAdminError('Укажи числовой Telegram ID');return;}
+    setAdminError('');
+    try{await post('/api/admin/staff',{telegramId:Number(staffId),role:staffRole});setStaffId('');setStaff(await get<StaffMember[]>('/api/admin/staff'));}
+    catch(e){setAdminError(e instanceof Error?e.message:'Не удалось изменить роль');}
+  }
+  async function revokeStaff(id:number) {
+    setAdminError('');
+    try{await post('/api/admin/staff/'+id+'/revoke',{});setStaff(await get<StaffMember[]>('/api/admin/staff'));}
+    catch(e){setAdminError(e instanceof Error?e.message:'Не удалось отозвать роль');}
   }
   async function resolveAdminDispute(id:number,decision:'RefundRecommended'|'PayoutRecommended'){
     if(adminBusy!==null)return;
@@ -271,7 +289,7 @@ function App() {
     catch(e){setAdminError(e instanceof Error?e.message:'Не удалось сохранить решение');}
     finally{setAdminBusy(null);}
   }
-  useEffect(() => { tg?.ready(); tg?.expand(); get<{id:number;isDisputeAdmin:boolean}>('/api/me').then(me=>setIsDisputeAdmin(me.isDisputeAdmin)).catch(()=>setIsDisputeAdmin(false)); }, []);
+  useEffect(() => { tg?.ready(); tg?.expand(); get<{id:number;isDisputeAdmin:boolean;adminRole:string|null}>('/api/me').then(me=>{setIsDisputeAdmin(me.isDisputeAdmin);setAdminRole(me.adminRole);}).catch(()=>setIsDisputeAdmin(false)); }, []);
   useEffect(() => {
     let active = true;
     setLoading(true); setError('');
@@ -363,7 +381,7 @@ function App() {
         {sellerMessage && <div className="notice">{sellerMessage}</div>}
         <button className="primary" disabled={sellerBusy} onClick={saveSellerRate}>{sellerBusy?'Сохранение...':'Сохранить тариф'}</button>
       </div></div>}
-      {tab === 'profile' && <section>{isDisputeAdmin&&<button className="secondary sellerToggle" onClick={loadAdminDisputes}>Панель модерации споров</button>}{adminError&&<div className="notice">{adminError}</div>}{adminOpen&&adminDisputes&&<div className="sellerDashboard"><h3>Споры на рассмотрении</h3>{adminDisputes.length===0&&<p>Обращений нет</p>}{adminDisputes.map(d=><article className="card" key={d.id}><strong>Заказ #{d.id} · {d.channel}</strong><p className="description">Реклама: {d.text}</p><p className="description">Причина: {d.reason}</p><p className="description">{d.isTest?'Тестовый заказ':'Заказ'} · {d.status==='Disputed'?'Ожидает решения':'Решение принято'}</p>{d.status==='Disputed'&&<div className="orderActions"><button className="secondary small" disabled={adminBusy!==null} onClick={()=>resolveAdminDispute(d.id,'RefundRecommended')}>Рекомендовать возврат</button><button className="secondary small" disabled={adminBusy!==null} onClick={()=>resolveAdminDispute(d.id,'PayoutRecommended')}>Рекомендовать выплату</button></div>}</article>)}</div>}<div className="sellerDashboard"><h3>Финансы продавца</h3>{financeError && <div className="notice">{financeError}<button onClick={()=>setRetry(n=>n+1)}>Повторить</button></div>}{finance ? <><div className="dashboardGrid"><div><small>В обработке</small><strong>{money(finance.pending)}</strong></div><div><small>На проверке выплаты</small><strong>{money(finance.readyForReview)}</strong></div><div><small>К выплате продавцу*</small><strong>{money(finance.readyNet)}</strong></div><div><small>Выплачено (статус)</small><strong>{money(finance.paid)}</strong></div><div><small>Заблокировано</small><strong>{money(finance.blocked)}</strong></div><div><small>Возвраты</small><strong>{money(finance.refunded)}</strong></div></div><p>Сервисный сбор Reklio оплачивает покупатель сверх цены размещения. *Предварительный расчёт, не подтверждение доступного баланса.</p><p>{finance.note}</p></> : !financeError && <p>Загрузка данных...</p>}</div><h3 className="detailSubtitle">История начислений</h3>{finance && finance.operations.length===0 && <div className="empty">Подтверждённых нетестовых платежей пока нет</div>}{finance?.operations.map(op=><article className="card" key={op.id}><div className="cardTop"><div className="grow"><strong>Заказ #{op.id}</strong><small>{op.channel}</small></div><div className="price">{money(op.net)}</div></div><p className="description">Цена размещения {money(op.amount)} · сбор покупателя {money(op.commission)} · продавцу {money(op.net)}</p><span className="status">{({OnHold:'Удерживается',AwaitingVerification:'Проверка размещения',ReadyForManualReview:'Ожидает ручной проверки',Blocked:'Заблокировано',Paid:'Выплачено',Refunded:'Возвращено'} as Record<string,string>)[op.payoutStatus]||op.payoutStatus}</span>{op.publishedAt && <p className="description">Опубликовано: {new Date(op.publishedAt.endsWith('Z')?op.publishedAt:op.publishedAt+'Z').toLocaleString('ru-RU')}</p>}</article>)}</section>}
+      {tab === 'profile' && <section>{isDisputeAdmin&&<button className="secondary sellerToggle" onClick={loadAdminDisputes}>Панель модерации споров</button>}{adminError&&<div className="notice">{adminError}</div>}{adminOpen&&adminDisputes&&<div className="sellerDashboard"><h3>Администрирование Reklio</h3>{overview&&<div className="dashboardGrid"><div><small>Всего каналов</small><strong>{overview.channels}</strong></div><div><small>В каталоге</small><strong>{overview.listed}</strong></div><div><small>Всего заказов</small><strong>{overview.orders}</strong></div><div><small>Открытые споры</small><strong>{overview.openDisputes}</strong></div><div><small>Ошибки размещений</small><strong>{overview.failedPublications}</strong></div></div>}{(adminRole==='owner'||adminRole==='admin')&&<><h3 className="detailSubtitle">Команда Reklio</h3><label className="field">Telegram ID сотрудника<input type="text" inputMode="numeric" value={staffId} onChange={e=>setStaffId(e.target.value)} placeholder="123456789"/></label><label className="field">Роль<select value={staffRole} onChange={e=>setStaffRole(e.target.value)}><option value="moderator">Модератор</option>{adminRole==='owner'&&<option value="admin">Администратор</option>}</select></label><button className="primary small" onClick={saveStaff}>Добавить или изменить роль</button>{staff.map(person=><div className="sellerRate" key={person.id}><div><strong>{person.id}</strong><small>{person.role==='admin'?'Администратор':'Модератор'}</small></div><button className="secondary small" onClick={()=>revokeStaff(person.id)}>Отозвать</button></div>)}</>}<h3 className="detailSubtitle">Споры на рассмотрении</h3>{adminDisputes.length===0&&<p>Обращений нет</p>}{adminDisputes.map(d=><article className="card" key={d.id}><strong>Заказ #{d.id} · {d.channel}</strong><p className="description">Реклама: {d.text}</p><p className="description">Причина: {d.reason}</p><p className="description">{d.isTest?'Тестовый заказ':'Заказ'} · {d.status==='Disputed'?'Ожидает решения':'Решение принято'}</p>{d.status==='Disputed'&&<div className="orderActions"><button className="secondary small" disabled={adminBusy!==null} onClick={()=>resolveAdminDispute(d.id,'RefundRecommended')}>Рекомендовать возврат</button><button className="secondary small" disabled={adminBusy!==null} onClick={()=>resolveAdminDispute(d.id,'PayoutRecommended')}>Рекомендовать выплату</button></div>}</article>)}</div>}<div className="sellerDashboard"><h3>Финансы продавца</h3>{financeError && <div className="notice">{financeError}<button onClick={()=>setRetry(n=>n+1)}>Повторить</button></div>}{finance ? <><div className="dashboardGrid"><div><small>В обработке</small><strong>{money(finance.pending)}</strong></div><div><small>На проверке выплаты</small><strong>{money(finance.readyForReview)}</strong></div><div><small>К выплате продавцу*</small><strong>{money(finance.readyNet)}</strong></div><div><small>Выплачено (статус)</small><strong>{money(finance.paid)}</strong></div><div><small>Заблокировано</small><strong>{money(finance.blocked)}</strong></div><div><small>Возвраты</small><strong>{money(finance.refunded)}</strong></div></div><p>Сервисный сбор Reklio оплачивает покупатель сверх цены размещения. *Предварительный расчёт, не подтверждение доступного баланса.</p><p>{finance.note}</p></> : !financeError && <p>Загрузка данных...</p>}</div><h3 className="detailSubtitle">История начислений</h3>{finance && finance.operations.length===0 && <div className="empty">Подтверждённых нетестовых платежей пока нет</div>}{finance?.operations.map(op=><article className="card" key={op.id}><div className="cardTop"><div className="grow"><strong>Заказ #{op.id}</strong><small>{op.channel}</small></div><div className="price">{money(op.net)}</div></div><p className="description">Цена размещения {money(op.amount)} · сбор покупателя {money(op.commission)} · продавцу {money(op.net)}</p><span className="status">{({OnHold:'Удерживается',AwaitingVerification:'Проверка размещения',ReadyForManualReview:'Ожидает ручной проверки',Blocked:'Заблокировано',Paid:'Выплачено',Refunded:'Возвращено'} as Record<string,string>)[op.payoutStatus]||op.payoutStatus}</span>{op.publishedAt && <p className="description">Опубликовано: {new Date(op.publishedAt.endsWith('Z')?op.publishedAt:op.publishedAt+'Z').toLocaleString('ru-RU')}</p>}</article>)}</section>}
     </main>
     <nav>{tabs.map(({id,label,icon:Icon})=><button key={id} className={tab===id?'active':''} onClick={()=>setTab(id)}><Icon size={21}/><span>{label}</span></button>)}</nav>
   </div>;
