@@ -88,6 +88,19 @@ jobs:
           ssh -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=15 \
             -p "$PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
             'sudo -n /usr/local/sbin/reklio-deploy'
+      - name: Verify public Mini App assets
+        run: |
+          set -euo pipefail
+          html="$(curl --fail --silent --show-error --max-time 15 https://reklio.site/)"
+          for ext in js css; do
+            asset="$(printf '%s' "$html" | grep -oE '/assets/[^" ]+\\.'"$ext" | head -n 1)"
+            test -n "$asset"
+            content_type="$(curl --fail --silent --show-error --max-time 15 -o /dev/null -w '%{content_type}' "https://reklio.site$asset")"
+            case "$ext:$content_type" in
+              js:*javascript*|css:text/css*) echo "$ext asset OK: $content_type" ;;
+              *) echo "Incorrect $ext content type: $content_type" >&2; exit 1 ;;
+            esac
+          done
       - name: Verify public API
         run: |
           set -euo pipefail
