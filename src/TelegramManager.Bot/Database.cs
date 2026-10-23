@@ -13,7 +13,7 @@ public sealed class Database(string connectionString) : IAsyncDisposable
         await using var connection = await _source.OpenConnectionAsync(ct);
         Console.WriteLine($"[Startup] MariaDB connected in {startupTimer.ElapsedMilliseconds} ms.");
         // Bump this version when adding or changing any schema migration below.
-        const int schemaVersion = 2;
+        const int schemaVersion = 3;
         await using (var create = new MySqlCommand("""
             CREATE TABLE IF NOT EXISTS bot_schema_version (
                 id TINYINT NOT NULL PRIMARY KEY,
@@ -228,6 +228,17 @@ public sealed class Database(string connectionString) : IAsyncDisposable
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
             """,connection))
             await seen.ExecuteNonQueryAsync(ct);
+        await using (var payments = new MySqlCommand("""
+            CREATE TABLE IF NOT EXISTS yookassa_test_payments (
+                order_id BIGINT NOT NULL PRIMARY KEY,
+                payment_id VARCHAR(64) NULL UNIQUE,
+                request_key VARCHAR(64) NOT NULL UNIQUE,
+                checkout_url TEXT NULL,
+                created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (order_id) REFERENCES ad_requests(id)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+            """,connection))
+            await payments.ExecuteNonQueryAsync(ct);
         await using (var stamp = new MySqlCommand("""
             INSERT INTO bot_schema_version(id,version) VALUES (1,@version)
             ON DUPLICATE KEY UPDATE version=VALUES(version)
@@ -1438,6 +1449,78 @@ public sealed class Database(string connectionString) : IAsyncDisposable
         return (reader.IsDBNull(0)?null:reader.GetInt32(0),
             reader.IsDBNull(1)?null:reader.GetInt32(1),
             reader.GetInt32(2),reader.GetInt32(3),reader.GetInt32(4));
+    }
+
+    public async Task<(string Key,string? PaymentId,string? Url)?> GetOrCreateYooCheckoutAsync(long orderId,long buyerId,CancellationToken ct)
+    {
+        await using var connection=await _source.OpenConnectionAsync(ct);
+        await using var tx=await connection.BeginTransactionAsync(ct);
+        await using var insert=new MySqlCommand("""
+            INSERT IGNORE INTO yookassa_test_payments(order_id,request_key)
+            SELECT id,UUID() FROM ad_requests
+            WHERE id=@order AND advertiser_id=@buyer AND status='AwaitingPayment'
+              AND scheduled_at>UTC_TIMESTAMP() AND price_rub>0
+            """,connection,tx);
+        insert.Parameters.Add(new MySqlParameter("@order",orderId));
+        insert.Parameters.Add(new MySqlParameter("@buyer",buyerId));
+        await insert.ExecuteNonQueryAsync(ct);
+        await using var read=new MySqlCommand("""
+            SELECT p.request_key,p.payment_id,p.checkout_url
+            FROM yookassa_test_payments p JOIN ad_requests a ON a.id=p.order_id
+            WHERE p.order_id=@order AND a.advertiser_id=@buyer AND a.status='AwaitingPayment'
+            """,connection,tx);
+        read.Parameters.Add(new MySqlParameter("@order",orderId));
+        read.Parameters.Add(new MySqlParameter("@buyer",buyerId));
+        await using var reader=await read.ExecuteReaderAsync(ct);
+        (string Key,string? PaymentId,string? Url)? result=null;
+        if(await reader.ReadAsync(ct))
+            result=(reader.GetString(0),reader.IsDBNull(1)?null:reader.GetString(1),
+                reader.IsDBNull(2)?null:reader.GetString(2));
+        await reader.DisposeAsync();
+        await tx.CommitAsync(ct);
+        return result;
+    }
+
+    public async Task SaveYooCheckoutAsync(long orderId,string paymentId,string url,CancellationToken ct)
+    {
+        await using var cmd=_source.CreateCommand("""
+            UPDATE yookassa_test_payments SET payment_id=@payment,checkout_url=@url
+            WHERE order_id=@order AND (payment_id IS NULL OR payment_id=@payment)
+            """);
+        cmd.Parameters.Add(new MySqlParameter("@order",orderId));
+        cmd.Parameters.Add(new MySqlParameter("@payment",paymentId));
+        cmd.Parameters.Add(new MySqlParameter("@url",url));
+        await cmd.ExecuteNonQueryAsync(ct);
+    }
+
+    public async Task<(string PaymentId,decimal Amount)?> GetYooPaymentForBuyerAsync(long orderId,long buyerId,CancellationToken ct)
+    {
+        await using var cmd=_source.CreateCommand("""
+            SELECT p.payment_id,a.price_rub FROM yookassa_test_payments p
+            JOIN ad_requests a ON a.id=p.order_id
+            WHERE a.id=@order AND a.advertiser_id=@buyer AND a.status='AwaitingPayment'
+              AND p.payment_id IS NOT NULL
+            """);
+        cmd.Parameters.Add(new MySqlParameter("@order",orderId));
+        cmd.Parameters.Add(new MySqlParameter("@buyer",buyerId));
+        await using var reader=await cmd.ExecuteReaderAsync(ct);
+        return await reader.ReadAsync(ct)?(reader.GetString(0),reader.GetDecimal(1)):null;
+    }
+
+    public async Task<bool> CompleteYooTestCheckoutAsync(long orderId,long buyerId,string paymentId,decimal amount,CancellationToken ct)
+    {
+        await using var cmd=_source.CreateCommand("""
+            UPDATE ad_requests a JOIN yookassa_test_payments p ON p.order_id=a.id
+            SET a.status='Scheduled',a.paid_confirmed=TRUE,a.payment_status='TestPaid',
+                a.is_test_order=TRUE,a.payout_status='NotEligible'
+            WHERE a.id=@order AND a.advertiser_id=@buyer AND a.status='AwaitingPayment'
+              AND a.scheduled_at>UTC_TIMESTAMP() AND a.price_rub=@amount AND p.payment_id=@payment
+            """);
+        cmd.Parameters.Add(new MySqlParameter("@order",orderId));
+        cmd.Parameters.Add(new MySqlParameter("@buyer",buyerId));
+        cmd.Parameters.Add(new MySqlParameter("@payment",paymentId));
+        cmd.Parameters.Add(new MySqlParameter("@amount",amount));
+        return await cmd.ExecuteNonQueryAsync(ct)==1;
     }
 
 }
