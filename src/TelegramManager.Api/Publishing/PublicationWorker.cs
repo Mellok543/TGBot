@@ -39,10 +39,9 @@ public sealed class PublicationWorker(MySqlDataSource database, IHttpClientFacto
     {
         await using var conn = await database.OpenConnectionAsync(ct);
         await using var tx = await conn.BeginTransactionAsync(ct);
-        // Claim before sending. Never automatically resend a claimed job after a crash.
-        await using var claim = new MySqlCommand("""
-            INSERT IGNORE INTO reklio_publications (order_id,channel_id,state,delete_after_hours)
-            SELECT a.id,a.channel_id,'Claimed',a.delete_after_hours
+        // Lock the candidate order and claim exactly that order in the same transaction.
+        await using var candidate = new MySqlCommand("""
+            SELECT a.id,a.channel_id,a.content_text,a.delete_after_hours
             FROM ad_requests a
             WHERE a.status='Scheduled' AND a.scheduled_at<=UTC_TIMESTAMP()
               AND EXISTS (
@@ -50,24 +49,27 @@ public sealed class PublicationWorker(MySqlDataSource database, IHttpClientFacto
                 WHERE p.order_id=a.id AND p.status='Succeeded'
               )
               AND NOT EXISTS (SELECT 1 FROM reklio_publications j WHERE j.order_id=a.id)
-            ORDER BY a.scheduled_at ASC LIMIT 1
-            """, conn, tx);
-        var inserted = await claim.ExecuteNonQueryAsync(ct);
-        if (inserted == 0) { await tx.RollbackAsync(ct); return; }
-
-        await using var get = new MySqlCommand("""
-            SELECT j.order_id,j.channel_id,a.content_text
-            FROM reklio_publications j JOIN ad_requests a ON a.id=j.order_id
-            WHERE j.state='Claimed' AND a.status='Scheduled'
-            ORDER BY j.claimed_at DESC LIMIT 1 FOR UPDATE
+            ORDER BY a.scheduled_at ASC LIMIT 1 FOR UPDATE
             """, conn, tx);
         long id, channel;
         string message;
-        await using (var reader = await get.ExecuteReaderAsync(ct))
+        int? hours;
+        await using (var reader = await candidate.ExecuteReaderAsync(ct))
         {
             if (!await reader.ReadAsync(ct)) { await tx.RollbackAsync(ct); return; }
-            id = reader.GetInt64(0); channel = reader.GetInt64(1); message = reader.GetString(2);
+            id = reader.GetInt64(0);
+            channel = reader.GetInt64(1);
+            message = reader.GetString(2);
+            hours = reader.IsDBNull(3) ? null : reader.GetInt32(3);
         }
+        await using var claim = new MySqlCommand("""
+            INSERT INTO reklio_publications(order_id,channel_id,state,delete_after_hours)
+            VALUES (@id,@channel,'Claimed',@hours)
+            """, conn, tx);
+        claim.Parameters.AddWithValue("@id", id);
+        claim.Parameters.AddWithValue("@channel", channel);
+        claim.Parameters.AddWithValue("@hours", (object?)hours ?? DBNull.Value);
+        await claim.ExecuteNonQueryAsync(ct);
         await using var transition = new MySqlCommand("""
             UPDATE ad_requests SET status='Publishing' WHERE id=@id AND status='Scheduled';
             UPDATE reklio_publications SET state='Sending' WHERE order_id=@id AND state='Claimed';
