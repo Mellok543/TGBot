@@ -168,4 +168,18 @@ jobs:
               ORDER BY TABLE_SCHEMA,TABLE_NAME,ORDINAL_POSITION;
             "
           fi
+          echo '=== DATABASE SCHEMA (READ ONLY) ==='
+          # The SSH deploy account may not have MariaDB access; report that explicitly.
+          if command -v mariadb >/dev/null 2>&1 && sudo -n mariadb --batch --skip-column-names -e "SELECT 1" >/dev/null 2>&1; then
+            sudo -n mariadb --batch --skip-column-names -e "
+              SELECT TABLE_SCHEMA, TABLE_NAME
+              FROM information_schema.TABLES
+              WHERE TABLE_NAME IN ('reklio_publications','notification_outbox','reklio_payment_attempts')
+                AND TABLE_SCHEMA NOT IN ('mysql','information_schema','performance_schema','sys')
+              ORDER BY TABLE_SCHEMA,TABLE_NAME;
+            "
+            echo 'Schema names checked. No order rows or credentials were read.'
+          else
+            echo 'DB_NOT_VERIFIED: deploy SSH account has no passwordless read-only MariaDB access.'
+          fi
           REMOTE
