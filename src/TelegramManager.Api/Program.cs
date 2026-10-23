@@ -117,7 +117,7 @@ app.MapGet("/api/finance", async (HttpRequest req, MySqlDataSource db, Cancellat
         """);
     cmd.Parameters.Add(new MySqlParameter("@owner",userId));
     var operations=new List<object>();
-    var configuredRate=decimal.TryParse(Environment.GetEnvironmentVariable("REKLIO_COMMISSION_PERCENT"),System.Globalization.NumberStyles.Number,System.Globalization.CultureInfo.InvariantCulture,out var rate) && rate>=0m && rate<=100m ? rate : 5m;
+    const decimal configuredRate=5m;
     decimal paid=0m,refunded=0m;
     decimal pending=0m,ready=0m,blocked=0m;
     await using var reader=await cmd.ExecuteReaderAsync(ct);
