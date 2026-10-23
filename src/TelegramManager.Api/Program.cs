@@ -401,6 +401,33 @@ app.MapPost("/api/orders/{orderId:long}/schedule", async (long orderId, HttpRequ
     try { await notice.ExecuteNonQueryAsync(ct); } catch (MySqlException) { }
     return Results.Ok(new { id = orderId, status = "Pending" });
 });
+app.MapPost("/api/orders/{orderId:long}/reschedule", async (long orderId, HttpRequest req, MySqlDataSource db, CancellationToken ct) =>
+{
+    if (Authorized(req) is not long buyer) return Results.Unauthorized();
+    var input=await req.ReadFromJsonAsync<RescheduleInput>(cancellationToken:ct);
+    if (input is null || input.ScheduledAt.Offset!=TimeSpan.Zero)
+        return Results.BadRequest(new {error="Укажите время в UTC"});
+    await using var cmd=db.CreateCommand("""
+        UPDATE ad_requests a
+        SET a.scheduled_at=@at,
+            a.status=IF(a.status='PaidReschedule','PendingPaid','Pending')
+        WHERE a.id=@id AND a.advertiser_id=@buyer
+          AND (a.status='PaidReschedule' OR
+               (a.status='Pending' AND a.scheduled_at<=DATE_ADD(UTC_TIMESTAMP(),INTERVAL 10 MINUTE)))
+          AND @at>DATE_ADD(UTC_TIMESTAMP(),INTERVAL 10 MINUTE)
+          AND @at<DATE_ADD(UTC_TIMESTAMP(),INTERVAL 90 DAY)
+          AND NOT EXISTS(
+            SELECT 1 FROM (SELECT id,channel_id,scheduled_at,status FROM ad_requests) other
+            WHERE other.id<>a.id AND other.channel_id=a.channel_id AND other.scheduled_at=@at
+              AND other.status IN ('Pending','PendingPaid','AwaitingPayment','Scheduled','Publishing','Published'))
+        """);
+    cmd.Parameters.Add(new MySqlParameter("@id",orderId));
+    cmd.Parameters.Add(new MySqlParameter("@buyer",buyer));
+    cmd.Parameters.Add(new MySqlParameter("@at",input.ScheduledAt.UtcDateTime));
+    if(await cmd.ExecuteNonQueryAsync(ct)!=1)
+        return Results.Conflict(new {error="Перенос недоступен, выбрано слишком раннее или занятое время"});
+    return Results.Ok(new {status="Pending",message="Новое время отправлено владельцу для повторного согласования"});
+});
 // The channel owner may make a decision only once while the request is pending.
 // A conditional UPDATE prevents double approval/rejection and cross-account access.
 app.MapPost("/api/orders/{orderId:long}/approve", async (long orderId, HttpRequest req, MySqlDataSource db, CancellationToken ct) =>
@@ -412,8 +439,8 @@ app.MapPost("/api/orders/{orderId:long}/approve", async (long orderId, HttpReque
     await using var tx = await conn.BeginTransactionAsync(ct);
     await using var update = new MySqlCommand("""
         UPDATE ad_requests
-        SET status='AwaitingPayment'
-        WHERE id=@order AND owner_id=@owner AND status='Pending'
+        SET status=IF(status='PendingPaid','Scheduled','AwaitingPayment')
+        WHERE id=@order AND owner_id=@owner AND status IN ('Pending','PendingPaid')
           AND scheduled_at>DATE_ADD(UTC_TIMESTAMP(),INTERVAL 10 MINUTE)
         """, conn, tx);
     update.Parameters.AddWithValue("@order", orderId);
@@ -761,6 +788,7 @@ app.MapPost("/api/orders/{orderId:long}/payment/check", async (long orderId, Htt
 app.Run();
 
 record CreateOrderInput(long ChannelId, string Text);
+record RescheduleInput(DateTimeOffset ScheduledAt);
 record ScheduleOrderInput(long RateId, DateTimeOffset ScheduledAt);
 
 record UpdateRateInput(int Hours, decimal Price);
