@@ -344,11 +344,18 @@ app.MapPost("/api/orders/{orderId:long}/payment", async (long orderId, HttpReque
         await insert.ExecuteNonQueryAsync(ct);
         attemptId = insert.LastInsertedId;
     }
-    await tx.CommitAsync(ct);
+    // Keep the order row locked until the provider returns and the attempt is saved.
+    // This serializes simultaneous clicks across API instances.
     if (attemptStatus == "Succeeded")
+    {
+        await tx.RollbackAsync(ct);
         return Results.Conflict(new { error = "Платёж уже подтверждён" });
+    }
     if (paymentId is not null && confirmation is not null)
+    {
+        await tx.CommitAsync(ct);
         return Results.Ok(new { confirmationUrl = confirmation });
+    }
 
     // The provider idempotence key is persisted BEFORE the network request.
     // Do not mark the order paid based on this response.
@@ -377,11 +384,13 @@ app.MapPost("/api/orders/{orderId:long}/payment", async (long orderId, HttpReque
         UPDATE reklio_payment_attempts
         SET provider_payment_id=@provider,confirmation_url=@url,status='Pending'
         WHERE id=@attempt AND (provider_payment_id IS NULL OR provider_payment_id=@provider)
-        """, conn);
+        """, conn, tx);
     save.Parameters.AddWithValue("@provider", providerId);
     save.Parameters.AddWithValue("@url", url);
     save.Parameters.AddWithValue("@attempt", attemptId);
-    await save.ExecuteNonQueryAsync(ct);
+    if (await save.ExecuteNonQueryAsync(ct) != 1)
+        throw new InvalidOperationException("Payment attempt was not saved");
+    await tx.CommitAsync(ct);
     return Results.Ok(new { confirmationUrl = url });
 });
 
