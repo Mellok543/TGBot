@@ -122,6 +122,7 @@ public sealed class PublicationWorker(MySqlDataSource database, IHttpClientFacto
                 """, conn);
             error.Parameters.AddWithValue("@id", id);
             await error.ExecuteNonQueryAsync(CancellationToken.None);
+            await QueueReviewNoticeAsync(conn, id, "Публикация", log);
         }
     }
 
@@ -184,6 +185,27 @@ public sealed class PublicationWorker(MySqlDataSource database, IHttpClientFacto
                 """, conn);
             error.Parameters.AddWithValue("@id", id);
             await error.ExecuteNonQueryAsync(CancellationToken.None);
+            await QueueReviewNoticeAsync(conn, id, "Удаление рекламы", log);
         }
     }
+    private static async Task QueueReviewNoticeAsync(MySqlConnection conn, long orderId, string operation, ILogger log)
+    {
+        try
+        {
+            await using var cmd = new MySqlCommand("""
+                INSERT IGNORE INTO notification_outbox (recipient_id,order_id,body)
+                SELECT advertiser_id,id,@body FROM ad_requests WHERE id=@id
+                UNION ALL
+                SELECT owner_id,id,@body FROM ad_requests WHERE id=@id
+                """, conn);
+            cmd.Parameters.AddWithValue("@id", orderId);
+            cmd.Parameters.AddWithValue("@body", operation + " по заказу #" + orderId + " требует проверки. Обратитесь в поддержку.");
+            await cmd.ExecuteNonQueryAsync(CancellationToken.None);
+        }
+        catch (MySqlException ex)
+        {
+            log.LogWarning(ex, "Could not queue review notifications for order {OrderId}", orderId);
+        }
+    }
+
 }
