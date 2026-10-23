@@ -435,7 +435,20 @@ app.MapPost("/api/orders/{orderId:long}/payment/check", async (long orderId, Htt
             """, conn, tx);
         update.Parameters.AddWithValue("@id", orderId);
         update.Parameters.AddWithValue("@buyer", buyer);
-        await update.ExecuteNonQueryAsync(ct);
+        var transitioned = await update.ExecuteNonQueryAsync(ct);
+        if (transitioned == 1)
+        {
+            await using var notice = new MySqlCommand("""
+                INSERT IGNORE INTO notification_outbox (recipient_id,order_id,body)
+                SELECT advertiser_id,id,CONCAT('Оплата заказа #',id,' подтверждена. Реклама запланирована.')
+                FROM ad_requests WHERE id=@id
+                UNION ALL
+                SELECT owner_id,id,CONCAT('Заказ #',id,' оплачен. Ожидается публикация.')
+                FROM ad_requests WHERE id=@id
+                """, conn, tx);
+            notice.Parameters.AddWithValue("@id", orderId);
+            await notice.ExecuteNonQueryAsync(ct);
+        }
         await using var mark = new MySqlCommand("""
             UPDATE reklio_payment_attempts SET status='Succeeded'
             WHERE id=@attempt AND status IN ('Created','Pending','Succeeded')
