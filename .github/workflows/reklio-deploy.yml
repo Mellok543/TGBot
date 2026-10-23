@@ -148,4 +148,24 @@ jobs:
           git -C /opt/reklio/source rev-parse --short HEAD || true
           echo '=== RELATED SERVICE NAMES ==='
           systemctl list-units --type=service --all --no-legend --no-pager | awk '{print $1}' | grep -Ei 'reklio|telegram' || true
+          echo '=== DATABASE SCHEMA (READ ONLY) ==='
+          if ! command -v mariadb >/dev/null 2>&1; then
+            echo 'DB_CHECK_UNAVAILABLE: mariadb client not installed'
+          elif ! sudo -n mariadb --batch --skip-column-names --execute "SELECT 1" >/dev/null 2>&1; then
+            echo 'DB_CHECK_UNAVAILABLE: deploy user has no passwordless read-only database access'
+          else
+            sudo -n mariadb --batch --skip-column-names --execute "
+              SELECT CONCAT('SCHEMA ',TABLE_SCHEMA,'.',TABLE_NAME)
+              FROM information_schema.TABLES
+              WHERE TABLE_NAME IN ('reklio_publications','notification_outbox','reklio_payment_attempts')
+                AND TABLE_SCHEMA NOT IN ('mysql','information_schema','performance_schema','sys')
+              ORDER BY TABLE_SCHEMA,TABLE_NAME;
+              SELECT CONCAT('COLUMN ',TABLE_SCHEMA,'.',TABLE_NAME,'.',COLUMN_NAME,' ',DATA_TYPE)
+              FROM information_schema.COLUMNS
+              WHERE TABLE_NAME IN ('reklio_publications','notification_outbox')
+                AND COLUMN_NAME IN ('state','order_id','recipient_id','next_attempt_at','attempts','telegram_message_id','published_at','deleted_at')
+                AND TABLE_SCHEMA NOT IN ('mysql','information_schema','performance_schema','sys')
+              ORDER BY TABLE_SCHEMA,TABLE_NAME,ORDINAL_POSITION;
+            "
+          fi
           REMOTE
