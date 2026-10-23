@@ -109,8 +109,10 @@ app.MapGet("/api/orders", async (HttpRequest req, MySqlDataSource db, Cancellati
 {
     if (Authorized(req) is not long userId) return Results.Unauthorized();
     await using var cmd = db.CreateCommand("""
-        SELECT a.id,c.title,a.price_rub,a.status,a.created_at,a.owner_id
+        SELECT a.id,c.title,a.price_rub,a.status,a.created_at,a.owner_id,
+               a.content_text,a.scheduled_at,r.duration_hours
         FROM ad_requests a JOIN channels c ON c.telegram_id=a.channel_id
+        LEFT JOIN channel_duration_rates r ON r.id=a.time_rate_id
         WHERE a.advertiser_id=@user OR a.owner_id=@user
         ORDER BY a.created_at DESC LIMIT 50
         """);
@@ -119,7 +121,10 @@ app.MapGet("/api/orders", async (HttpRequest req, MySqlDataSource db, Cancellati
     await using var reader = await cmd.ExecuteReaderAsync(ct);
     while (await reader.ReadAsync(ct))
         orders.Add(new { id = reader.GetInt64(0), channel = reader.GetString(1),
-            price = reader.GetDecimal(2), status = reader.GetString(3), createdAt = reader.GetDateTime(4), isOwner = reader.GetInt64(5) == userId });
+            price = reader.GetDecimal(2), status = reader.GetString(3), createdAt = reader.GetDateTime(4), isOwner = reader.GetInt64(5) == userId,
+            text = reader.IsDBNull(6) ? "" : reader.GetString(6),
+            scheduledAt = reader.IsDBNull(7) ? (DateTime?)null : reader.GetDateTime(7),
+            durationHours = reader.IsDBNull(8) ? (int?)null : reader.GetInt32(8) });
     return Results.Ok(orders);
 });
 app.MapGet("/api/my-channels", async (HttpRequest req, MySqlDataSource db, CancellationToken ct) =>
