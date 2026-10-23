@@ -156,7 +156,18 @@ app.MapPost("/api/orders", async (HttpRequest req, MySqlDataSource db, Cancellat
     cmd.Parameters.Add(new MySqlParameter("@buyer", userId));
     cmd.Parameters.Add(new MySqlParameter("@channel", input.ChannelId));
     cmd.Parameters.Add(new MySqlParameter("@text", input.Text.Trim()));
-    if (await cmd.ExecuteNonQueryAsync(ct) != 1) return Results.BadRequest(new { error = "Канал недоступен для заказа" });
+    if (await cmd.ExecuteNonQueryAsync(ct) != 1)
+    {
+        await using var reason = new MySqlCommand("SELECT connected_by,is_listed FROM channels WHERE telegram_id=@channel", conn);
+        reason.Parameters.Add(new MySqlParameter("@channel", input.ChannelId));
+        await using var reader = await reason.ExecuteReaderAsync(ct);
+        if (await reader.ReadAsync(ct))
+        {
+            if (reader.GetInt64(0) == userId) return Results.BadRequest(new { error = "Нельзя заказать рекламу в собственном канале. Для проверки используйте другой Telegram-аккаунт." });
+            if (!reader.GetBoolean(1)) return Results.BadRequest(new { error = "Канал скрыт из каталога и недоступен для заказа." });
+        }
+        return Results.BadRequest(new { error = "Канал недоступен для заказа. Проверьте статус канала и подписку его владельца." });
+    }
     return Results.Ok(new { id = cmd.LastInsertedId, status = "Draft" });
 });
 app.MapPost("/api/orders/{orderId:long}/schedule", async (long orderId, HttpRequest req, MySqlDataSource db, CancellationToken ct) =>
