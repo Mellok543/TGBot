@@ -97,6 +97,17 @@ public sealed class PublicationWorker(MySqlDataSource database, IHttpClientFacto
             done.Parameters.AddWithValue("@id", id);
             done.Parameters.AddWithValue("@message", messageId);
             await done.ExecuteNonQueryAsync(ct);
+            await using var notice = new MySqlCommand("""
+                INSERT IGNORE INTO notification_outbox (recipient_id,order_id,body)
+                SELECT advertiser_id,id,CONCAT('Реклама по заказу #',id,' опубликована.')
+                FROM ad_requests WHERE id=@id
+                UNION ALL
+                SELECT owner_id,id,CONCAT('Реклама по заказу #',id,' опубликована в вашем канале.')
+                FROM ad_requests WHERE id=@id
+                """, conn);
+            notice.Parameters.AddWithValue("@id", id);
+            try { await notice.ExecuteNonQueryAsync(ct); }
+            catch (MySqlException ex) { log.LogWarning(ex, "Published order {OrderId}, but notification enqueue failed", id); }
         }
         catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
         {
@@ -148,6 +159,17 @@ public sealed class PublicationWorker(MySqlDataSource database, IHttpClientFacto
                 """, conn);
             done.Parameters.AddWithValue("@id", id);
             await done.ExecuteNonQueryAsync(ct);
+            await using var notice = new MySqlCommand("""
+                INSERT IGNORE INTO notification_outbox (recipient_id,order_id,body)
+                SELECT advertiser_id,id,CONCAT('Реклама по заказу #',id,' удалена из канала.')
+                FROM ad_requests WHERE id=@id
+                UNION ALL
+                SELECT owner_id,id,CONCAT('Реклама по заказу #',id,' удалена из вашего канала.')
+                FROM ad_requests WHERE id=@id
+                """, conn);
+            notice.Parameters.AddWithValue("@id", id);
+            try { await notice.ExecuteNonQueryAsync(ct); }
+            catch (MySqlException ex) { log.LogWarning(ex, "Deleted order {OrderId}, but notification enqueue failed", id); }
         }
         catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
         {
