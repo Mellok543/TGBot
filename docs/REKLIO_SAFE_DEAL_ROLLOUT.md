@@ -2,9 +2,10 @@
 
 ## Payment model
 - One seller per advertising order.
+- Seller sets the advertising price P. Buyer pays P plus the 5% Reklio service fee (rounded to kopecks). Seller settlement remains P; the fee is never deducted from the seller.
 - Create a YooKassa `safe_deal` with `fee_moment=deal_closed`.
 - Pay via `POST /v3/payments` with `deal.id` and `deal.settlements` defining seller payout.
-- Store `provider_deal_id`, immutable gross/fee/seller amounts and persisted idempotency keys in `reklio_safe_deals`.
+- Store `provider_deal_id`, immutable buyer gross (P + fee), fee and seller amount (P) and persisted idempotency keys in `reklio_safe_deals`.
 - After payment reconciliation mark the order as paid and allow scheduled Telegram publication.
 - After the paid advertising period ends, verify the placement and ensure there is no unresolved dispute.
 - Pay seller through `POST /v3/payouts` referencing the deal; use YooKassa-hosted tokenization widget for bank-card payout details.
