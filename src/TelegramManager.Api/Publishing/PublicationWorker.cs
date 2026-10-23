@@ -61,8 +61,8 @@ public sealed class PublicationWorker(MySqlDataSource database, IHttpClientFacto
             """, conn, tx);
         candidate.Parameters.AddWithValue("@allowTest", allowTest ? 1 : 0);
         candidate.Parameters.AddWithValue("@testChannelId", (object?)testChannelId ?? DBNull.Value);
-        long id, channel;
-        string message;
+        long id = 0, channel = 0;
+        string message = string.Empty;
         int? hours = null;
         bool found;
         await using (var reader = await candidate.ExecuteReaderAsync(ct))
@@ -152,7 +152,7 @@ public sealed class PublicationWorker(MySqlDataSource database, IHttpClientFacto
             ORDER BY published_at LIMIT 1 FOR UPDATE
             """, conn, tx);
         select.Parameters.AddWithValue("@testChannelId", (object?)testChannelId ?? DBNull.Value);
-        long id, channel, message;
+        long id = 0, channel = 0, message = 0;
         bool found;
         await using (var reader = await select.ExecuteReaderAsync(ct))
         {
