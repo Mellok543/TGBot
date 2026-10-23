@@ -272,7 +272,7 @@ function App() {
     catch(e){setAdminError(e instanceof Error?e.message:'Доступ к спорам недоступен');}
   }
   async function saveStaff() {
-    if(!/^\\d+$/.test(staffId)){setAdminError('Укажи числовой Telegram ID');return;}
+    if(!/^\d+$/.test(staffId)){setAdminError('Укажи числовой Telegram ID');return;}
     setAdminError('');
     try{await post('/api/admin/staff',{telegramId:Number(staffId),role:staffRole});setStaffId('');setStaff(await get<StaffMember[]>('/api/admin/staff'));}
     catch(e){setAdminError(e instanceof Error?e.message:'Не удалось изменить роль');}
