@@ -148,11 +148,19 @@ jobs:
           git -c safe.directory=/opt/reklio/source -C /opt/reklio/source rev-parse --short HEAD || true
           echo '=== RELATED SERVICE NAMES ==='
           systemctl list-units --type=service --all --no-legend --no-pager | awk '{print $1}' | grep -Ei 'reklio|telegram' || true
-          echo '=== DATABASE SCHEMA ACCESS ==='
-          if command -v mariadb >/dev/null 2>&1; then
-            echo 'MariaDB client installed'
-          else
+          echo '=== DATABASE CONNECTIVITY ==='
+          if ! command -v mariadb >/dev/null 2>&1; then
             echo 'MariaDB client unavailable'
+            exit 1
           fi
-          echo 'Database schema requires a separate least-privilege verification path.'
+          if [ ! -r "$HOME/.my.cnf" ]; then
+            echo 'MariaDB credentials not configured for SSH deploy account'
+            exit 1
+          fi
+          mariadb --defaults-extra-file="$HOME/.my.cnf" --batch --skip-column-names \
+            -e 'SELECT 1' | grep -qx '1'
+          echo 'MariaDB authentication OK'
+          echo '=== REKLIO DATABASE TABLES ==='
+          mariadb --defaults-extra-file="$HOME/.my.cnf" --batch --skip-column-names \
+            -e "SELECT TABLE_SCHEMA, TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA NOT IN ('mysql','information_schema','performance_schema','sys') AND TABLE_NAME IN ('ad_requests','notification_outbox','publications') ORDER BY TABLE_SCHEMA,TABLE_NAME;"
           REMOTE
