@@ -120,6 +120,43 @@ jobs:
           echo 'Reklio API health check failed' >&2
           exit 1
 
+  mtproto_preflight:
+    name: MTProto VPS readiness (read-only)
+    if: github.ref == 'refs/heads/feature/miniapp-typescript-foundation' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 5
+    steps:
+      - name: Configure SSH
+        env:
+          DEPLOY_KEY_B64: ${{ secrets.REKLIO_DEPLOY_SSH_KEY_B64 }}
+          KNOWN_HOSTS: ${{ secrets.REKLIO_SSH_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          test -n "$DEPLOY_KEY_B64" && test -n "$KNOWN_HOSTS"
+          umask 077
+          mkdir -p ~/.ssh
+          printf '%s' "$DEPLOY_KEY_B64" | base64 --decode > ~/.ssh/id_ed25519
+          printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/id_ed25519 ~/.ssh/known_hosts
+      - name: Inspect prerequisites without revealing credentials
+        env:
+          DEPLOY_HOST: ${{ secrets.REKLIO_DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.REKLIO_DEPLOY_USER }}
+          DEPLOY_PORT: ${{ secrets.REKLIO_DEPLOY_PORT }}
+        run: |
+          set -euo pipefail
+          ssh -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=15 \
+            -p "${DEPLOY_PORT:-22}" "$DEPLOY_USER@$DEPLOY_HOST" 'bash -s' <<'REMOTE'
+          set -eu
+          echo "service: $(systemctl is-enabled reklio-mtproto-monitor.service 2>/dev/null || true)"
+          echo "systemd-unit: $(test -f /etc/systemd/system/reklio-mtproto-monitor.service && echo present || echo missing)"
+          echo "python3: $(command -v python3 >/dev/null && echo present || echo missing)"
+          echo "venv: $(test -x /opt/reklio/mtproto-venv/bin/python && echo present || echo missing)"
+          echo "monitor-env: $(test -f /etc/reklio/mtproto-monitor.env && echo present || echo missing)"
+          echo "database-migration: $(if mariadb --defaults-extra-file="$HOME/.my.cnf" --batch --skip-column-names -e "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='s2_telegram_manager' AND table_name='reklio_post_monitor';" 2>/dev/null | grep -qx '1'; then echo applied; else echo missing-or-unavailable; fi)"
+          REMOTE
+
   diagnostics:
     name: Read-only VPS diagnostics
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.diagnostics_only && !inputs.apply_publications_migration }}
