@@ -376,6 +376,34 @@ app.MapPost("/api/admin/channels/{channelId:long}/listing",async(long channelId,
     await tx.CommitAsync(ct);
     return Results.Ok(new {id=channelId,listed=input.Listed});
 });
+app.MapGet("/api/admin/mtproto-status",async(HttpRequest req,MySqlDataSource db,CancellationToken ct) =>
+{
+    if(Authorized(req) is not long uid) return Results.Unauthorized();
+    if(await StaffRole(db,uid,ct) is null) return Results.Forbid();
+    try
+    {
+        await using var cmd=db.CreateCommand("""
+            SELECT COUNT(*),COALESCE(SUM(last_result='PRESENT'),0),
+                   COALESCE(SUM(last_result='MISSING'),0),MAX(checked_at)
+            FROM reklio_post_monitor
+            """);
+        await using var reader=await cmd.ExecuteReaderAsync(ct);
+        await reader.ReadAsync(ct);
+        var last=reader.IsDBNull(3)?(DateTime?)null:reader.GetDateTime(3);
+        return Results.Ok(new {
+            configured=true,checkedOrders=Convert.ToInt64(reader.GetValue(0)),
+            present=Convert.ToInt64(reader.GetValue(1)),
+            missing=Convert.ToInt64(reader.GetValue(2)),
+            lastCheck=last,
+            healthy=last is not null && last.Value>=DateTime.UtcNow.AddMinutes(-15)
+        });
+    }
+    catch(MySqlException ex) when(ex.Number==1146)
+    {
+        return Results.Ok(new {configured=false,checkedOrders=0,present=0,missing=0,
+            lastCheck=(DateTime?)null,healthy=false});
+    }
+});
 app.MapGet("/api/admin/publication-issues",async(HttpRequest req,MySqlDataSource db,CancellationToken ct) =>
 {
     if(Authorized(req) is not long uid) return Results.Unauthorized();
