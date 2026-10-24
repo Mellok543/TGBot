@@ -160,6 +160,42 @@ jobs:
           echo "database-migration: $(if mariadb --defaults-extra-file="$HOME/.my.cnf" --batch --skip-column-names -e "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='s2_telegram_manager' AND table_name='reklio_post_monitor';" 2>/dev/null | grep -qx '1'; then echo applied; else echo missing-or-unavailable; fi)"
           REMOTE
 
+  mtproto_install:
+    name: Install MTProto monitor (deploy account)
+    if: github.ref == 'refs/heads/feature/miniapp-typescript-foundation' && github.event_name == 'push'
+    needs: deploy
+    runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 10
+    steps:
+      - name: Configure SSH
+        env:
+          DEPLOY_KEY_B64: ${{ secrets.REKLIO_DEPLOY_SSH_KEY_B64 }}
+          KNOWN_HOSTS: ${{ secrets.REKLIO_SSH_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          test -n "$DEPLOY_KEY_B64" && test -n "$KNOWN_HOSTS"
+          umask 077
+          mkdir -p ~/.ssh
+          printf '%s' "$DEPLOY_KEY_B64" | base64 --decode > ~/.ssh/id_ed25519
+          printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/id_ed25519 ~/.ssh/known_hosts
+      - name: Install and start public-channel checks
+        env:
+          DEPLOY_HOST: ${{ secrets.REKLIO_DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.REKLIO_DEPLOY_USER }}
+          DEPLOY_PORT: ${{ secrets.REKLIO_DEPLOY_PORT }}
+          API_ID: ${{ secrets.TELEGRAM_API_ID }}
+          API_HASH: ${{ secrets.TELEGRAM_API_HASH }}
+          REKLIO_BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -n "$DEPLOY_HOST" && test -n "$DEPLOY_USER"
+          test -n "$API_ID" && test -n "$API_HASH" && test -n "$REKLIO_BOT_TOKEN"
+          printf '%s\n%s\n%s\n' "$API_ID" "$API_HASH" "$REKLIO_BOT_TOKEN" |
+            ssh -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=15 \
+              -p "${DEPLOY_PORT:-22}" "$DEPLOY_USER@$DEPLOY_HOST" \
+              'bash /opt/reklio/source/deploy/install-mtproto-unprivileged.sh'
   diagnostics:
     name: Read-only VPS diagnostics
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.diagnostics_only && !inputs.apply_publications_migration }}
