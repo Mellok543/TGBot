@@ -166,7 +166,7 @@ public sealed class PublicationWorker(MySqlDataSource database, IHttpClientFacto
         // MySqlConnector cannot rollback a transaction while a reader is active.
         if (!found) { await tx.RollbackAsync(ct); return; }
         await using var claim = new MySqlCommand("""
-            UPDATE reklio_publications SET state='Deleting' WHERE order_id=@id AND state='Published'
+            UPDATE reklio_publications SET state='Deleting',claimed_at=UTC_TIMESTAMP(6) WHERE order_id=@id AND state='Published'
             """, conn, tx);
         claim.Parameters.AddWithValue("@id", id);
         await claim.ExecuteNonQueryAsync(ct);
