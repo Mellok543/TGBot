@@ -1,7 +1,18 @@
 import './landing.css';
 const items=[{n:'01',title:'Выберите канал',desc:'Изучайте тематику, описание площадки и стоимость размещения до подачи заявки.'},{n:'02',title:'Запланируйте рекламу',desc:'Укажите время размещения и передайте готовый рекламный пост владельцу канала.'},{n:'03',title:'Следите за публикацией',desc:'Управляйте заказами через Telegram. Reklio проверяет доступность опубликованных сообщений.'}];
 export default function Landing(){
- const start=()=>{window.location.href='/app/'};
+ const start=async()=>{
+   try{
+     const api=import.meta.env.VITE_API_URL || 'https://api.reklio.site';
+     const response=await fetch(api+'/api/public/bot-link');
+     if(!response.ok) throw new Error('Bot link unavailable');
+     const data:unknown=await response.json();
+     if(typeof data!=='object'||data===null||!('url' in data)||typeof data.url!=='string'||!/^https:\/\/t\.me\/[A-Za-z][A-Za-z0-9_]{4,}$/.test(data.url)) throw new Error('Invalid bot link');
+     window.location.href=data.url;
+   }catch{
+     window.alert('Не удалось открыть Telegram-бота. Попробуйте ещё раз.');
+   }
+ };
  return <div className="lp">
  <header className="lp-nav"><a className="lp-brand" href="/"><img src="/reklio-mark.svg" alt=""/>Rekli<span>o</span></a><nav><a href="#how">Как работает</a><a href="#benefits">Преимущества</a><a href="#faq">Вопросы</a></nav><button className="lp-nav-action" onClick={start}>Открыть приложение ↗</button></header>
  <main>
