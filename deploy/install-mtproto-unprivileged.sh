@@ -18,8 +18,8 @@ BACKUP="$HOME/reklio-db-backups/mtproto-$(date -u +%Y%m%dT%H%M%SZ).sql"
 mariadb-dump --defaults-extra-file="$HOME/.my.cnf" --single-transaction "$DB" > "$BACKUP"
 test -s "$BACKUP"
 mariadb --defaults-extra-file="$HOME/.my.cnf" "$DB" < "$SOURCE/deploy/migrations/005_reklio_post_monitor.sql"
-if [ ! -x "$HOME_DIR/venv/bin/python" ]; then python3 -m venv "$HOME_DIR/venv"; fi
-"$HOME_DIR/venv/bin/python" -m pip install --disable-pip-version-check 'telethon==1.42.0' 'PyMySQL==1.1.1' >/dev/null
+test -f "$HOME_DIR/vendor/telethon/__init__.py" || { echo "Vendored Telethon not staged" >&2; exit 1; }
+test -f "$HOME_DIR/vendor/pymysql/__init__.py" || { echo "Vendored PyMySQL not staged" >&2; exit 1; }
 printf 'TELEGRAM_API_ID=%q\nTELEGRAM_API_HASH=%q\nBOT_TOKEN=%q\nREKLIO_MTPROTO_MONITOR_ENABLED=true\n' "$API_ID" "$API_HASH" "$BOT_TOKEN" > "$HOME_DIR/secrets.env"
 chmod 600 "$HOME_DIR/secrets.env"
 cat > "$HOME_DIR/run.sh" <<'RUNNER'
@@ -29,7 +29,8 @@ BASE="$HOME/.local/share/reklio-mtproto"
 set -a
 source "$BASE/secrets.env"
 set +a
-exec "$BASE/venv/bin/python" /opt/reklio/source/deploy/reklio_mtproto_monitor.py --once
+export PYTHONPATH="$BASE/vendor"
+exec /usr/bin/python3 /opt/reklio/source/deploy/reklio_mtproto_monitor.py --once
 RUNNER
 chmod 700 "$HOME_DIR/run.sh"
 # Preserve other cron entries and maintain exactly one Reklio monitor job.
