@@ -37,3 +37,10 @@
 .adminSearch{display:flex;gap:8px;margin:10px 0 16px}.adminSearch input{min-width:0;flex:1;background:#203149;border:1px solid #475b79;border-radius:10px;color:#fff;padding:11px}.auditEntry{display:flex;flex-direction:column;gap:5px;border-bottom:1px solid #334963;padding:11px 0}.auditEntry strong{font-size:13px}.auditEntry small{color:#a5b9d4;font-size:11px}
 
 .adminTabs{display:flex;gap:7px;overflow-x:auto;padding:7px 0 15px;scrollbar-width:thin}.adminTabs button{flex:0 0 auto;border:1px solid #344c6c;background:#1b2b43;color:#afc3de;border-radius:11px;padding:10px 13px;font-size:12px;font-weight:700}.adminTabs button.active{background:#3864a0;border-color:#6b94c8;color:#fff}
+
+/* Reklio brand identity */
+.brandLine{display:flex;align-items:center;gap:13px;margin:0 0 15px}
+.brandMark{height:52px;width:52px;border-radius:15px;box-shadow:0 7px 28px #2366ff30;object-fit:contain;flex-shrink:0}
+.brandName{font-size:24px;line-height:1.12;font-weight:850;letter-spacing:-.9px;color:#f8faff}
+.brandName span{color:#28a7ff}
+.brandLine .eyebrow{margin-top:6px;color:#67d9ff;font-size:9px}
