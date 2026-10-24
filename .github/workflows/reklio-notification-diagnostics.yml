@@ -53,4 +53,10 @@ jobs:
           echo 'Notification processes:'
           ps -eo pid,lstart,args | grep -E '[T]elegramManager.Api|[r]eklio' | cut -c1-210 | tail -15
           echo "worker phrase in dll UTF16: $(if strings -el /opt/reklio/api/TelegramManager.Api.dll 2>/dev/null | grep -q 'New order notification'; then echo yes; else echo no; fi)"
+          echo 'Order 30 / notification diagnostics:'
+          mariadb --defaults-extra-file="$HOME/.my.cnf" -N s2_telegram_manager -e "SELECT n.id,n.order_id,n.state,IF(n.recipient_id=a.owner_id,'owner','other'),a.status,n.attempts FROM notification_outbox n JOIN ad_requests a ON a.id=n.order_id WHERE n.order_id=30 ORDER BY n.id" 2>/dev/null || true
+          echo 'Worker configuration:'
+          systemctl show reklio-api.service -p EnvironmentFiles --value | cut -c1-160
+          echo 'Worker recent logs:'
+          journalctl -u reklio-api.service --since '15 minutes ago' --no-pager -o cat 2>/dev/null | grep -E 'New order notification|Notification [0-9]+ for order|notification delivery' | tail -15 || true
           REMOTE
