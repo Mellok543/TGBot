@@ -609,7 +609,7 @@ app.MapGet("/api/orders", async (HttpRequest req, MySqlDataSource db, Cancellati
     if (Authorized(req) is not long userId) return Results.Unauthorized();
     await using var cmd = db.CreateCommand("""
         SELECT a.id,c.title,a.price_rub,a.status,a.created_at,a.owner_id,
-               a.content_text,a.scheduled_at,r.duration_hours,a.payment_status,a.payout_status,a.is_test_order,a.dispute_reason
+               a.content_text,a.scheduled_at,r.duration_hours,a.payment_status,a.payout_status,a.is_test_order,a.dispute_reason,a.last_error
         FROM ad_requests a JOIN channels c ON c.telegram_id=a.channel_id
         LEFT JOIN channel_duration_rates r ON r.id=a.time_rate_id
         WHERE a.advertiser_id=@user OR a.owner_id=@user
@@ -624,7 +624,7 @@ app.MapGet("/api/orders", async (HttpRequest req, MySqlDataSource db, Cancellati
             text = reader.IsDBNull(6) ? "" : reader.GetString(6),
             scheduledAt = reader.IsDBNull(7) ? (DateTime?)null : reader.GetDateTime(7),
             durationHours = reader.IsDBNull(8) ? (int?)null : reader.GetInt32(8),
-            paymentStatus=reader.GetString(9),payoutStatus=reader.GetString(10),isTest=reader.GetBoolean(11),disputeReason=reader.IsDBNull(12)?null:reader.GetString(12) });
+            paymentStatus=reader.GetString(9),payoutStatus=reader.GetString(10),isTest=reader.GetBoolean(11),disputeReason=reader.IsDBNull(12)?null:reader.GetString(12),publicationIssue=reader.IsDBNull(13)?null:reader.GetString(13) });
     return Results.Ok(orders);
 });
 app.MapGet("/api/my-channels", async (HttpRequest req, MySqlDataSource db, CancellationToken ct) =>
