@@ -60,7 +60,7 @@ public sealed class NotificationWorker(MySqlDataSource database, IHttpClientFact
         try
         {
             object payload = new { chat_id = recipient, text = body };
-            if (orderId > 0 && body.Contains("Новая заявка", StringComparison.OrdinalIgnoreCase))
+            if (orderId > 0)
             {
                 await using var details = new MySqlCommand("""
                     SELECT c.title,a.content_text,a.price_rub,a.scheduled_at,a.delete_after_hours,a.status
@@ -104,6 +104,7 @@ public sealed class NotificationWorker(MySqlDataSource database, IHttpClientFact
                     }
                 }
             }
+            log.LogInformation("Notification {Id} for order {OrderId}: inline actions = {Actions}", id, orderId, payload.GetType().GetProperty("reply_markup") is not null);
             using var response = await http.PostAsJsonAsync(
                 $"https://api.telegram.org/bot{token}/sendMessage", payload, ct);
             using var json = await JsonDocument.ParseAsync(
