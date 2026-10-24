@@ -109,7 +109,7 @@ public sealed class PublicationWorker(MySqlDataSource database, IHttpClientFacto
                 UPDATE reklio_publications
                   SET state='Published',telegram_message_id=@message,published_at=UTC_TIMESTAMP()
                 WHERE order_id=@id AND state='Sending';
-                UPDATE ad_requests SET status='Published' WHERE id=@id AND status='Publishing';
+                UPDATE ad_requests SET status='Published',published_at=UTC_TIMESTAMP(),published_message_id=@message WHERE id=@id AND status='Publishing';
                 """, conn);
             done.Parameters.AddWithValue("@id", id);
             done.Parameters.AddWithValue("@message", messageId);
@@ -181,7 +181,10 @@ public sealed class PublicationWorker(MySqlDataSource database, IHttpClientFacto
                 throw new InvalidOperationException("Telegram rejected deleteMessage");
             await using var done = new MySqlCommand("""
                 UPDATE reklio_publications SET state='Deleted',deleted_at=UTC_TIMESTAMP()
-                WHERE order_id=@id AND state='Deleting'
+                WHERE order_id=@id AND state='Deleting';
+                UPDATE ad_requests SET status=IF(status='Published','Deleted',status),
+                    payout_status=IF(is_test_order=TRUE,'NotEligible',IF(payout_status='Blocked','Blocked','AwaitingVerification'))
+                WHERE id=@id AND status IN ('Published','Disputed','DisputeResolved');
                 """, conn);
             done.Parameters.AddWithValue("@id", id);
             await done.ExecuteNonQueryAsync(ct);
