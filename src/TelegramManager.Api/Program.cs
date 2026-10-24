@@ -273,6 +273,68 @@ app.MapGet("/api/admin/overview",async(HttpRequest req,MySqlDataSource db,Cancel
     await reader.ReadAsync(ct);
     return Results.Ok(new {channels=reader.GetInt64(0),listed=reader.GetInt64(1),orders=reader.GetInt64(2),openDisputes=reader.GetInt64(3),failedPublications=reader.GetInt64(4)});
 });
+app.MapGet("/api/admin/users",async(HttpRequest req,MySqlDataSource db,CancellationToken ct) =>
+{
+    if(Authorized(req) is not long uid) return Results.Unauthorized();
+    if(await StaffRole(db,uid,ct) is null) return Results.Forbid();
+    var term=req.Query["q"].ToString().Trim();
+    if(term.Length>80)return Results.BadRequest();
+    await using var cmd=db.CreateCommand("""
+        SELECT u.telegram_id,u.display_name,u.username,
+          (SELECT COUNT(*) FROM channels c WHERE c.connected_by=u.telegram_id) AS channels,
+          (SELECT COUNT(*) FROM ad_requests a WHERE a.advertiser_id=u.telegram_id) AS purchases
+        FROM users u
+        WHERE @q='' OR CAST(u.telegram_id AS CHAR)=@q
+          OR u.display_name LIKE @like OR u.username LIKE @like
+        ORDER BY u.telegram_id DESC LIMIT 100
+        """);
+    cmd.Parameters.Add(new MySqlParameter("@q",term));
+    cmd.Parameters.Add(new MySqlParameter("@like","%"+term+"%"));
+    var results=new List<object>();
+    await using var reader=await cmd.ExecuteReaderAsync(ct);
+    while(await reader.ReadAsync(ct)) results.Add(new {
+      id=reader.GetInt64(0),name=reader.IsDBNull(1)?"":reader.GetString(1),
+      username=reader.IsDBNull(2)?null:reader.GetString(2),
+      channels=Convert.ToInt64(reader.GetValue(3)),purchases=Convert.ToInt64(reader.GetValue(4))});
+    return Results.Ok(results);
+});
+app.MapGet("/api/admin/orders",async(HttpRequest req,MySqlDataSource db,CancellationToken ct) =>
+{
+    if(Authorized(req) is not long uid) return Results.Unauthorized();
+    if(await StaffRole(db,uid,ct) is null) return Results.Forbid();
+    var term=req.Query["q"].ToString().Trim();
+    if(term.Length>80)return Results.BadRequest();
+    await using var cmd=db.CreateCommand("""
+       SELECT a.id,c.title,a.status,a.price_rub,a.advertiser_id,a.owner_id,a.created_at
+       FROM ad_requests a JOIN channels c ON c.telegram_id=a.channel_id
+       WHERE @q='' OR CAST(a.id AS CHAR)=@q OR CAST(a.advertiser_id AS CHAR)=@q
+         OR CAST(a.owner_id AS CHAR)=@q OR c.title LIKE @like
+       ORDER BY a.created_at DESC LIMIT 100
+       """);
+    cmd.Parameters.Add(new MySqlParameter("@q",term));
+    cmd.Parameters.Add(new MySqlParameter("@like","%"+term+"%"));
+    var results=new List<object>();
+    await using var reader=await cmd.ExecuteReaderAsync(ct);
+    while(await reader.ReadAsync(ct))results.Add(new{id=reader.GetInt64(0),channel=reader.GetString(1),
+        status=reader.GetString(2),price=reader.GetDecimal(3),buyerId=reader.GetInt64(4),
+        ownerId=reader.GetInt64(5),createdAt=reader.GetDateTime(6)});
+    return Results.Ok(results);
+});
+app.MapGet("/api/admin/audit",async(HttpRequest req,MySqlDataSource db,CancellationToken ct) =>
+{
+    if(Authorized(req) is not long uid) return Results.Unauthorized();
+    if(await StaffRole(db,uid,ct) is not ("owner" or "admin"))return Results.Forbid();
+    await using var cmd=db.CreateCommand("""
+      SELECT id,actor_id,action,target_id,details,created_at
+      FROM reklio_admin_audit ORDER BY created_at DESC LIMIT 100
+      """);
+    var results=new List<object>();
+    await using var reader=await cmd.ExecuteReaderAsync(ct);
+    while(await reader.ReadAsync(ct))results.Add(new{id=reader.GetInt64(0),actorId=reader.GetInt64(1),
+       action=reader.GetString(2),targetId=reader.IsDBNull(3)?(long?)null:reader.GetInt64(3),
+       details=reader.IsDBNull(4)?null:reader.GetString(4),createdAt=reader.GetDateTime(5)});
+    return Results.Ok(results);
+});
 app.MapGet("/api/admin/channels",async(HttpRequest req,MySqlDataSource db,CancellationToken ct) =>
 {
     if(Authorized(req) is not long uid) return Results.Unauthorized();
