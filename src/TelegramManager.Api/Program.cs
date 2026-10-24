@@ -383,7 +383,10 @@ app.MapGet("/api/admin/publication-issues",async(HttpRequest req,MySqlDataSource
     await using var cmd=db.CreateCommand("""
       SELECT a.id,c.title,a.status,a.last_error,a.scheduled_at,a.published_at
       FROM ad_requests a JOIN channels c ON c.telegram_id=a.channel_id
+      LEFT JOIN reklio_publications p ON p.order_id=a.id
       WHERE a.status IN ('PublishFailed','DeleteFailed')
+         OR p.state IN ('NeedsReview','NeedsDeleteReview')
+         OR (a.payout_status='Blocked' AND a.last_error IS NOT NULL)
          OR (a.status IN ('Disputed','DisputeResolved') AND a.last_error IS NOT NULL)
       ORDER BY a.updated_at DESC LIMIT 100
       """);
