@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """Reklio public-channel MTProto monitor. No writes to Telegram."""
 import asyncio
+import argparse
+import configparser
+from pathlib import Path
 import logging
 import os
 from datetime import datetime, timezone
@@ -17,9 +20,16 @@ CONFIRM_GAP_SECONDS = 60
 
 
 def database_kwargs():
-    connection = os.environ["DATABASE_URL"]
-    parts = dict(item.split("=", 1) for item in connection.split(";") if "=" in item)
-    parts = {key.strip().lower().replace(" ", ""): value.strip() for key, value in parts.items()}
+    connection = os.getenv("DATABASE_URL")
+    if connection:
+        parts = dict(item.split("=", 1) for item in connection.split(";") if "=" in item)
+        parts = {key.strip().lower().replace(" ", ""): value.strip() for key, value in parts.items()}
+    else:
+        settings = configparser.ConfigParser()
+        if not settings.read(str(Path.home() / ".my.cnf")) or not settings.has_section("client"):
+            raise RuntimeError("No DATABASE_URL and no ~/.my.cnf [client] section")
+        parts = {key.strip().lower().replace("-", ""): value for key,value in settings.items("client")}
+        parts["database"] = "s2_telegram_manager"
     def val(*names, default=None):
         return next((parts[name] for name in names if name in parts), default)
     return dict(host=val("server", "host", default="localhost"),
@@ -123,9 +133,12 @@ async def main():
     if os.getenv("REKLIO_MTPROTO_MONITOR_ENABLED") != "true":
         LOG.info("Monitor disabled; set REKLIO_MTPROTO_MONITOR_ENABLED=true to enable")
         return
-    for name in ("TELEGRAM_API_ID", "TELEGRAM_API_HASH", "BOT_TOKEN", "DATABASE_URL"):
+    for name in ("TELEGRAM_API_ID", "TELEGRAM_API_HASH", "BOT_TOKEN"):
         if not os.getenv(name):
             raise RuntimeError("Required secret is missing: " + name)
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--once", action="store_true")
+    args = parser.parse_args()
     client = TelegramClient(StringSession(), int(os.environ["TELEGRAM_API_ID"]),
                             os.environ["TELEGRAM_API_HASH"])
     await client.start(bot_token=os.environ["BOT_TOKEN"])
@@ -146,6 +159,8 @@ async def main():
                     db.close()
             except Exception:
                 LOG.exception("MTProto monitor polling failed; no payout actions performed")
+            if args.once:
+                break
             await asyncio.sleep(INTERVAL)
     finally:
         await client.disconnect()
