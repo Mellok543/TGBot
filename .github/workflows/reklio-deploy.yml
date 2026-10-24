@@ -183,7 +183,7 @@ jobs:
       - name: Prepare portable pure-Python monitor dependencies
         run: |
           set -euo pipefail
-          python3 -m pip install --target /tmp/reklio-mtproto-deps --only-binary=:all: 'telethon==1.42.0' 'PyMySQL==1.1.1'
+          python3 -m pip install --target /tmp/reklio-mtproto-deps 'telethon==1.42.0' 'PyMySQL==1.1.1'
           test -f /tmp/reklio-mtproto-deps/telethon/__init__.py
           test -f /tmp/reklio-mtproto-deps/pymysql/__init__.py
       - name: Transfer monitor dependencies
