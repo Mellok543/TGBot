@@ -215,6 +215,42 @@ jobs:
             ssh -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=15 \
               -p "${DEPLOY_PORT:-22}" "$DEPLOY_USER@$DEPLOY_HOST" \
               'bash /opt/reklio/source/deploy/install-mtproto-unprivileged.sh'
+  bot_token_preflight:
+    name: Inspect API token configuration (no secrets)
+    if: github.ref == 'refs/heads/feature/miniapp-typescript-foundation' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    environment: production
+    steps:
+      - name: Configure SSH
+        env:
+          DEPLOY_KEY_B64: ${{ secrets.REKLIO_DEPLOY_SSH_KEY_B64 }}
+          KNOWN_HOSTS: ${{ secrets.REKLIO_SSH_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          test -n "$DEPLOY_KEY_B64" && test -n "$KNOWN_HOSTS"
+          umask 077
+          mkdir -p ~/.ssh
+          printf '%s' "$DEPLOY_KEY_B64" | base64 --decode > ~/.ssh/id_ed25519
+          printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/id_ed25519 ~/.ssh/known_hosts
+      - name: Inspect service configuration and permissions only
+        env:
+          DEPLOY_HOST: ${{ secrets.REKLIO_DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.REKLIO_DEPLOY_USER }}
+          DEPLOY_PORT: ${{ secrets.REKLIO_DEPLOY_PORT }}
+        run: |
+          set -euo pipefail
+          ssh -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=15 \
+            -p "${DEPLOY_PORT:-22}" "$DEPLOY_USER@$DEPLOY_HOST" 'bash -s' <<'REMOTE'
+          set -eu
+          echo '=== API token rotation prerequisites ==='
+          echo "api-service: $(systemctl is-active reklio-api.service || true)"
+          echo "service-envfiles: $(systemctl show reklio-api.service -p EnvironmentFiles --value | sed -E 's/\([^)]*\)//g' | cut -c1-300)"
+          echo "sudo-access: $(if sudo -n true 2>/dev/null; then echo broad; else echo restricted; fi)"
+          echo "monitor-cron: $(if crontab -l 2>/dev/null | grep -q '# reklio-mtproto'; then echo present; else echo missing; fi)"
+          REMOTE
+
   diagnostics:
     name: Read-only VPS diagnostics
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.diagnostics_only && !inputs.apply_publications_migration }}
