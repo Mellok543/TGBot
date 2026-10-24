@@ -22,7 +22,9 @@ await bot.SetMyCommands(new[]
     new Telegram.Bot.Types.BotCommand { Command = "start", Description = "Открыть Telegram Manager" },
     new Telegram.Bot.Types.BotCommand { Command = "cancel", Description = "Отменить действие" }
 }, cancellationToken: cancellation.Token);
-var handlers = new BotHandlers(database);
+using var yooKassa = new YooKassaClient();
+Console.WriteLine(yooKassa.Enabled ? "[Payments] YooKassa TEST checkout enabled." : "[Payments] YooKassa checkout disabled.");
+var handlers = new BotHandlers(database, yooKassa);
 var scheduler = new AdScheduler(database, bot);
 var schedulerTask = scheduler.RunAsync(cancellation.Token);
 Console.WriteLine($"Telegram Manager started: @{me.Username}");
