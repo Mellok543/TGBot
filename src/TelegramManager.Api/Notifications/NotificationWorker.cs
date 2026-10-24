@@ -31,12 +31,12 @@ public sealed class NotificationWorker(MySqlDataSource database, IHttpClientFact
         await using var conn = await database.OpenConnectionAsync(ct);
         await using var tx = await conn.BeginTransactionAsync(ct);
         await using var select = new MySqlCommand("""
-            SELECT id,recipient_id,body FROM notification_outbox
+            SELECT id,recipient_id,body,order_id FROM notification_outbox
             WHERE state='Pending'
               AND (next_attempt_at IS NULL OR next_attempt_at<=UTC_TIMESTAMP())
             ORDER BY id LIMIT 1 FOR UPDATE
             """, conn, tx);
-        long id, recipient;
+        long id, recipient, orderId;
         string body;
         await using (var reader = await select.ExecuteReaderAsync(ct))
         {
@@ -44,6 +44,7 @@ public sealed class NotificationWorker(MySqlDataSource database, IHttpClientFact
             id = reader.GetInt64(0);
             recipient = reader.GetInt64(1);
             body = reader.GetString(2);
+            orderId = reader.IsDBNull(3) ? 0 : reader.GetInt64(3);
         }
         await using var claim = new MySqlCommand("""
             UPDATE notification_outbox
@@ -58,9 +59,53 @@ public sealed class NotificationWorker(MySqlDataSource database, IHttpClientFact
         // Keep such deliveries in NeedsReview instead of blindly resending.
         try
         {
+            object payload = new { chat_id = recipient, text = body };
+            if (orderId > 0 && body.Contains("Новая заявка", StringComparison.OrdinalIgnoreCase))
+            {
+                await using var details = new MySqlCommand("""
+                    SELECT c.title,a.content_text,a.price_rub,a.scheduled_at,a.delete_after_hours,a.status
+                    FROM ad_requests a JOIN channels c ON c.telegram_id=a.channel_id
+                    WHERE a.id=@order AND a.owner_id=@owner
+                    """, conn);
+                details.Parameters.AddWithValue("@order", orderId);
+                details.Parameters.AddWithValue("@owner", recipient);
+                await using var row = await details.ExecuteReaderAsync(ct);
+                if (await row.ReadAsync(ct))
+                {
+                    var channel = row.GetString(0);
+                    var message = row.IsDBNull(1) ? "" : row.GetString(1);
+                    var price = row.GetDecimal(2);
+                    var scheduled = row.IsDBNull(3) ? (DateTime?)null : row.GetDateTime(3);
+                    var duration = row.IsDBNull(4) ? (int?)null : row.GetInt32(4);
+                    var status = row.GetString(5);
+                    if (status is "Pending" or "PendingPaid")
+                    {
+                        var preview = message.Length > 650 ? message[..650] + "…" : message;
+                        body = $"📥 Новая заявка #{orderId} на рекламу\n" +
+                               $"📺 Канал: {channel}\n" +
+                               $"💰 Стоимость: {price:0.##} ₽\n" +
+                               $"📅 Публикация: {scheduled?.AddHours(3):dd.MM.yyyy HH:mm} (UTC+3)\n" +
+                               $"⏳ Продолжительность: {duration?.ToString() ?? "—"} ч\n\n" +
+                               $"📝 Рекламный текст:\n{preview}\n\n" +
+                               "Подтвердите или отклоните заявку:";
+                        payload = new
+                        {
+                            chat_id = recipient,
+                            text = body,
+                            reply_markup = new
+                            {
+                                inline_keyboard = new[]
+                                {
+                                    new[] { new { text = "✅ Одобрить", callback_data = $"confirm:0:{orderId}" } },
+                                    new[] { new { text = "❌ Отклонить", callback_data = $"decision:Rejected:{orderId}" } }
+                                }
+                            }
+                        };
+                    }
+                }
+            }
             using var response = await http.PostAsJsonAsync(
-                $"https://api.telegram.org/bot{token}/sendMessage",
-                new { chat_id = recipient, text = body }, ct);
+                $"https://api.telegram.org/bot{token}/sendMessage", payload, ct);
             using var json = await JsonDocument.ParseAsync(
                 await response.Content.ReadAsStreamAsync(ct), cancellationToken: ct);
             var ok = response.IsSuccessStatusCode &&
