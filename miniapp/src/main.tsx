@@ -96,18 +96,28 @@ function App() {
     setDetailsLoading(false);
   }
   const chosenRate = rates.find(r => String(r.id) === rateId);
-  const selectedDateTime = day ? new Date(`${day}T${hour}:${minute}:00`) : null;
-  const conflicts = (dateTime: Date | null) => !!dateTime && reservedSlots.some(value => {
-    const booked = new Date(value.endsWith('Z') ? value : value + 'Z');
-    return !Number.isNaN(booked.getTime()) && Math.abs(booked.getTime() - dateTime.getTime()) < 60000;
-  });
+  const reservedTimestamps = reservedSlots.map(value => new Date(value.endsWith('Z') ? value : value+'Z').getTime()).filter(Number.isFinite);
+  const isAvailableSlot = (d:string, h:string, m:string) => {
+    if(!d) return false;
+    const at = new Date(`${d}T${h}:${m}:00`).getTime();
+    return Number.isFinite(at) && at >= Date.now()+3600000 && at <= Date.now()+90*86400000 &&
+      reservedTimestamps.every(reserved => Math.abs(reserved-at)>=60000);
+  };
+  const hoursList = Array.from({length:24},(_,i)=>String(i).padStart(2,'0'))
+    .filter(h=>Array.from({length:12},(_,i)=>String(i*5).padStart(2,'0')).some(m=>isAvailableSlot(day,h,m)));
+  const activeHour = hoursList.includes(hour) ? hour : (hoursList[0] || '');
+  const minutesList = Array.from({length:12},(_,i)=>String(i*5).padStart(2,'0'))
+    .filter(m=>isAvailableSlot(day,activeHour,m));
+  const activeMinute = minutesList.includes(minute) ? minute : (minutesList[0] || '');
+  const selectedDateTime = day && activeHour && activeMinute ? new Date(`${day}T${activeHour}:${activeMinute}:00`) : null;
+  const conflicts = (dateTime: Date | null) => !!dateTime && reservedTimestamps.some(booked=>Math.abs(booked-dateTime.getTime())<60000);
   async function submitOrder() {
     if (!selected || !rateId || !adText.trim() || !day) {
       setBookingMessage('Укажите тариф, текст объявления и дату публикации'); return;
     }
-    const timestamp = new Date(`${day}T${hour}:${minute}:00`);
-    if (Number.isNaN(timestamp.getTime()) || timestamp.getTime() <= Date.now()+120000) {
-      setBookingMessage('Выберите время минимум через 2 минуты от текущего и не позднее 90 дней'); return;
+    const timestamp = selectedDateTime ?? new Date(NaN);
+    if (Number.isNaN(timestamp.getTime()) || timestamp.getTime() < Date.now()+3600000) {
+      setBookingMessage('Выберите свободное время минимум через 1 час от текущего и не позднее 90 дней'); return;
     }
     if (conflicts(timestamp)) { setBookingMessage('Это время уже занято. Выберите другое.'); return; }
     setBusy(true); setBookingMessage('');
@@ -394,9 +404,9 @@ function App() {
         <div className="rateCards">{rates.map(rate=><button type="button" key={rate.id} aria-pressed={rateId===String(rate.id)} className={rateId===String(rate.id)?'rateCard picked':'rateCard'} onClick={()=>setRateId(String(rate.id))}><span>{rate.hours} ч размещения</span><strong>{money(rate.price)}</strong><small>{rateId===String(rate.id)?'✓ Выбрано':'Выбрать тариф'}</small></button>)}</div>
         {!rates.length && <p className="description">Владелец пока не добавил тарифы.</p>}
         <label className="field">Текст рекламного поста<textarea value={adText} maxLength={4096} rows={5} onChange={e=>setAdText(e.target.value)} placeholder="Введите рекламный текст"/></label>
-        <div className="field"><span>Дата публикации (ваш часовой пояс)</span><div className="dayScroller">{days.map(d=><button type="button" key={d.value} className={day===d.value?'dayTile chosen':'dayTile'} onClick={()=>setDay(d.value)}>{new Date(d.value+'T12:00:00').toLocaleDateString('ru-RU',{weekday:'short'})}<strong>{new Date(d.value+'T12:00:00').getDate()}</strong><small>{new Date(d.value+'T12:00:00').toLocaleDateString('ru-RU',{month:'short'})}</small></button>)}</div></div>
-        <div className="field"><span>Время публикации</span><div className="timeGrid"><select aria-label="Часы" value={hour} onChange={e=>setHour(e.target.value)}>{Array.from({length:24},(_,i)=>String(i).padStart(2,'0')).map(h=><option key={h} value={h}>{h} ч</option>)}</select><select aria-label="Минуты" value={minute} onChange={e=>setMinute(e.target.value)}>{Array.from({length:12},(_,i)=>String(i*5).padStart(2,'0')).map(m=><option key={m} value={m}>{m} мин</option>)}</select></div><small className="hint">Ближайшие 90 дней, время по часам вашего телефона. {availabilityKnown ? 'Занятые слоты проверяются.' : 'Доступность будет проверена при оформлении.'}</small>{availabilityKnown && conflicts(selectedDateTime) && <span className="slotWarning">Выбранное время уже занято.</span>}</div>
-        <div className="orderPreview"><h3>Ваш заказ</h3><div><span>Канал</span><b>{selected.title}</b></div><div><span>Тариф</span><b>{chosenRate ? chosenRate.hours+' ч' : 'Не выбран'}</b></div><div><span>Размещение</span><b>{day ? new Date(day+'T12:00:00').toLocaleDateString('ru-RU')+' · '+hour+':'+minute : 'Дата не выбрана'}</b></div><div className="previewTotal"><span>Цена размещения</span><strong>{chosenRate ? money(chosenRate.price) : '—'}</strong></div><div><span>Сервисный сбор Reklio</span><b>{chosenRate ? money(Math.round(chosenRate.price*5)/100) : '—'}</b></div><div className="previewTotal"><span>Итого к оплате</span><strong>{chosenRate ? money(chosenRate.price+Math.round(chosenRate.price*5)/100) : '—'}</strong></div></div>
+        <div className="field"><span>Дата публикации (ваш часовой пояс)</span><div className="dayScroller">{days.map(d=><button type="button" key={d.value} disabled={!Array.from({length:24},(_,i)=>String(i).padStart(2,'0')).some(h=>Array.from({length:12},(_,i)=>String(i*5).padStart(2,'0')).some(m=>isAvailableSlot(d.value,h,m)))} className={day===d.value?'dayTile chosen':'dayTile'} onClick={()=>setDay(d.value)}>{new Date(d.value+'T12:00:00').toLocaleDateString('ru-RU',{weekday:'short'})}<strong>{new Date(d.value+'T12:00:00').getDate()}</strong><small>{new Date(d.value+'T12:00:00').toLocaleDateString('ru-RU',{month:'short'})}</small></button>)}</div></div>
+        <div className="field"><span>Время публикации</span><div className="timeGrid"><select aria-label="Часы" value={activeHour} onChange={e=>setHour(e.target.value)}>{hoursList.map(h=><option key={h} value={h}>{h} ч</option>)}</select><select aria-label="Минуты" value={activeMinute} onChange={e=>setMinute(e.target.value)}>{minutesList.map(m=><option key={m} value={m}>{m} мин</option>)}</select></div><small className="hint">Только свободное время от 1 часа до 90 дней вперёд, по часам вашего телефона. {availabilityKnown ? 'Занятые слоты проверяются.' : 'Доступность будет проверена при оформлении.'}</small>{availabilityKnown && conflicts(selectedDateTime) && <span className="slotWarning">Выбранное время уже занято.</span>}</div>
+        <div className="orderPreview"><h3>Ваш заказ</h3><div><span>Канал</span><b>{selected.title}</b></div><div><span>Тариф</span><b>{chosenRate ? chosenRate.hours+' ч' : 'Не выбран'}</b></div><div><span>Размещение</span><b>{day ? new Date(day+'T12:00:00').toLocaleDateString('ru-RU')+' · '+(activeHour||'--')+':'+(activeMinute||'--') : 'Дата не выбрана'}</b></div><div className="previewTotal"><span>Цена размещения</span><strong>{chosenRate ? money(chosenRate.price) : '—'}</strong></div><div><span>Сервисный сбор Reklio</span><b>{chosenRate ? money(Math.round(chosenRate.price*5)/100) : '—'}</b></div><div className="previewTotal"><span>Итого к оплате</span><strong>{chosenRate ? money(chosenRate.price+Math.round(chosenRate.price*5)/100) : '—'}</strong></div></div>
         <p className="description">После отправки владелец должен согласовать заявку. Оплата станет доступна после согласования.</p>
         {bookingMessage && <div className="notice">{bookingMessage}</div>}
         <button className="primary" disabled={busy || !chosenRate || conflicts(selectedDateTime)} onClick={submitOrder}>{busy?'Отправка...':'Отправить заявку'}</button>
