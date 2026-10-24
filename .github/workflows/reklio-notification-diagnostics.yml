@@ -1,0 +1,37 @@
+name: Reklio notification diagnostics
+on:
+  push:
+    branches: [feature/miniapp-typescript-foundation]
+    paths: [.github/workflows/reklio-notification-diagnostics.yml]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: SSH setup
+        env:
+          KEY: ${{ secrets.REKLIO_DEPLOY_SSH_KEY_B64 }}
+          HOSTS: ${{ secrets.REKLIO_SSH_KNOWN_HOSTS }}
+        run: |
+          umask 077
+          mkdir -p ~/.ssh
+          printf %s "$KEY" | base64 -d > ~/.ssh/id_ed25519
+          printf '%s\n' "$HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/id_ed25519 ~/.ssh/known_hosts
+      - name: Check active notification worker without exposing secrets
+        env:
+          H: ${{ secrets.REKLIO_DEPLOY_HOST }}
+          U: ${{ secrets.REKLIO_DEPLOY_USER }}
+          P: ${{ secrets.REKLIO_DEPLOY_PORT }}
+        run: |
+          ssh -o BatchMode=yes -o StrictHostKeyChecking=yes -p "${P:-22}" "$U@$H" 'bash -s' <<'REMOTE'
+          set -eu
+          echo "service: $(systemctl is-active reklio-api.service || true)"
+          echo "worker logs (last 40, redacted):"
+          journalctl -u reklio-api.service --since '30 minutes ago' --no-pager -o cat 2>/dev/null |
+            grep -Ei 'notification delivery|inline actions|Reklio notification delivery|Notification [0-9]+|error' |
+            sed -E 's/[0-9]{8,}/[ID]/g' | tail -40 || true
+          REMOTE
