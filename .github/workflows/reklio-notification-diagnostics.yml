@@ -34,4 +34,14 @@ jobs:
           journalctl -u reklio-api.service --since '30 minutes ago' --no-pager -o cat 2>/dev/null |
             grep -Ei 'notification delivery|inline actions|Reklio notification delivery|Notification [0-9]+|error' |
             sed -E 's/[0-9]{8,}/[ID]/g' | tail -40 || true
+          if test -r "$HOME/.my.cnf" && command -v mariadb >/dev/null; then
+            echo 'Recent outbox entries (order id, state, linked owner, order status):'
+            mariadb --defaults-extra-file="$HOME/.my.cnf" --batch --skip-column-names s2_telegram_manager -e "
+              SELECT n.order_id,n.state,
+                     CASE WHEN a.owner_id=n.recipient_id THEN 'owner' ELSE 'not-owner' END,
+                     COALESCE(a.status,'missing')
+              FROM notification_outbox n LEFT JOIN ad_requests a ON a.id=n.order_id
+              WHERE n.body LIKE 'Новая заявка%'
+              ORDER BY n.id DESC LIMIT 12;" 2>/dev/null || echo 'db inspection unavailable'
+          fi
           REMOTE
