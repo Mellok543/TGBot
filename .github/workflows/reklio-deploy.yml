@@ -180,6 +180,25 @@ jobs:
           printf '%s' "$DEPLOY_KEY_B64" | base64 --decode > ~/.ssh/id_ed25519
           printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
           chmod 600 ~/.ssh/id_ed25519 ~/.ssh/known_hosts
+      - name: Prepare portable pure-Python monitor dependencies
+        run: |
+          set -euo pipefail
+          python3 -m pip install --target /tmp/reklio-mtproto-deps --only-binary=:all: 'telethon==1.42.0' 'PyMySQL==1.1.1'
+          test -f /tmp/reklio-mtproto-deps/telethon/__init__.py
+          test -f /tmp/reklio-mtproto-deps/pymysql/__init__.py
+      - name: Transfer monitor dependencies
+        env:
+          DEPLOY_HOST: ${{ secrets.REKLIO_DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.REKLIO_DEPLOY_USER }}
+          DEPLOY_PORT: ${{ secrets.REKLIO_DEPLOY_PORT }}
+        run: |
+          set -euo pipefail
+          tar -czf - -C /tmp/reklio-mtproto-deps . |
+            ssh -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=15 \
+              -p "${DEPLOY_PORT:-22}" "$DEPLOY_USER@$DEPLOY_HOST" \
+              'mkdir -p "$HOME/.local/share/reklio-mtproto/vendor" &&
+               chmod 700 "$HOME/.local/share/reklio-mtproto" &&
+               tar -xzf - -C "$HOME/.local/share/reklio-mtproto/vendor"'
       - name: Install and start public-channel checks
         env:
           DEPLOY_HOST: ${{ secrets.REKLIO_DEPLOY_HOST }}
