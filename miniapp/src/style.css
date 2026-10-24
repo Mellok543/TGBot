@@ -35,3 +35,5 @@
 .rescheduleBox{margin:12px 0;padding:13px;border:1px solid #445e7d;border-radius:12px;background:#1c2d45}.rescheduleBox .field{margin:12px 0}.rescheduleBox .field input{width:100%}
 
 .adminSearch{display:flex;gap:8px;margin:10px 0 16px}.adminSearch input{min-width:0;flex:1;background:#203149;border:1px solid #475b79;border-radius:10px;color:#fff;padding:11px}.auditEntry{display:flex;flex-direction:column;gap:5px;border-bottom:1px solid #334963;padding:11px 0}.auditEntry strong{font-size:13px}.auditEntry small{color:#a5b9d4;font-size:11px}
+
+.adminTabs{display:flex;gap:7px;overflow-x:auto;padding:7px 0 15px;scrollbar-width:thin}.adminTabs button{flex:0 0 auto;border:1px solid #344c6c;background:#1b2b43;color:#afc3de;border-radius:11px;padding:10px 13px;font-size:12px;font-weight:700}.adminTabs button.active{background:#3864a0;border-color:#6b94c8;color:#fff}
