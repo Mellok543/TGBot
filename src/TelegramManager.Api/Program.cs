@@ -75,6 +75,27 @@ static long? VerifyTelegram(string? initData, string token)
 
 long? Authorized(HttpRequest req) => VerifyTelegram(req.Headers["X-Telegram-Init-Data"].ToString(), token);
 app.MapGet("/api/health", () => Results.Ok(new { status = "ok" }));
+app.MapGet("/api/public/bot-link", async (IHttpClientFactory clients, CancellationToken ct) =>
+{
+    try
+    {
+        using var http=clients.CreateClient();
+        using var response=await http.GetAsync($"https://api.telegram.org/bot{token}/getMe",ct);
+        if(!response.IsSuccessStatusCode) return Results.Problem("Telegram bot is temporarily unavailable", statusCode:503);
+        using var json=await JsonDocument.ParseAsync(await response.Content.ReadAsStreamAsync(ct),cancellationToken:ct);
+        var data=json.RootElement;
+        if(!data.TryGetProperty("ok",out var ok) || !ok.GetBoolean()
+           || !data.TryGetProperty("result",out var result)
+           || !result.TryGetProperty("username",out var name))
+            return Results.Problem("Telegram bot username is unavailable",statusCode:503);
+        var username=name.GetString();
+        if(string.IsNullOrWhiteSpace(username) || !username.All(ch=>char.IsLetterOrDigit(ch)||ch=='_'))
+            return Results.Problem("Invalid Telegram bot username",statusCode:503);
+        return Results.Ok(new { url=$"https://t.me/{username}" });
+    }
+    catch(HttpRequestException) { return Results.Problem("Telegram API unavailable",statusCode:503); }
+});
+
 app.MapGet("/api/me", async (HttpRequest req,MySqlDataSource db,CancellationToken ct) =>
 {
     if(Authorized(req) is not long id) return Results.Unauthorized();
