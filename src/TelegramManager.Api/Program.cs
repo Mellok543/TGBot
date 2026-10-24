@@ -829,7 +829,7 @@ app.MapPost("/api/orders/{orderId:long}/schedule", async (long orderId, HttpRequ
         SET a.status='Pending',a.scheduled_at=@at,a.time_rate_id=r.id,a.price_rub=r.price_rub,
             a.delete_after_hours=r.duration_hours
         WHERE a.id=@order AND a.advertiser_id=@user AND a.status='Draft'
-          AND @at>DATE_ADD(UTC_TIMESTAMP(),INTERVAL 2 MINUTE)
+          AND @at>DATE_ADD(UTC_TIMESTAMP(),INTERVAL 1 HOUR)
           AND @at<DATE_ADD(UTC_TIMESTAMP(),INTERVAL 90 DAY)
           AND NOT EXISTS (
             SELECT 1 FROM (SELECT channel_id,scheduled_at,status FROM ad_requests) other
@@ -865,8 +865,8 @@ app.MapPost("/api/orders/{orderId:long}/reschedule", async (long orderId, HttpRe
             a.status=IF(a.status='PaidReschedule','PendingPaid','Pending')
         WHERE a.id=@id AND a.advertiser_id=@buyer
           AND (a.status='PaidReschedule' OR
-               (a.status IN ('Pending','AwaitingPayment') AND a.scheduled_at<=DATE_ADD(UTC_TIMESTAMP(),INTERVAL 10 MINUTE)))
-          AND @at>DATE_ADD(UTC_TIMESTAMP(),INTERVAL 10 MINUTE)
+               (a.status IN ('Pending','AwaitingPayment') AND a.scheduled_at<=DATE_ADD(UTC_TIMESTAMP(),INTERVAL 1 HOUR)))
+          AND @at>DATE_ADD(UTC_TIMESTAMP(),INTERVAL 1 HOUR)
           AND @at<DATE_ADD(UTC_TIMESTAMP(),INTERVAL 90 DAY)
           AND NOT EXISTS(
             SELECT 1 FROM (SELECT id,channel_id,scheduled_at,status FROM ad_requests) other
@@ -893,7 +893,7 @@ app.MapPost("/api/orders/{orderId:long}/approve", async (long orderId, HttpReque
         UPDATE ad_requests
         SET status=IF(status='PendingPaid','Scheduled','AwaitingPayment')
         WHERE id=@order AND owner_id=@owner AND status IN ('Pending','PendingPaid')
-          AND ( (status='Pending' AND scheduled_at>DATE_ADD(UTC_TIMESTAMP(),INTERVAL 10 MINUTE)) OR (status='PendingPaid' AND scheduled_at>UTC_TIMESTAMP()) )
+          AND ( (status='Pending' AND scheduled_at>DATE_ADD(UTC_TIMESTAMP(),INTERVAL 1 HOUR)) OR (status='PendingPaid' AND scheduled_at>UTC_TIMESTAMP()) )
         """, conn, tx);
     update.Parameters.AddWithValue("@order", orderId);
     update.Parameters.AddWithValue("@owner", ownerId);
@@ -910,7 +910,7 @@ app.MapPost("/api/orders/{orderId:long}/approve", async (long orderId, HttpReque
         if(actualStatus is not ("Pending" or "PendingPaid")) return Results.Conflict(new {error="Эта заявка уже обработана. Обновите список заказов."});
         if(at is null) return Results.Conflict(new {error="В заявке не выбрано время размещения. Попросите покупателя выбрать дату и время."});
         if(at.Value<=DateTime.UtcNow) return Results.Conflict(new {error="Время размещения уже прошло. Попросите покупателя выбрать новое время."});
-        if(actualStatus=="Pending" && at.Value<=DateTime.UtcNow.AddMinutes(10)) return Results.Conflict(new {error="До публикации осталось меньше 10 минут — времени на оплату недостаточно. Попросите покупателя перенести размещение."});
+        if(actualStatus=="Pending" && at.Value<=DateTime.UtcNow.AddHours(1)) return Results.Conflict(new {error="До публикации осталось меньше 1 часа — времени на оплату недостаточно. Попросите покупателя перенести размещение."});
         return Results.Conflict(new {error="Не удалось одобрить заявку. Обновите список и попробуйте ещё раз."});
     }
 
