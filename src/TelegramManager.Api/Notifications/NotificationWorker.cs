@@ -60,51 +60,52 @@ public sealed class NotificationWorker(MySqlDataSource database, IHttpClientFact
         try
         {
             object payload = new { chat_id = recipient, text = body };
-            if (orderId > 0)
+            if (orderId > 0 && body.StartsWith("Новая заявка", StringComparison.OrdinalIgnoreCase))
             {
+                // Keyboard does not depend on optional channel/rate details.
+                // Read order status and ownership first, then enrich message if details exist.
                 await using var details = new MySqlCommand("""
-                    SELECT c.title,a.content_text,a.price_rub,a.scheduled_at,a.delete_after_hours,a.status
-                    FROM ad_requests a JOIN channels c ON c.telegram_id=a.channel_id
-                    WHERE a.id=@order AND a.owner_id=@owner
+                    SELECT a.status,c.title,a.content_text,a.price_rub,a.scheduled_at,a.delete_after_hours
+                    FROM ad_requests a LEFT JOIN channels c ON c.telegram_id=a.channel_id
+                    WHERE a.id=@order AND a.owner_id=@owner LIMIT 1
                     """, conn);
                 details.Parameters.AddWithValue("@order", orderId);
                 details.Parameters.AddWithValue("@owner", recipient);
                 await using var row = await details.ExecuteReaderAsync(ct);
-                if (await row.ReadAsync(ct))
+                if (await row.ReadAsync(ct) && row.GetString(0) is "Pending" or "PendingPaid")
                 {
-                    var channel = row.GetString(0);
-                    var message = row.IsDBNull(1) ? "" : row.GetString(1);
-                    var price = row.GetDecimal(2);
-                    var scheduled = row.IsDBNull(3) ? (DateTime?)null : row.GetDateTime(3);
-                    var duration = row.IsDBNull(4) ? (int?)null : row.GetInt32(4);
-                    var status = row.GetString(5);
-                    if (status is "Pending" or "PendingPaid")
+                    var channel = row.IsDBNull(1) ? "Канал" : row.GetString(1);
+                    var message = row.IsDBNull(2) ? "" : row.GetString(2);
+                    var price = row.IsDBNull(3) ? 0m : row.GetDecimal(3);
+                    var scheduled = row.IsDBNull(4) ? (DateTime?)null : row.GetDateTime(4);
+                    var duration = row.IsDBNull(5) ? (int?)null : row.GetInt32(5);
+                    var preview = message.Length > 650 ? message[..650] + "…" : message;
+                    var scheduledLabel = scheduled is { } date ? date.AddHours(3).ToString("dd.MM.yyyy HH:mm") + " (UTC+3)" : "не указана";
+                    var durationLabel = duration is { } hours ? hours.ToString() + " ч" : "не указан";
+                    body = $"📥 Новая заявка #{orderId} на рекламу\n" +
+                           $"📺 Канал: {channel}\n" +
+                           $"💰 Стоимость: {price:0.##} ₽\n" +
+                           $"📅 Публикация: {scheduledLabel}\n" +
+                           $"⏳ Продолжительность: {durationLabel}\n\n" +
+                           $"📝 Рекламный текст:\n{preview}\n\n" +
+                           "Подтвердите или отклоните заявку:";
+                    payload = new
                     {
-                        var preview = message.Length > 650 ? message[..650] + "…" : message;
-                        body = $"📥 Новая заявка #{orderId} на рекламу\n" +
-                               $"📺 Канал: {channel}\n" +
-                               $"💰 Стоимость: {price:0.##} ₽\n" +
-                               $"📅 Публикация: {scheduled?.AddHours(3):dd.MM.yyyy HH:mm} (UTC+3)\n" +
-                               $"⏳ Продолжительность: {duration?.ToString() ?? "—"} ч\n\n" +
-                               $"📝 Рекламный текст:\n{preview}\n\n" +
-                               "Подтвердите или отклоните заявку:";
-                        payload = new
+                        chat_id = recipient,
+                        text = body,
+                        reply_markup = new
                         {
-                            chat_id = recipient,
-                            text = body,
-                            reply_markup = new
+                            inline_keyboard = new[]
                             {
-                                inline_keyboard = new[]
-                                {
-                                    new[] { new { text = "✅ Одобрить", callback_data = $"confirm:0:{orderId}" } },
-                                    new[] { new { text = "❌ Отклонить", callback_data = $"decision:Rejected:{orderId}" } }
-                                }
+                                new[] { new { text = "✅ Одобрить", callback_data = $"confirm:0:{orderId}" } },
+                                new[] { new { text = "❌ Отклонить", callback_data = $"decision:Rejected:{orderId}" } }
                             }
-                        };
-                    }
+                        }
+                    };
                 }
             }
-            log.LogInformation("Notification {Id} for order {OrderId}: inline actions = {Actions}", id, orderId, payload.GetType().GetProperty("reply_markup") is not null);
+            log.LogInformation("New order notification {Id} for order {OrderId}: buttons={WithButtons}", id, orderId,
+                payload.GetType().GetProperty("reply_markup") is not null);
             using var response = await http.PostAsJsonAsync(
                 $"https://api.telegram.org/bot{token}/sendMessage", payload, ct);
             using var json = await JsonDocument.ParseAsync(
