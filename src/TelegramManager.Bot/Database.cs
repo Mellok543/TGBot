@@ -526,7 +526,7 @@ public sealed class Database(string connectionString) : IAsyncDisposable
             check.Parameters.Add(new MySqlParameter("@at", at));
             if (Convert.ToInt64(await check.ExecuteScalarAsync(ct)) > 0) return false;
         }
-        await using (var cmd = new MySqlCommand("UPDATE ad_requests SET status='AwaitingPayment', paid_confirmed=FALSE, payment_status='Unpaid', delete_after_hours=COALESCE(delete_after_hours,@hours,24) WHERE id=@id AND owner_id=@owner AND status='Pending' AND scheduled_at>UTC_TIMESTAMP()", connection, tx))
+        await using (var cmd = new MySqlCommand("UPDATE ad_requests SET status='AwaitingPayment', paid_confirmed=FALSE, payment_status='Unpaid', delete_after_hours=COALESCE(delete_after_hours,@hours,24) WHERE id=@id AND owner_id=@owner AND status='Pending' AND scheduled_at>DATE_ADD(UTC_TIMESTAMP(),INTERVAL 1 HOUR)", connection, tx))
         {
             cmd.Parameters.Add(new MySqlParameter("@id", id));
             cmd.Parameters.Add(new MySqlParameter("@owner", owner));
