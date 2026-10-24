@@ -893,14 +893,24 @@ app.MapPost("/api/orders/{orderId:long}/approve", async (long orderId, HttpReque
         UPDATE ad_requests
         SET status=IF(status='PendingPaid','Scheduled','AwaitingPayment')
         WHERE id=@order AND owner_id=@owner AND status IN ('Pending','PendingPaid')
-          AND scheduled_at>DATE_ADD(UTC_TIMESTAMP(),INTERVAL 10 MINUTE)
+          AND scheduled_at>UTC_TIMESTAMP()
         """, conn, tx);
     update.Parameters.AddWithValue("@order", orderId);
     update.Parameters.AddWithValue("@owner", ownerId);
     if (await update.ExecuteNonQueryAsync(ct) != 1)
     {
         await tx.RollbackAsync(ct);
-        return Results.Conflict(new { error = "Заявка уже обработана или недоступна" });
+        await using var reasonCmd=new MySqlCommand("SELECT status,scheduled_at FROM ad_requests WHERE id=@order AND owner_id=@owner LIMIT 1",conn);
+        reasonCmd.Parameters.AddWithValue("@order",orderId);
+        reasonCmd.Parameters.AddWithValue("@owner",ownerId);
+        await using var reasonReader=await reasonCmd.ExecuteReaderAsync(ct);
+        if(!await reasonReader.ReadAsync(ct)) return Results.NotFound(new {error="Заявка не найдена"});
+        var actualStatus=reasonReader.GetString(0);
+        var at=reasonReader.IsDBNull(1)?(DateTime?)null:reasonReader.GetDateTime(1);
+        if(actualStatus is not ("Pending" or "PendingPaid")) return Results.Conflict(new {error="Эта заявка уже обработана. Обновите список заказов."});
+        if(at is null) return Results.Conflict(new {error="В заявке не выбрано время размещения. Попросите покупателя выбрать дату и время."});
+        if(at.Value<=DateTime.UtcNow) return Results.Conflict(new {error="Время размещения уже прошло. Попросите покупателя выбрать новое время."});
+        return Results.Conflict(new {error="Не удалось одобрить заявку. Обновите список и попробуйте ещё раз."});
     }
 
     await using var notify = new MySqlCommand("""
