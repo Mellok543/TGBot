@@ -435,4 +435,16 @@ function App() {
     <nav>{tabs.map(({id,label,icon:Icon})=><button key={id} className={tab===id?'active':''} onClick={()=>setTab(id)}><Icon size={21}/><span>{label}</span></button>)}</nav>
   </div>;
 }
-createRoot(document.getElementById('root')!).render(<React.StrictMode><App/></React.StrictMode>);
+// Keep the existing Telegram Mini App on its current URL; show the public landing
+// only to ordinary browsers. /app/ is a direct entry for standalone testing.
+const telegramContext=Boolean(window.Telegram?.WebApp?.initData)
+  || new URLSearchParams(window.location.search).has('tgWebAppData');
+const appEntry=telegramContext || window.location.pathname.startsWith('/app');
+const root=createRoot(document.getElementById('root')!);
+if(appEntry){
+  root.render(<React.StrictMode><App/></React.StrictMode>);
+}else{
+  import('./Landing').then(({default:Landing})=>{
+    root.render(<React.StrictMode><Landing/></React.StrictMode>);
+  });
+}
