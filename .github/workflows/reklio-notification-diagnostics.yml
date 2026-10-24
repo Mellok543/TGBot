@@ -48,4 +48,9 @@ jobs:
           echo "new worker phrase in binary: $(if grep -aq 'New order notification' /opt/reklio/api/TelegramManager.Api.dll 2>/dev/null; then echo yes; else echo unknown; fi)"
           echo 'latest owner request notifications:'
           mariadb --defaults-extra-file="$HOME/.my.cnf" -N s2_telegram_manager -e "SELECT n.id,n.order_id,n.state,LEFT(n.body,30),a.status FROM notification_outbox n LEFT JOIN ad_requests a ON a.id=n.order_id WHERE n.body LIKE 'Новая заявка%' ORDER BY n.id DESC LIMIT 8" 2>/dev/null || true
+          echo 'Recent notification timestamps:'
+          mariadb --defaults-extra-file="$HOME/.my.cnf" -N s2_telegram_manager -e "SELECT n.order_id,n.state,n.created_at,n.sent_at FROM notification_outbox n WHERE n.body LIKE 'Новая заявка%' ORDER BY n.id DESC LIMIT 5" 2>/dev/null || echo 'timestamp columns unavailable'
+          echo 'Notification processes:'
+          ps -eo pid,lstart,args | grep -E '[T]elegramManager.Api|[r]eklio' | cut -c1-210 | tail -15
+          echo "worker phrase in dll UTF16: $(if strings -el /opt/reklio/api/TelegramManager.Api.dll 2>/dev/null | grep -q 'New order notification'; then echo yes; else echo no; fi)"
           REMOTE
