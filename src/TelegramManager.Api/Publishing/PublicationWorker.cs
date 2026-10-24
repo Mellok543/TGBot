@@ -34,6 +34,7 @@ public sealed class PublicationWorker(MySqlDataSource database, IHttpClientFacto
             {
                 await PublishOneAsync(http, token, allowTest, testChannelId, stoppingToken);
                 await DeleteOneAsync(http, token, testChannelId, stoppingToken);
+                await ReviewStalledAsync(stoppingToken);
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested) { break; }
             catch (Exception ex) { log.LogError(ex, "Reklio publication cycle failed"); }
@@ -208,6 +209,50 @@ public sealed class PublicationWorker(MySqlDataSource database, IHttpClientFacto
             await QueueReviewNoticeAsync(conn, id, "Удаление рекламы", log);
         }
     }
+    // Network outcomes may be ambiguous after a process crash. Never retry them automatically.
+    // Flag stalled operations for manual reconciliation and block live payouts.
+    private async Task ReviewStalledAsync(CancellationToken ct)
+    {
+        await using var conn = await database.OpenConnectionAsync(ct);
+        await using var tx = await conn.BeginTransactionAsync(ct);
+        var affected = new List<long>();
+        await using (var candidates = new MySqlCommand("""
+            SELECT order_id FROM reklio_publications
+            WHERE (state IN ('Claimed','Sending','Deleting')
+                   AND claimed_at < DATE_SUB(UTC_TIMESTAMP(), INTERVAL 10 MINUTE))
+               OR state IN ('NeedsReview','NeedsDeleteReview')
+            ORDER BY claimed_at LIMIT 50 FOR UPDATE
+            """, conn, tx))
+        {
+            await using var reader = await candidates.ExecuteReaderAsync(ct);
+            while (await reader.ReadAsync(ct)) affected.Add(reader.GetInt64(0));
+        }
+        foreach (var id in affected)
+        {
+            await using var mark = new MySqlCommand("""
+                UPDATE ad_requests a
+                JOIN reklio_publications p ON p.order_id=a.id
+                SET a.payout_status='Blocked',
+                    a.last_error=COALESCE(NULLIF(a.last_error,''),COALESCE(p.last_error,'Операция публикации требует проверки'))
+                WHERE a.id=@id AND a.payout_status NOT IN ('Paid','Refunded','Blocked')
+                  AND p.state IN ('Claimed','Sending','Deleting','NeedsReview','NeedsDeleteReview')
+                """, conn, tx);
+            mark.Parameters.AddWithValue("@id", id);
+            if (await mark.ExecuteNonQueryAsync(ct) == 0) continue;
+            await using var notice = new MySqlCommand("""
+                INSERT IGNORE INTO notification_outbox(recipient_id,order_id,body)
+                SELECT advertiser_id,id,CONCAT('Заказ #',id,': публикация или удаление требует проверки. Выплата заблокирована.')
+                FROM ad_requests WHERE id=@id
+                UNION ALL
+                SELECT owner_id,id,CONCAT('Заказ #',id,': обнаружена проблема публикации. Требуется проверка.')
+                FROM ad_requests WHERE id=@id
+                """, conn, tx);
+            notice.Parameters.AddWithValue("@id", id);
+            await notice.ExecuteNonQueryAsync(ct);
+        }
+        await tx.CommitAsync(ct);
+    }
+
     private static async Task QueueReviewNoticeAsync(MySqlConnection conn, long orderId, string operation, ILogger log)
     {
         try
