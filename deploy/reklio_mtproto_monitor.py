@@ -25,7 +25,7 @@ def database_kwargs():
         parts = dict(item.split("=", 1) for item in connection.split(";") if "=" in item)
         parts = {key.strip().lower().replace(" ", ""): value.strip() for key, value in parts.items()}
     else:
-        settings = configparser.ConfigParser()
+        settings = configparser.ConfigParser(interpolation=None)
         if not settings.read(str(Path.home() / ".my.cnf")) or not settings.has_section("client"):
             raise RuntimeError("No DATABASE_URL and no ~/.my.cnf [client] section")
         parts = {key.strip().lower().replace("-", ""): value for key,value in settings.items("client")}
