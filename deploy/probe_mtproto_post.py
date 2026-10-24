@@ -19,38 +19,42 @@ async def run(channel: str, message_id: int) -> int:
         return 2
 
     # In-memory session: no .session file or auth key printed to logs.
-    async with TelegramClient(StringSession(), int(api_id), api_hash) as client:
-        await client.start(bot_token=bot_token)
+    # Do not use 'async with' here: it calls start() without the bot token,
+    # which attempts an interactive phone prompt on CI.
+    client = TelegramClient(StringSession(), int(api_id), api_hash)
+    await client.start(bot_token=bot_token)
+    try:
+        target = int(channel) if channel.lstrip("-").isdigit() else channel
         try:
-            target = int(channel) if channel.lstrip("-").isdigit() else channel
-            try:
-                peer = await client.get_input_entity(target)
-            except (ValueError, RPCError):
-                # A channel's numeric ID alone is insufficient without its access hash.
-                # Bots may not have access to dialogs; a public username is preferred for the probe.
-                if isinstance(target, int):
-                    print("PEER_NOT_RESOLVED: numeric channel ID needs cached access hash; test with a public @username first")
-                    return 3
-                raise
-            result = await client(functions.channels.GetMessagesRequest(
-                channel=peer, id=[types.InputMessageID(id=message_id)]
-            ))
-            matches = [item for item in result.messages if getattr(item, "id", None) == message_id]
-            if not matches:
-                print("NOT_FOUND: requested message was not returned")
-                return 4
-            item = matches[0]
-            if isinstance(item, types.MessageEmpty):
-                print("MISSING: Telegram returned MessageEmpty for the requested message")
-                return 0
-            if isinstance(item, (types.Message, types.MessageService)):
-                print("PRESENT: Telegram returned the requested message")
-                return 0
-            print("INDETERMINATE: unexpected Telegram message type")
-            return 5
-        except RPCError as exc:
-            print("TELEGRAM_ERROR:", type(exc).__name__)
-            return 6
+            peer = await client.get_input_entity(target)
+        except (ValueError, RPCError):
+            # A channel's numeric ID alone is insufficient without its access hash.
+            # Bots may not have access to dialogs; a public username is preferred for the probe.
+            if isinstance(target, int):
+                print("PEER_NOT_RESOLVED: numeric channel ID needs cached access hash; test with a public @username first")
+                return 3
+            raise
+        result = await client(functions.channels.GetMessagesRequest(
+            channel=peer, id=[types.InputMessageID(id=message_id)]
+        ))
+        matches = [item for item in result.messages if getattr(item, "id", None) == message_id]
+        if not matches:
+            print("NOT_FOUND: requested message was not returned")
+            return 4
+        item = matches[0]
+        if isinstance(item, types.MessageEmpty):
+            print("MISSING: Telegram returned MessageEmpty for the requested message")
+            return 0
+        if isinstance(item, (types.Message, types.MessageService)):
+            print("PRESENT: Telegram returned the requested message")
+            return 0
+        print("INDETERMINATE: unexpected Telegram message type")
+        return 5
+    except RPCError as exc:
+        print("TELEGRAM_ERROR:", type(exc).__name__)
+        return 6
+    finally:
+        await client.disconnect()
 
 
 def main() -> int:
