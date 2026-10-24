@@ -399,6 +399,57 @@ app.MapGet("/api/admin/publication-issues",async(HttpRequest req,MySqlDataSource
           publishedAt=reader.IsDBNull(5)?(DateTime?)null:reader.GetDateTime(5)});
     return Results.Ok(issues);
 });
+app.MapPost("/api/admin/publication-issues/{orderId:long}/review",async(long orderId,HttpRequest req,MySqlDataSource db,CancellationToken ct) =>
+{
+    if(Authorized(req) is not long adminId) return Results.Unauthorized();
+    if(await StaffRole(db,adminId,ct) is null) return Results.Forbid();
+    var input=await req.ReadFromJsonAsync<PublicationReviewInput>(cancellationToken:ct);
+    var note=input?.Note?.Trim();
+    if(input?.Decision is not ("ConfirmedProblem" or "NeedsInvestigation") ||
+       string.IsNullOrWhiteSpace(note) || note.Length<10 || note.Length>500)
+        return Results.BadRequest(new {error="Укажите решение и комментарий от 10 до 500 символов"});
+    await using var conn=await db.OpenConnectionAsync(ct);
+    await using var tx=await conn.BeginTransactionAsync(ct);
+    await using var cmd=new MySqlCommand("""
+        UPDATE ad_requests a
+        LEFT JOIN reklio_publications p ON p.order_id=a.id
+        SET a.payout_status='Blocked',
+            a.last_error=LEFT(CONCAT('Проверка модератора: ',@decision,'. ',@note),512)
+        WHERE a.id=@id AND a.payout_status NOT IN ('Paid','Refunded')
+          AND (a.status IN ('PublishFailed','DeleteFailed')
+               OR p.state IN ('NeedsReview','NeedsDeleteReview')
+               OR (a.payout_status='Blocked' AND a.last_error IS NOT NULL))
+        """,conn,tx);
+    cmd.Parameters.AddWithValue("@id",orderId);
+    cmd.Parameters.AddWithValue("@decision",input.Decision=="ConfirmedProblem"?"нарушение подтверждено":"нужна дополнительная проверка");
+    cmd.Parameters.AddWithValue("@note",note);
+    if(await cmd.ExecuteNonQueryAsync(ct)<1)
+    {
+        await tx.RollbackAsync(ct);
+        return Results.Conflict(new {error="Заказ не найден либо его нельзя изменить"});
+    }
+    await using var audit=new MySqlCommand("""
+        INSERT INTO reklio_admin_audit(actor_id,action,target_id,details)
+        VALUES(@actor,@action,@target,@note)
+        """,conn,tx);
+    audit.Parameters.AddWithValue("@actor",adminId);
+    audit.Parameters.AddWithValue("@action",input.Decision);
+    audit.Parameters.AddWithValue("@target",orderId);
+    audit.Parameters.AddWithValue("@note",note);
+    await audit.ExecuteNonQueryAsync(ct);
+    await using var notice=new MySqlCommand("""
+        INSERT IGNORE INTO notification_outbox(recipient_id,order_id,body)
+        SELECT advertiser_id,id,CONCAT('Заказ #',id,': модератор проверил проблему публикации. Решение доступно в заказе.')
+        FROM ad_requests WHERE id=@id
+        UNION ALL
+        SELECT owner_id,id,CONCAT('Заказ #',id,': модератор проверил проблему публикации. Выплата остаётся заблокированной.')
+        FROM ad_requests WHERE id=@id
+        """,conn,tx);
+    notice.Parameters.AddWithValue("@id",orderId);
+    await notice.ExecuteNonQueryAsync(ct);
+    await tx.CommitAsync(ct);
+    return Results.Ok(new {reviewed=true,payoutStatus="Blocked"});
+});
 app.MapGet("/api/admin/disputes", async (HttpRequest req,MySqlDataSource db,CancellationToken ct) =>
 {
     if(Authorized(req) is not long userId) return Results.Unauthorized();
@@ -1143,6 +1194,7 @@ app.MapPost("/api/orders/{orderId:long}/payment/check", async (long orderId, Htt
 app.Run();
 
 record CreateOrderInput(long ChannelId, string Text);
+record PublicationReviewInput(string Decision,string Note);
 record StaffInput(long TelegramId,string Role);
 record ResolveDisputeInput(string Decision);
 record OpenDisputeInput(string Reason);
