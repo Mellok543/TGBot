@@ -44,4 +44,8 @@ jobs:
               WHERE n.body LIKE 'Новая заявка%'
               ORDER BY n.id DESC LIMIT 12;" 2>/dev/null || echo 'db inspection unavailable'
           fi
+          echo "api binary deployed: $(stat -c '%y' /opt/reklio/api/TelegramManager.Api.dll 2>/dev/null || echo unavailable)"
+          echo "new worker phrase in binary: $(if grep -aq 'New order notification' /opt/reklio/api/TelegramManager.Api.dll 2>/dev/null; then echo yes; else echo unknown; fi)"
+          echo 'latest owner request notifications:'
+          mariadb --defaults-extra-file="$HOME/.my.cnf" -N s2_telegram_manager -e "SELECT n.id,n.order_id,n.state,LEFT(n.body,30),a.status FROM notification_outbox n LEFT JOIN ad_requests a ON a.id=n.order_id WHERE n.body LIKE 'Новая заявка%' ORDER BY n.id DESC LIMIT 8" 2>/dev/null || true
           REMOTE
