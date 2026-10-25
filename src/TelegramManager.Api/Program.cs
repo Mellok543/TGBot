@@ -43,6 +43,15 @@ try
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
         """);
     await createAudit.ExecuteNonQueryAsync();
+    await using var createPromotions=staffDb.CreateCommand("""
+        CREATE TABLE IF NOT EXISTS channel_promotions (
+            channel_id BIGINT NOT NULL PRIMARY KEY,
+            active_until DATETIME NOT NULL,
+            updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            INDEX idx_promotions_active_until(active_until)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+        """);
+    await createPromotions.ExecuteNonQueryAsync();
 }
 catch(MySqlException ex)
 {
@@ -155,8 +164,12 @@ app.MapGet("/api/public/channels", async (HttpRequest req,MySqlDataSource db,Can
           (SELECT m.subscribers FROM channel_daily_metrics m WHERE m.channel_id=c.telegram_id AND m.subscribers IS NOT NULL ORDER BY m.day DESC LIMIT 1),
           (SELECT CAST(ROUND(AVG(v.views)) AS SIGNED) FROM reklio_post_views v
            JOIN channel_observed_posts op ON op.channel_id=v.channel_id AND op.message_id=v.message_id
-           WHERE v.channel_id=c.telegram_id AND op.posted_at>=UTC_TIMESTAMP()-INTERVAL 30 DAY)
-        FROM channels c WHERE c.is_listed=TRUE ORDER BY c.connected_at DESC LIMIT @limit
+           WHERE v.channel_id=c.telegram_id AND op.posted_at>=UTC_TIMESTAMP()-INTERVAL 30 DAY),
+          (SELECT p.active_until FROM channel_promotions p WHERE p.channel_id=c.telegram_id AND p.active_until>UTC_TIMESTAMP() LIMIT 1)
+        FROM channels c
+        LEFT JOIN channel_promotions promotion ON promotion.channel_id=c.telegram_id
+        WHERE c.is_listed=TRUE
+        ORDER BY (promotion.active_until>UTC_TIMESTAMP()) DESC, c.connected_at DESC LIMIT @limit
         """);
     cmd.Parameters.Add(new MySqlParameter("@limit",limit));
     var rows=new List<object>();
@@ -166,7 +179,7 @@ app.MapGet("/api/public/channels", async (HttpRequest req,MySqlDataSource db,Can
       price=rd.GetDecimal(3),description=rd.IsDBNull(4)?"":rd.GetString(4),
       username=rd.IsDBNull(5)?null:rd.GetString(5),
       subscribers=rd.IsDBNull(6)?(int?)null:rd.GetInt32(6),
-      avgViews=rd.IsDBNull(7)?(long?)null:rd.GetInt64(7)
+      avgViews=rd.IsDBNull(7)?(long?)null:rd.GetInt64(7),promotedUntil=rd.IsDBNull(8)?(DateTime?)null:rd.GetDateTime(8)
     });
     return Results.Ok(rows);
 });
@@ -177,7 +190,8 @@ app.MapGet("/api/public/channels/{id:long}", async (long id,MySqlDataSource db,C
           (SELECT m.subscribers FROM channel_daily_metrics m WHERE m.channel_id=c.telegram_id AND m.subscribers IS NOT NULL ORDER BY m.day DESC LIMIT 1),
           (SELECT CAST(ROUND(AVG(v.views)) AS SIGNED) FROM reklio_post_views v
            JOIN channel_observed_posts op ON op.channel_id=v.channel_id AND op.message_id=v.message_id
-           WHERE v.channel_id=c.telegram_id AND op.posted_at>=UTC_TIMESTAMP()-INTERVAL 30 DAY)
+           WHERE v.channel_id=c.telegram_id AND op.posted_at>=UTC_TIMESTAMP()-INTERVAL 30 DAY),
+          (SELECT p.active_until FROM channel_promotions p WHERE p.channel_id=c.telegram_id AND p.active_until>UTC_TIMESTAMP() LIMIT 1)
         FROM channels c WHERE c.telegram_id=@id AND c.is_listed=TRUE LIMIT 1
         """);
     cmd.Parameters.Add(new MySqlParameter("@id",id));
@@ -187,7 +201,7 @@ app.MapGet("/api/public/channels/{id:long}", async (long id,MySqlDataSource db,C
       price=rd.GetDecimal(3),description=rd.IsDBNull(4)?"":rd.GetString(4),
       username=rd.IsDBNull(5)?null:rd.GetString(5),
       subscribers=rd.IsDBNull(6)?(int?)null:rd.GetInt32(6),
-      avgViews=rd.IsDBNull(7)?(long?)null:rd.GetInt64(7)});
+      avgViews=rd.IsDBNull(7)?(long?)null:rd.GetInt64(7),promotedUntil=rd.IsDBNull(8)?(DateTime?)null:rd.GetDateTime(8)});
 });
 app.MapGet("/api/public/channels/{id:long}/details", async (long id,MySqlDataSource db,CancellationToken ct) =>
 {
