@@ -111,3 +111,13 @@
 .compareGrid small{font-size:11px;color:#bad0e8}
 .compareToggle{display:flex;align-items:center;gap:8px;color:#afc9e5;font-size:12px;padding-top:7px;cursor:pointer}
 .compareToggle input{accent-color:#57a3fc;width:16px;height:16px}
+
+.analyticsPanel{padding:17px;margin:17px 0;background:linear-gradient(155deg,#172d4a,#101e33);border:1px solid #3a638b;border-radius:19px}
+.analyticsPanel>h3{margin:0 0 12px;font-size:17px}
+.analyticsPeriods{display:flex;gap:7px;margin-bottom:15px}
+.analyticsPeriods button{flex:1;padding:10px;border-radius:10px;border:1px solid #3e5a7c;background:#1b314e;color:#b5c9e3;font-weight:700;font-size:12px}
+.analyticsPeriods button.active{background:#2474c4;color:#fff;border-color:#60a4f5}
+.analyticsPanel .profileStats{margin-bottom:15px}
+.analyticsGraph{padding-top:12px;border-top:1px solid #40597973;margin-top:14px}
+.analyticsGraph h4{font-size:13px;margin:0 0 10px;color:#d7e6fb}
+.analyticsGraph .historyCard{margin:0}
