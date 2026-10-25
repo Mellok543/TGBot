@@ -107,6 +107,18 @@ jobs:
               *) echo "Incorrect $ext content type: $content_type" >&2; exit 1 ;;
             esac
           done
+      - name: Verify public catalog and Mini App CORS
+        run: |
+          set -euo pipefail
+          status="$(curl -sS --max-time 15 -o /tmp/reklio-catalog.json -w '%{http_code}' https://api.reklio.site/api/public/channels?limit=3)"
+          echo "Public catalog HTTP $status"
+          if [[ "$status" != "200" ]]; then
+            head -c 1000 /tmp/reklio-catalog.json
+            exit 1
+          fi
+          cors="$(curl -sS -D - -o /dev/null --max-time 15 -H 'Origin: https://reklio.site' https://api.reklio.site/api/channels | tr -d '\r')"
+          echo "$cors" | grep -i 'access-control-allow-origin: https://reklio.site'
+          echo "$cors" | head -n 15
       - name: Verify public API
         run: |
           set -euo pipefail
