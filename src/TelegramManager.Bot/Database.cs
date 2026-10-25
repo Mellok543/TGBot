@@ -588,7 +588,7 @@ public sealed class Database(string connectionString) : IAsyncDisposable
             WHERE id=@order AND owner_id=@owner AND status='EarlyDeletionPending'
             """,connection,tx);
         cmd.Parameters.AddWithValue("@order",orderId);
-        cmd.Parameters.AddWithValue("@owner",ownerId);
+        cmd.Parameters.Add(new MySqlParameter("@owner",ownerId));
         if(await cmd.ExecuteNonQueryAsync(ct)!=1){await tx.RollbackAsync(ct);return false;}
         if(republish)
         {
@@ -1491,7 +1491,7 @@ public sealed class Database(string connectionString) : IAsyncDisposable
     public async Task<bool> OwnsListedChannelAsync(long ownerId,long channelId,CancellationToken ct)
     {
         await using var cmd=_source.CreateCommand("SELECT 1 FROM channels WHERE telegram_id=@id AND connected_by=@owner AND is_listed=TRUE LIMIT 1");
-        cmd.Parameters.AddWithValue("@id",channelId);
+        cmd.Parameters.Add(new MySqlParameter("@id",channelId));
         cmd.Parameters.AddWithValue("@owner",ownerId);
         return await cmd.ExecuteScalarAsync(ct) is not null;
     }
