@@ -25,9 +25,10 @@ type FinanceData = {pending:number;readyForReview:number;readyNet:number;paid:nu
 type OrderSummary = { incomingPending:number; completedSales:number; completedPurchases:number; salesVolume:number; purchaseVolume:number; upcomingSales:number };
 type Order = { id: number; channel: string; price: number; status: string; createdAt: string; isOwner: boolean; text: string; scheduledAt: string | null; durationHours: number | null; paymentStatus:string; payoutStatus:string; isTest:boolean;disputeReason:string|null;publicationIssue:string|null };
 type ChannelAnalytics={days:number;points:HistoryPoint[];orders:number;published:number;revenue:number;pending:number};
-type Mine = { id: number; title: string; listed: boolean; price: number };
+type Mine = { id: number; title: string; listed: boolean; price: number; category: string };
 type SellerRate = Rate & { active: boolean };
 type Tab = 'catalog' | 'orders' | 'channels' | 'profile';
+const CHANNEL_CATEGORIES=['Технологии','Игры','Новости','Бизнес','Финансы','Образование','Развлечения','Юмор','Спорт','Путешествия','Авто','Красота и стиль','Здоровье','Кулинария','Музыка','Кино','Другое'];
 const API = import.meta.env.VITE_API_URL || '';
 const tg = window.Telegram?.WebApp;
 const REQUEST_TIMEOUT_MS = 12000;
@@ -363,6 +364,17 @@ function App() {
     } catch(e) { setSellerMessage(e instanceof Error ? e.message : 'Ошибка'); }
     finally { setSellerBusy(false); }
   }
+  async function saveChannelCategory(category:string){
+    if(!editingChannel||sellerBusy)return;
+    setSellerBusy(true);setSellerMessage('');
+    try{
+      await post('/api/my-channels/'+editingChannel.id+'/category',{category});
+      setMine(prev=>prev.map(c=>c.id===editingChannel.id?{...c,category}:c));
+      setEditingChannel({...editingChannel,category});
+      setSellerMessage('Категория сохранена');
+    }catch(e){setSellerMessage(e instanceof Error?e.message:'Не удалось сохранить категорию');}
+    finally{setSellerBusy(false);}
+  }
   async function toggleListing(channel: Mine) {
     if (sellerBusy) return;
     setSellerBusy(true); setSellerMessage('');
@@ -558,7 +570,7 @@ function App() {
       {editingChannel && tab === 'channels' && <div className="bookingOverlay"><div className="bookingPanel">
         <button className="back" onClick={()=>setEditingChannel(null)}>← К моим каналам</button>
         <h2>{editingChannel.title}</h2>
-        <p className="description">{editingChannel.listed?'Канал виден покупателям':'Канал скрыт из каталога'}</p>
+        <p className="description">{editingChannel.listed?'Канал виден покупателям':'Канал скрыт из каталога'}</p><label className="field">Категория канала<select value={CHANNEL_CATEGORIES.includes(editingChannel.category)?editingChannel.category:''} disabled={sellerBusy} onChange={e=>void saveChannelCategory(e.target.value)}><option value="" disabled>Выберите категорию</option>{CHANNEL_CATEGORIES.map(item=><option key={item} value={item}>{item}</option>)}</select><small className="hint">Категория отображается в каталоге и используется при фильтрации.</small></label>{sellerMessage&&<div className="notice">{sellerMessage}</div>}
         <div className="analyticsPanel"><h3>Аналитика канала</h3><div className="analyticsPeriods">{([7,30,90] as const).map(d=><button key={d} className={analyticsPeriod===d?'active':''} onClick={()=>{setAnalyticsPeriod(d);void loadChannelAnalytics(editingChannel.id,d);}}>{d} дней</button>)}</div>
         {analyticsLoading&&<p className="description">Загрузка аналитики…</p>}
         {analyticsError&&<p className="notice">{analyticsError}</p>}
