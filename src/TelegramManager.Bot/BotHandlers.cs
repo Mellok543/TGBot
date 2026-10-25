@@ -808,14 +808,9 @@ public sealed class BotHandlers(Database database)
                     replyMarkup:Back(),cancellationToken:ct);
                 break;
             case "buy_pro":
-                await bot.SendInvoice(origin.Chat.Id,
-                    title: "Telegram Manager PRO — 30 дней",
-                    description: "До 10 каналов и расширенная статистика на 30 дней.",
-                    payload: ProPayload(actor.Id),
-                    currency: "XTR",
-                    prices: new[] { new LabeledPrice("PRO — 30 дней", ProPriceStars) },
-                    providerToken: "",
-                    cancellationToken: ct);
+                await bot.SendMessage(origin.Chat.Id,
+                    "PRO теперь оформляется в рублях через платёжную кассу внутри Reklio. Пока касса не одобрена, оплата недоступна.",
+                    replyMarkup:Home(),cancellationToken:ct);
                 break;
             case "subscription_status":
                 var plan = await database.GetPlanAsync(actor.Id, ct);
