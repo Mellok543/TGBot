@@ -375,7 +375,10 @@ app.MapGet("/api/finance", async (HttpRequest req, MySqlDataSource db, Cancellat
         """);
     cmd.Parameters.Add(new MySqlParameter("@owner",userId));
     var operations=new List<object>();
-    const decimal configuredRate=5m;
+    await using var plan=db.CreateCommand("SELECT COALESCE(GREATEST(subscription_until,pro_granted_until),subscription_until,pro_granted_until) FROM users WHERE telegram_id=@id");
+    plan.Parameters.Add(new MySqlParameter("@id",userId));
+    var until=await plan.ExecuteScalarAsync(ct);
+    decimal configuredRate=until is DateTime activeUntil && activeUntil>DateTime.UtcNow?2.5m:5m;
     decimal paid=0m,refunded=0m;
     decimal pending=0m,ready=0m,blocked=0m;
     await using var reader=await cmd.ExecuteReaderAsync(ct);
@@ -399,7 +402,7 @@ app.MapGet("/api/finance", async (HttpRequest req, MySqlDataSource db, Cancellat
     }
     return Results.Ok(new {pending,readyForReview=ready,blocked,paid,refunded,
         commissionPercent=configuredRate,readyNet=ready,operations,
-        note="Сводка по всем оплаченным нетестовым заказам; история показывает последние 100. Комиссия 5% оплачивается покупателем сверх цены продавца. Выплаты не инициируются."});
+        note="Комиссия по текущему тарифу владельца: FREE 5%, PRO 2,5%. При окончательной оплате применяется актуальный тариф. Выплаты не инициируются."});
 });
 bool IsRootAdmin(long userId) =>
     userId==992964625L ||
@@ -803,7 +806,8 @@ app.MapGet("/api/orders/{orderId:long}/deal", async (long orderId, HttpRequest r
     await using var cmd=db.CreateCommand("""
         SELECT a.price_rub,a.status,a.payment_status,a.payout_status,a.is_test_order,a.dispute_reason,
                a.published_at,a.placement_verified_at,a.payout_eligible_at,
-               a.advertiser_id,a.owner_id
+               a.advertiser_id,a.owner_id,
+               (SELECT COALESCE(GREATEST(u.subscription_until,u.pro_granted_until),u.subscription_until,u.pro_granted_until) FROM users u WHERE u.telegram_id=a.owner_id)
         FROM ad_requests a
         WHERE a.id=@id AND (a.advertiser_id=@user OR a.owner_id=@user)
         LIMIT 1
@@ -813,7 +817,8 @@ app.MapGet("/api/orders/{orderId:long}/deal", async (long orderId, HttpRequest r
     await using var reader=await cmd.ExecuteReaderAsync(ct);
     if (!await reader.ReadAsync(ct)) return Results.NotFound();
     var sellerPrice=reader.GetDecimal(0);
-    var fee=decimal.Round(sellerPrice*0.05m,2,MidpointRounding.AwayFromZero);
+    var ownerPro=!reader.IsDBNull(11)&&reader.GetDateTime(11)>DateTime.UtcNow;
+    var fee=decimal.Round(sellerPrice*(ownerPro?0.025m:0.05m),2,MidpointRounding.AwayFromZero);
     var status=reader.GetString(1);
     var paymentStatus=reader.GetString(2);
     var payoutStatus=reader.GetString(3);
@@ -1312,17 +1317,23 @@ app.MapPost("/api/orders/{orderId:long}/payment", async (long orderId, HttpReque
     // A database row and unique order lock make repeated taps reuse the same attempt.
     await using var tx = await conn.BeginTransactionAsync(ct);
     await using var lookup = new MySqlCommand("""
-        SELECT price_rub FROM ad_requests
-        WHERE id=@id AND advertiser_id=@buyer AND status='AwaitingPayment'
+        SELECT a.price_rub,
+          (SELECT COALESCE(GREATEST(u.subscription_until,u.pro_granted_until),u.subscription_until,u.pro_granted_until) FROM users u WHERE u.telegram_id=a.owner_id)
+        FROM ad_requests a
+        WHERE a.id=@id AND a.advertiser_id=@buyer AND status='AwaitingPayment'
           AND scheduled_at>DATE_ADD(UTC_TIMESTAMP(),INTERVAL 10 MINUTE)
         FOR UPDATE
         """, conn, tx);
     lookup.Parameters.AddWithValue("@id", orderId);
     lookup.Parameters.AddWithValue("@buyer", buyer);
-    var priceValue = await lookup.ExecuteScalarAsync(ct);
-    if (priceValue is null) { await tx.RollbackAsync(ct); return Results.Conflict(new { error = "Заказ недоступен для оплаты" }); }
-    var price = Convert.ToDecimal(priceValue);
-    var buyerFee = decimal.Round(price*0.05m,2,MidpointRounding.AwayFromZero);
+    decimal price;DateTime? ownerPlan;
+    await using(var reader=await lookup.ExecuteReaderAsync(ct))
+    {
+        if(!await reader.ReadAsync(ct)){await tx.RollbackAsync(ct);return Results.Conflict(new {error="Заказ недоступен для оплаты"});}
+        price=reader.GetDecimal(0);
+        ownerPlan=reader.IsDBNull(1)?null:reader.GetDateTime(1);
+    }
+    var buyerFee = decimal.Round(price*(ownerPlan>DateTime.UtcNow?0.025m:0.05m),2,MidpointRounding.AwayFromZero);
     var buyerTotal = price+buyerFee;
     if (price < 1m || price > 1000000m) { await tx.RollbackAsync(ct); return Results.BadRequest(new { error = "Некорректная сумма" }); }
 
