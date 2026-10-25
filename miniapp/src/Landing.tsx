@@ -30,27 +30,68 @@ function PublicCatalog(){
 
  </section>;
 }
-type PublicDetails={rates:{hours:number;price:number}[];reviews:{stars:number;comment:string|null}[]};
+type PublicDetails={rates:{hours:number;price:number}[];reviews:{stars:number;comment:string|null;createdAt?:string}[]};
+const rub=(amount:number)=>new Intl.NumberFormat('ru-RU',{style:'currency',currency:'RUB',maximumFractionDigits:0}).format(amount);
+const amount=(value:number|null)=>value===null?'Нет данных':value.toLocaleString('ru-RU');
 function ChannelPage(){
- const id=window.location.pathname.split('/')[2]||'';
+ const id=window.location.pathname.match(/^\/channels\/(-?\d+)\/?$/)?.[1];
  const [channel,setChannel]=useState<PublicChannel|null>(null);
  const [detail,setDetail]=useState<PublicDetails|null>(null);
+ const [loading,setLoading]=useState(true);
+ const [detailsError,setDetailsError]=useState(false);
  const [error,setError]=useState('');
  useEffect(()=>{
+  if(!id){setError('Неверная ссылка на канал');setLoading(false);return;}
   const controller=new AbortController();
-  Promise.all([
-   fetch(publicApi+'/api/public/channels/'+encodeURIComponent(id),{signal:controller.signal}).then(r=>{if(!r.ok)throw Error('Канал не найден');return r.json() as Promise<PublicChannel>}),
-   fetch(publicApi+'/api/public/channels/'+encodeURIComponent(id)+'/details',{signal:controller.signal}).then(r=>r.ok?r.json() as Promise<PublicDetails>:null)
-  ]).then(([c,d])=>{setChannel(c);setDetail(d);document.title=c.title+' — Reklio';}).catch(e=>{if(!controller.signal.aborted)setError(e instanceof Error?e.message:'Ошибка загрузки');});
-  return ()=>{controller.abort();document.title='Reklio';};
+  setLoading(true);setError('');setDetailsError(false);
+  const url=publicApi+'/api/public/channels/'+encodeURIComponent(id);
+  fetch(url,{signal:controller.signal})
+   .then(async response=>{if(!response.ok)throw new Error(response.status===404?'Канал не найден или снят с публикации':'Не удалось загрузить канал');return response.json() as Promise<PublicChannel>;})
+   .then(async c=>{
+     if(controller.signal.aborted)return;
+     setChannel(c);document.title=c.title+' — Reklio';
+     try{
+      const response=await fetch(url+'/details',{signal:controller.signal});
+      if(!response.ok)throw new Error('details');
+      const data=await response.json() as PublicDetails;
+      if(!controller.signal.aborted)setDetail(data);
+     }catch{if(!controller.signal.aborted)setDetailsError(true);}
+   })
+   .catch(e=>{if(!controller.signal.aborted)setError(e instanceof Error?e.message:'Ошибка загрузки');})
+   .finally(()=>{if(!controller.signal.aborted)setLoading(false);});
+  return ()=>{controller.abort();document.title='Reklio — реклама в Telegram';};
  },[id]);
- const money=(n:number)=>new Intl.NumberFormat('ru-RU',{style:'currency',currency:'RUB',maximumFractionDigits:0}).format(n);
- return <section className="lp-channel-page"><a href="/catalog" className="lp-back-link">← Все каналы</a>
- {error&&<p>{error}</p>}{!channel&&!error&&<p>Загрузка канала…</p>}
- {channel&&<><div className="lp-channel-page-hero"><span className="lp-catalog-avatar">{channel.title.slice(0,1).toUpperCase()}</span><div><span className="lp-kicker">{channel.category}</span><h1>{channel.title}</h1><p>{channel.description||'Telegram-канал для рекламных размещений'}</p>{channel.username&&<a href={'https://t.me/'+encodeURIComponent(channel.username.replace(/^@/,''))} target="_blank" rel="noopener noreferrer">Посмотреть в Telegram ↗</a>}</div></div>
- <div className="lp-channel-layout"><div><article className="lp-detail-panel"><h2>Статистика площадки</h2><div className="lp-catalog-metrics"><span>Подписчики<b>{channel.subscribers?.toLocaleString('ru-RU')??'Нет данных'}</b></span><span>Средние просмотры<b>{channel.avgViews?.toLocaleString('ru-RU')??'Нет данных'}</b></span><span>CPM<b>{channel.avgViews&&channel.avgViews>0?money(channel.price*1000/channel.avgViews):'Нет данных'}</b></span></div><p className="lp-detail-note">Показатели основаны на наблюдаемых публикациях. Фактический охват рекламы может отличаться.</p></article>
- <article className="lp-detail-panel"><h2>Отзывы рекламодателей</h2>{detail?.reviews.length?detail.reviews.map((review,i)=><div className="lp-review" key={i}><strong>{'★'.repeat(Math.max(1,Math.min(5,review.stars)))}</strong><p>{review.comment||'Без комментария'}</p></div>):<p className="lp-detail-note">Пока нет отзывов.</p>}</article></div>
- <aside className="lp-detail-panel lp-detail-aside"><h2>Рекламные тарифы</h2>{detail?.rates.length?detail.rates.map((rate,i)=><div className="lp-rate-row" key={i}><span>{rate.hours===0?'Навсегда':rate.hours+' ч'}</span><strong>{money(rate.price)}</strong></div>):<p>Информация о тарифах доступна в приложении.</p>}<a className="lp-buy-link" href={'https://t.me/ReklioBot?start=ad_'+channel.id}>Купить рекламу ↗</a><p className="lp-detail-note">Бронирование времени и согласование заказа проходят в Telegram Mini App.</p></aside></div></>}
+ const rates=detail?.rates??[];
+ const lowest=rates.length?Math.min(...rates.map(r=>r.price)):channel?.price??0;
+ const link=channel?'https://t.me/ReklioBot?start=ad_'+channel.id:'https://t.me/ReklioBot';
+ return <section className="lp-channel-page">
+  <div className="lp-channel-breadcrumb"><a href="/catalog">Каталог каналов</a><span aria-hidden="true">/</span><span>{channel?.title||'Площадка'}</span></div>
+  {loading&&!channel&&!error&&<div className="lp-detail-state" role="status">Загружаем информацию о площадке…</div>}
+  {error&&<div className="lp-detail-state" role="alert"><h2>Не удалось открыть канал</h2><p>{error}</p><a href="/catalog">Вернуться в каталог →</a></div>}
+  {channel&&<><div className="lp-channel-page-hero">
+   <span className="lp-catalog-avatar" aria-hidden="true">{channel.title.slice(0,1).toUpperCase()}</span>
+   <div className="lp-channel-identity"><span className="lp-kicker">{channel.category||'TELEGRAM-КАНАЛ'}</span><h1>{channel.title}</h1>
+    <p>{channel.description||'Рекламная площадка в Telegram. Уточняйте детали размещения перед оформлением заказа.'}</p>
+    {channel.username&&<a className="lp-telegram-channel" href={'https://t.me/'+encodeURIComponent(channel.username.replace(/^@/,''))} target="_blank" rel="noopener noreferrer">Открыть канал в Telegram ↗</a>}
+   </div>
+  </div>
+  <div className="lp-channel-layout"><div className="lp-channel-main">
+   <article className="lp-detail-panel"><div className="lp-panel-heading"><h2>Показатели канала</h2><span>За последние 30 дней</span></div>
+    <div className="lp-channel-stat-grid"><div><small>Подписчики</small><strong>{amount(channel.subscribers)}</strong><span>Аудитория канала</span></div>
+    <div><small>Средние просмотры</small><strong>{amount(channel.avgViews)}</strong><span>На публикацию</span></div>
+    <div><small>CPM</small><strong>{channel.avgViews&&channel.avgViews>0?rub(lowest*1000/channel.avgViews):'Нет данных'}</strong><span>За 1 000 просмотров от минимальной цены</span></div></div>
+    <p className="lp-detail-note">Статистика основана на доступных данных канала. Фактический охват конкретного рекламного поста может отличаться.</p>
+   </article>
+   <article className="lp-detail-panel"><div className="lp-panel-heading"><h2>Отзывы рекламодателей</h2><span>{detail?.reviews.length?detail.reviews.length+' последних':''}</span></div>
+    {detailsError?<p className="lp-detail-note">Не удалось загрузить отзывы. Обновите страницу позднее.</p>:!detail?<p className="lp-detail-note">Загружаем отзывы…</p>:detail.reviews.length===0?<p className="lp-detail-empty">Отзывов пока нет. После первых размещений здесь появятся оценки рекламодателей.</p>:detail.reviews.map((review,i)=><div className="lp-review" key={i}><div><strong aria-label={review.stars+' из 5'}>{'★'.repeat(Math.max(0,Math.min(5,review.stars)))}<span>{'☆'.repeat(5-Math.max(0,Math.min(5,review.stars)))}</span></strong>{review.createdAt&&<time dateTime={review.createdAt}>{new Date(review.createdAt).toLocaleDateString('ru-RU')}</time>}</div><p>{review.comment||'Оценка без комментария'}</p></div>)}
+   </article>
+  </div>
+  <aside className="lp-detail-panel lp-detail-aside"><span className="lp-kicker">РАЗМЕЩЕНИЕ РЕКЛАМЫ</span><h2>Выберите формат</h2>
+   {detailsError?<p className="lp-detail-note">Тарифы временно недоступны. Актуальные условия можно проверить в Telegram.</p>:!detail?<p className="lp-detail-note">Загружаем тарифы…</p>:rates.length?rates.map((rate,i)=><div className="lp-rate-row" key={i}><span>{rate.hours===0?'Без автоматического удаления':rate.hours%24===0?rate.hours/24+' сут.':rate.hours+' ч.'}</span><strong>{rub(rate.price)}</strong></div>):<p className="lp-detail-note">Дополнительные тарифы пока не заданы. Уточните условия в Telegram.</p>}
+   <div className="lp-price-start"><small>Стоимость размещения от</small><strong>{rub(lowest)}</strong></div>
+   <a className="lp-buy-link" href={link}>Купить рекламу в Telegram ↗</a>
+   <p className="lp-detail-note">Перейдите в @ReklioBot: он откроет предложение этого канала. Дата, материалы и заказ согласовываются в Telegram.</p>
+  </aside></div></>}
  </section>;
 }
 const legalPages={
@@ -84,7 +125,7 @@ export default function Landing(){
  return <div className="lp">
  <header className="lp-nav"><a className="lp-brand" href="/"><img src="/reklio-mark.svg" alt=""/>Rekli<span>o</span></a><nav className={mobileMenu?"lp-nav-links open":"lp-nav-links"}><a href="/catalog" onClick={()=>setMobileMenu(false)}>Каталог</a><a href="/help" onClick={()=>setMobileMenu(false)}>Как работает</a><a href="/pricing" onClick={()=>setMobileMenu(false)}>Тарифы</a><a className="lp-mobile-legal" href="/terms" onClick={()=>setMobileMenu(false)}>Документы и правила</a><a className="lp-mobile-legal" href="mailto:support@reklio.site">Связаться с нами</a></nav><a className="lp-nav-action" href="https://t.me/ReklioBot">Открыть Reklio ↗</a><button type="button" className="lp-mobile-menu" aria-expanded={mobileMenu} aria-label="Открыть меню" onClick={()=>setMobileMenu(!mobileMenu)}>{mobileMenu?"✕":"☰"}</button></header>
  {mobileMenu&&<div className="lp-mobile-drawer-wrap"><button type="button" className="lp-mobile-scrim" aria-label="Закрыть меню" onClick={()=>setMobileMenu(false)}></button><aside className="lp-mobile-drawer" aria-label="Навигация Reklio"><div className="lp-drawer-title"><b>Навигация</b><button onClick={()=>setMobileMenu(false)} aria-label="Закрыть">✕</button></div><a href="/" onClick={()=>setMobileMenu(false)}>⌂　Главная</a><a href="/catalog" onClick={()=>setMobileMenu(false)}>▦　Каталог каналов</a><a href="/pricing" onClick={()=>setMobileMenu(false)}>✦　Тарифы</a><a href="/help" onClick={()=>setMobileMenu(false)}>ⓘ　Как это работает</a><div className="lp-drawer-divider"/><a href="/terms">Условия использования</a><a href="/privacy">Конфиденциальность</a><a href="/advertising-rules">Правила рекламы</a><a href="mailto:support@reklio.site">Связаться с нами</a><a className="lp-drawer-cta" href="https://t.me/ReklioBot">Открыть Reklio ↗</a></aside></div>}
- <main>{legalKind ? <LegalPage kind={legalKind}/> : <>{path!=="/"&&<div className="lp-route-heading"><span>REKLIO / {path==="/catalog"||path.startsWith("/channels/")?"ПЛОЩАДКИ":path==="/pricing"?"ПОДПИСКА":"ПОДДЕРЖКА"}</span><h1>{path==="/catalog"||path.startsWith("/channels/")?"Каталог каналов":path==="/pricing"?"Тарифы FREE и PRO":"Справочный центр"}</h1><p>{path==="/catalog"||path.startsWith("/channels/")?"Подберите Telegram-канал для рекламы и сравните реальные показатели.":path==="/pricing"?"Выберите возможности для своего канала.":"Узнайте, как устроены размещения и контроль рекламы."}</p></div>}
+ <main>{legalKind ? <LegalPage kind={legalKind}/> : <>{path!=="/"&&!path.startsWith("/channels/")&&<div className="lp-route-heading"><span>REKLIO / {path==="/catalog"?"ПЛОЩАДКИ":path==="/pricing"?"ПОДПИСКА":"ПОДДЕРЖКА"}</span><h1>{path==="/catalog"?"Каталог каналов":path==="/pricing"?"Тарифы FREE и PRO":"Справочный центр"}</h1><p>{path==="/catalog"?"Подберите Telegram-канал для рекламы и сравните реальные показатели.":path==="/pricing"?"Выберите возможности для своего канала.":"Узнайте, как устроены размещения и контроль рекламы."}</p></div>}
  {path==="/" && <><div className="lp-shortcuts"><a href="/catalog"><span>⌕</span><div><b>Найти рекламу</b><small>Каталог площадок</small></div>↗</a><a href="/pricing"><span>✦</span><div><b>Размещать рекламу</b><small>FREE и PRO</small></div>↗</a></div>
  <section className="lp-hero"><div className="lp-beam"/><div className="lp-copy"><div className="lp-pill"><i/> Рекламная платформа для Telegram</div><h1>Реклама в Telegram.<br/><span>Без лишней сложности.</span></h1><p>Находите каналы для размещения рекламы, договаривайтесь о публикации и контролируйте заказы в одном удобном Mini App.</p><div className="lp-actions"><a className="lp-hero-primary" href="#catalog">Смотреть каналы <span>↗</span></a><a href="/help">Как это работает <span>↓</span></a></div><div className="lp-proof"><span>✦ Каталог каналов</span><span>✦ Удобное расписание</span><span>✦ Контроль публикаций</span></div></div>
  <div className="lp-demo"><div className="lp-orbit lp-orbit1"/><div className="lp-orbit lp-orbit2"/><div className="lp-floating lp-float-top">↗ <span>Ваши новые размещения</span></div><div className="lp-phone"><div className="lp-phone-notch"/><div className="lp-phone-body"><div className="lp-mini-header"><img src="/reklio-mark.svg" alt=""/> <b>Reklio</b><span>•••</span></div><div className="lp-mini-label">Найдите площадку для рекламы</div><div className="lp-mini-title">Каталог каналов</div><div className="lp-search">⌕　Поиск каналов...</div><div className="lp-chips"><span>Все</span><span>Технологии</span><span>Игры</span></div><div className="lp-channel"><div className="lp-ava">✦</div><div><strong>Технологии и IT</strong><small>Тематические каналы</small></div><b>↗</b></div><div className="lp-channel"><div className="lp-ava purple">◈</div><div><strong>Игры и сообщество</strong><small>Подбор площадок</small></div><b>↗</b></div><div className="lp-channel"><div className="lp-ava cyan">✺</div><div><strong>Новости и медиа</strong><small>Разные форматы</small></div><b>↗</b></div></div><div className="lp-phone-footer">⌂ <span>▤</span> <span>◎</span> <span>♙</span></div></div><div className="lp-floating lp-float-bottom"><b>✓</b><div>Публикация под контролем<small>Мониторинг активности размещений</small></div></div></div></section>
