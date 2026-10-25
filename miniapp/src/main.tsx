@@ -94,7 +94,7 @@ function App() {
     let active=true;
     get<number[]>('/api/favorites').then(ids=>{if(active)setFavoriteIds(ids);}).catch(()=>{});
     return ()=>{active=false;};
-  },[tab,retry]);
+  },[tab]);
   const [detailsLoading, setDetailsLoading] = useState(false);
   const [rateId, setRateId] = useState('');
   const [adText, setAdText] = useState('');
