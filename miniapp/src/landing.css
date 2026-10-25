@@ -267,3 +267,11 @@ html{scroll-behavior:smooth;scroll-padding-top:90px}
 .lp-start-actions>a:last-child{font-size:13px;color:#8dd4ff;font-weight:700}
 @media(max-width:760px){.lp-start{margin:16px 16px 24px;padding:21px 16px}.lp-start-steps{grid-template-columns:1fr;gap:9px}.lp-start-steps article{padding:14px}.lp-start-steps h3{margin:5px 0}.lp-start-tabs button{font-size:12px;padding:13px 7px}}
 @media(max-width:370px){.lp-start-tabs{grid-template-columns:1fr}}
+
+/* Explicit sponsored placements, distinguish advertising from organic results */
+.lp-catalog-sponsored{border-color:#9b79fa!important;background:linear-gradient(150deg,#2e265a,#172e52 58%,#11223c)!important;box-shadow:0 10px 36px #613bc329}
+.lp-sponsored-label{align-self:flex-start;width:max-content;font-size:11px;font-weight:800;letter-spacing:.4px;color:#e8d9ff;background:#594096;border:1px solid #9477ce;border-radius:99px;padding:6px 11px}
+.lp-promo-entry{margin-top:21px;border-top:1px solid #385b7c;padding-top:19px}
+.lp-promo-entry strong{display:block;font-size:14px}.lp-promo-entry p{font-size:12px;color:#a6bed9;line-height:1.6}
+.lp-promo-entry>div{display:flex;gap:7px;flex-wrap:wrap}.lp-promo-entry>div span{padding:7px 9px;border:1px solid #4e5f96;border-radius:9px;color:#d5c8ff;font-size:11px}
+.lp-promo-entry>a{display:block;padding:13px;margin-top:14px;text-align:center;border-radius:10px;background:#47386d;border:1px solid #8e78c1;color:#eadcff;font-size:13px;font-weight:750}
