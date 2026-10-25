@@ -90,10 +90,8 @@ def record(db, order_id, status):
             db.commit()
             return
         cur.execute("""
-            UPDATE ad_requests SET status='Disputed',payout_status=IF(is_test_order=TRUE,'NotEligible','Blocked'),
-              dispute_reason='Рекламная публикация удалена досрочно (MTProto, повторная проверка)',
-              disputed_at=UTC_TIMESTAMP(),
-              last_error='MTProto: пост отсутствует при двух последовательных проверках'
+            UPDATE ad_requests SET status='EarlyDeletionPending',payout_status=IF(is_test_order=TRUE,'NotEligible','Blocked'),
+              last_error='MTProto: пост отсутствует; ожидается решение владельца'
             WHERE id=%s AND status='Published' AND payout_status NOT IN ('Paid','Refunded')
         """, (order_id,))
         if cur.rowcount:
@@ -103,12 +101,11 @@ def record(db, order_id, status):
             """, (order_id,))
             cur.execute("""
                 INSERT IGNORE INTO notification_outbox(recipient_id,order_id,body)
-                SELECT advertiser_id,id,CONCAT('Заказ #',id,': рекламный пост отсутствует до окончания срока. Открыта проверка.')
-                  FROM ad_requests WHERE id=%s
-                UNION ALL
-                SELECT owner_id,id,CONCAT('Заказ #',id,': обнаружено досрочное удаление рекламы. Открыта проверка.')
-                  FROM ad_requests WHERE id=%s
-            """, (order_id, order_id))
+                SELECT owner_id,id,CONCAT('⚠️ Досрочное удаление · заказ #',id,CHAR(10),
+                    'Рекламный пост отсутствует до завершения оплаченного срока.',CHAR(10),
+                    'Выберите: опубликовать заново или открыть спор.')
+                FROM ad_requests WHERE id=%s
+            """, (order_id,))
             LOG.warning("Early deletion confirmed for order %s", order_id)
     db.commit()
 
