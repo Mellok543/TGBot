@@ -561,6 +561,46 @@ public sealed class Database(string connectionString) : IAsyncDisposable
         return (r.GetInt64(0), r.GetString(1), r.IsDBNull(2) ? null : r.GetString(2), r.IsDBNull(3) ? null : r.GetString(3));
     }
 
+    public async Task<bool> ResolveEarlyDeletionAsync(long orderId,long ownerId,bool republish,CancellationToken ct)
+    {
+        await using var connection=await _source.OpenConnectionAsync(ct);
+        await using var tx=await connection.BeginTransactionAsync(ct);
+        // The owner alone may decide; never process the same deletion twice.
+        await using var cmd=new MySqlCommand(republish ? """
+            UPDATE ad_requests
+            SET status='Scheduled',scheduled_at=UTC_TIMESTAMP(),last_error=NULL,
+                published_message_id=NULL,published_at=NULL,
+                payout_status=IF(is_test_order=TRUE,'NotEligible','Blocked')
+            WHERE id=@order AND owner_id=@owner AND status='EarlyDeletionPending'
+              AND paid_confirmed=TRUE AND payment_status IN ('Paid','TestPaid')
+            """ : """
+            UPDATE ad_requests
+            SET status='Disputed',dispute_reason='Досрочное удаление рекламной публикации',
+                disputed_at=UTC_TIMESTAMP(),payout_status=IF(is_test_order=TRUE,'NotEligible','Blocked')
+            WHERE id=@order AND owner_id=@owner AND status='EarlyDeletionPending'
+            """,connection,tx);
+        cmd.Parameters.AddWithValue("@order",orderId);
+        cmd.Parameters.AddWithValue("@owner",ownerId);
+        if(await cmd.ExecuteNonQueryAsync(ct)!=1){await tx.RollbackAsync(ct);return false;}
+        if(republish)
+        {
+            await using var reset=new MySqlCommand("DELETE FROM reklio_post_monitor WHERE order_id=@order",connection,tx);
+            reset.Parameters.AddWithValue("@order",orderId);
+            await reset.ExecuteNonQueryAsync(ct);
+        }
+        await using var audit=new MySqlCommand("""
+            INSERT INTO ad_order_events(order_id,actor_id,event_type,details)
+            VALUES(@order,@owner,@event,@details)
+            """,connection,tx);
+        audit.Parameters.AddWithValue("@order",orderId);
+        audit.Parameters.AddWithValue("@owner",ownerId);
+        audit.Parameters.AddWithValue("@event",republish?"EarlyDeletionRepublishRequested":"EarlyDeletionDisputeOpened");
+        audit.Parameters.AddWithValue("@details",republish?"Владелец выбрал повторную публикацию":"Владелец открыл спор");
+        await audit.ExecuteNonQueryAsync(ct);
+        await tx.CommitAsync(ct);
+        return true;
+    }
+
     public async Task FinishPublishAsync(long id, int? messageId, string? error, CancellationToken ct)
     {
         await using var cmd = _source.CreateCommand("UPDATE ad_requests SET status=@status, published_message_id=@msg, published_at=IF(@msg IS NULL,NULL,UTC_TIMESTAMP()), payout_status=IF(@msg IS NULL OR is_test_order=TRUE,'NotEligible','OnHold'), last_error=@error WHERE id=@id AND status='Publishing'");
