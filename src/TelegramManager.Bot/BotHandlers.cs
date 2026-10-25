@@ -273,6 +273,15 @@ public sealed class BotHandlers(Database database)
 
     private const int ProPriceStars = 299;
     private static string ProPayload(long userId) => $"pro30:{userId}";
+    private static string PromotionPayload(long owner,long channel,int days) => $"boost:{owner}:{channel}:{days}";
+    private static bool TryPromotion(string payload,long owner,out long channel,out int days)
+    {
+        channel=0;days=0;
+        var parts=payload.Split(':');
+        return parts.Length==4 && parts[0]=="boost" && long.TryParse(parts[1],out var parsedOwner)
+            && parsedOwner==owner && long.TryParse(parts[2],out channel)
+            && int.TryParse(parts[3],out days) && days is 7 or 30;
+    }
 
     public async Task HandleAsync(ITelegramBotClient bot, Update update, CancellationToken ct)
     {
@@ -287,6 +296,9 @@ public sealed class BotHandlers(Database database)
         {
             var valid = pre.Currency == "XTR" && pre.TotalAmount == ProPriceStars &&
                         pre.InvoicePayload == ProPayload(pre.From.Id);
+            if(!valid && TryPromotion(pre.InvoicePayload,pre.From.Id,out var boostChannel,out var boostDays))
+                valid=pre.Currency=="XTR" && pre.TotalAmount==(boostDays==7?99:299)
+                    && await database.OwnsListedChannelAsync(pre.From.Id,boostChannel,ct);
             await bot.AnswerPreCheckoutQuery(pre.Id, errorMessage: valid ? null : "Некорректный платёж. Создайте новый счёт в профиле.",
                 cancellationToken: ct);
             return;
@@ -324,6 +336,17 @@ public sealed class BotHandlers(Database database)
                         credited ? $"⭐ PRO активирован до {expiry?.Add(DisplayOffset):dd.MM.yyyy HH:mm} (UTC+3)."
                                 : "Платёж уже обработан или требует проверки. Если PRO не активен, обратитесь в поддержку.",
                         replyMarkup: Home(), cancellationToken: ct);
+                }
+                else if(TryPromotion(payment.InvoicePayload,user.Id,out var promotedId,out var promotedDays)
+                        && payment.Currency=="XTR" && payment.TotalAmount==(promotedDays==7?99:299))
+                {
+                    var activated=await database.RecordPromotionPaymentAsync(user.Id,promotedId,promotedDays,
+                        payment.TotalAmount,payment.TelegramPaymentChargeId,ct);
+                    var expiry=await database.GetPromotionUntilAsync(promotedId,ct);
+                    await bot.SendMessage(message.Chat.Id,activated
+                        ? $"🚀 Продвижение канала активировано до {expiry?.Add(DisplayOffset):dd.MM.yyyy HH:mm} (UTC+3)."
+                        : "Платёж получен, но продвижение требует проверки. Напишите в поддержку.",
+                        cancellationToken:ct);
                 }
                 else
                 {
@@ -538,7 +561,19 @@ public sealed class BotHandlers(Database database)
             if (message.Text?.StartsWith("/start", StringComparison.Ordinal) == true)
             {
                 var payload = message.Text.Split(' ', 2, StringSplitOptions.RemoveEmptyEntries);
-                if (payload.Length == 2 && payload[1].StartsWith("ad_") && long.TryParse(payload[1][3..], out var directId))
+                if(payload.Length==2 && payload[1].StartsWith("boost_") &&
+                    long.TryParse(payload[1][6..],out var channelToBoost))
+                {
+                    if(!await database.OwnsListedChannelAsync(user.Id,channelToBoost,ct))
+                        await bot.SendMessage(message.Chat.Id,"Канал не найден среди ваших опубликованных площадок.",cancellationToken:ct);
+                    else
+                        await bot.SendMessage(message.Chat.Id,"🚀 Продвижение канала в каталоге Reklio. Выберите срок:",
+                            replyMarkup:new InlineKeyboardMarkup(new[]{
+                                new[]{InlineKeyboardButton.WithCallbackData("7 дней · 99 ⭐",$"boost:7:{channelToBoost}")},
+                                new[]{InlineKeyboardButton.WithCallbackData("30 дней · 299 ⭐",$"boost:30:{channelToBoost}")}
+                            }),cancellationToken:ct);
+                }
+                else if (payload.Length == 2 && payload[1].StartsWith("ad_") && long.TryParse(payload[1][3..], out var directId))
                 {
                     await ShowOfferAsync(bot, message.Chat.Id, null, directId, ct);
                 }
@@ -732,6 +767,11 @@ public sealed class BotHandlers(Database database)
                 await bot.EditMessageText(origin.Chat.Id, origin.MessageId,
                     $"🛒 Покупки рекламы\nПодтверждённых заказов: {buyerAnalytics.Bought}\nСумма заказов: {buyerAnalytics.BookedRub:0.##} ₽\n\nЭто стоимость заказов, не подтверждение оплаты.",
                     replyMarkup: Back(), cancellationToken: ct);
+                break;
+            case "boost_promo_info":
+                await bot.EditMessageText(origin.Chat.Id,origin.MessageId,
+                    "🚀 Продвижение Reklio\\n\\nПродвигаемые каналы получают цветное выделение и приоритет в каталоге сайта. Размещение рекламы покупается отдельно.\\n\\nЧтобы продвинуть свой канал, откройте его страницу на reklio.site и нажмите «Продвинуть канал».",
+                    replyMarkup:Back(),cancellationToken:ct);
                 break;
             case "buy_pro":
                 await bot.SendInvoice(origin.Chat.Id,
