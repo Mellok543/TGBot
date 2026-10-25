@@ -65,8 +65,8 @@ public sealed class AdScheduler(Database database, ITelegramBotClient bot)
                 // a database write or audit insert failed afterwards.
                 await database.FinishPublishAsync(id, posted?.MessageId, sendError, ct);
                 await TryQueueNotificationAsync(id, posted is null
-                    ? $"❌ Заказ #{id}: публикация не удалась. Проверьте заказ."
-                    : $"✅ Заказ #{id}: реклама опубликована.", ct);
+                    ? $"⚠️ Проблема с публикацией · заказ #{id}\nРеклама не была опубликована.\n📋 Откройте заказ в Reklio, чтобы узнать подробности."
+                    : $"🎉 Реклама опубликована · заказ #{id}\n✅ Публикация успешно размещена в канале.\n📋 Следить за размещением можно в Reklio.", ct);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
@@ -91,8 +91,8 @@ public sealed class AdScheduler(Database database, ITelegramBotClient bot)
 
                 await database.FinishDeletionAsync(id, deleteError, ct);
                 await TryQueueNotificationAsync(id, deleteError is null
-                    ? $"🗑 Заказ #{id}: срок размещения завершён, сообщение удалено."
-                    : $"⚠️ Заказ #{id}: не удалось удалить публикацию. Требуется проверка.", ct);
+                    ? $"🏁 Размещение завершено · заказ #{id}\n✅ Срок публикации истёк.\n🗑 Рекламный пост удалён по расписанию."
+                    : $"⚠️ Требуется проверка · заказ #{id}\nСрок размещения истёк, но автоматически удалить пост не удалось.\n📋 Проверьте заказ в Reklio.", ct);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
