@@ -574,7 +574,7 @@ public sealed class Database(string connectionString) : IAsyncDisposable
 
     public async Task<List<(long Id, long Channel, int Message)>> DueDeletionsAsync(CancellationToken ct)
     {
-        await using var cmd = _source.CreateCommand("SELECT id, channel_id, published_message_id FROM ad_requests WHERE status IN ('Published','Disputed','DisputeResolved') AND published_message_id IS NOT NULL AND last_error IS NULL AND delete_after_hours IS NOT NULL AND DATE_ADD(published_at, INTERVAL delete_after_hours HOUR)<=UTC_TIMESTAMP() LIMIT 20");
+        await using var cmd = _source.CreateCommand("SELECT id, channel_id, published_message_id FROM ad_requests WHERE status IN ('Published','Disputed','DisputeResolved') AND published_message_id IS NOT NULL AND last_error IS NULL AND delete_after_hours>0 AND DATE_ADD(published_at, INTERVAL delete_after_hours HOUR)<=UTC_TIMESTAMP() LIMIT 20");
         await using var r = await cmd.ExecuteReaderAsync(ct);
         var list = new List<(long, long, int)>();
         while (await r.ReadAsync(ct)) list.Add((r.GetInt64(0), r.GetInt64(1), r.GetInt32(2)));
