@@ -13,7 +13,7 @@ public sealed class Database(string connectionString) : IAsyncDisposable
         await using var connection = await _source.OpenConnectionAsync(ct);
         Console.WriteLine($"[Startup] MariaDB connected in {startupTimer.ElapsedMilliseconds} ms.");
         // Bump this version when adding or changing any schema migration below.
-        const int schemaVersion = 2;
+        const int schemaVersion = 3;
         await using (var create = new MySqlCommand("""
             CREATE TABLE IF NOT EXISTS bot_schema_version (
                 id TINYINT NOT NULL PRIMARY KEY,
@@ -52,6 +52,14 @@ public sealed class Database(string connectionString) : IAsyncDisposable
                 connected_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 INDEX idx_channels_connected_by (connected_by),
                 CONSTRAINT fk_channels_connected_by FOREIGN KEY (connected_by) REFERENCES users(telegram_id)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+            """,
+            """ 
+            CREATE TABLE IF NOT EXISTS channel_promotions (
+                channel_id BIGINT NOT NULL PRIMARY KEY,
+                active_until DATETIME NOT NULL,
+                updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                INDEX idx_promotions_active_until (active_until)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
             """,
             "ALTER TABLE users ADD COLUMN IF NOT EXISTS subscription_until DATETIME NULL",
@@ -1478,6 +1486,50 @@ public sealed class Database(string connectionString) : IAsyncDisposable
         return (reader.IsDBNull(0)?null:reader.GetInt32(0),
             reader.IsDBNull(1)?null:reader.GetInt32(1),
             reader.GetInt32(2),reader.GetInt32(3),reader.GetInt32(4));
+    }
+
+    public async Task<bool> OwnsListedChannelAsync(long ownerId,long channelId,CancellationToken ct)
+    {
+        await using var cmd=_source.CreateCommand("SELECT 1 FROM channels WHERE telegram_id=@id AND connected_by=@owner AND is_listed=TRUE LIMIT 1");
+        cmd.Parameters.AddWithValue("@id",channelId);
+        cmd.Parameters.AddWithValue("@owner",ownerId);
+        return await cmd.ExecuteScalarAsync(ct) is not null;
+    }
+
+    public async Task<DateTime?> GetPromotionUntilAsync(long channelId,CancellationToken ct)
+    {
+        await using var cmd=_source.CreateCommand("SELECT active_until FROM channel_promotions WHERE channel_id=@id");
+        cmd.Parameters.AddWithValue("@id",channelId);
+        var value=await cmd.ExecuteScalarAsync(ct);
+        return value is null or DBNull?null:Convert.ToDateTime(value);
+    }
+
+    public async Task<bool> RecordPromotionPaymentAsync(long ownerId,long channelId,int days,int stars,string chargeId,CancellationToken ct)
+    {
+        if(string.IsNullOrWhiteSpace(chargeId)||days is not (7 or 30)||
+           stars!=(days==7?99:299))return false;
+        await using var conn=await _source.OpenConnectionAsync(ct);
+        await using var tx=await conn.BeginTransactionAsync(ct);
+        await using var insert=new MySqlCommand("""
+            INSERT IGNORE INTO star_payments(telegram_payment_charge_id,user_id,purpose,amount_stars)
+            VALUES(@charge,@owner,'promotion',@stars)
+            """,conn,tx);
+        insert.Parameters.AddWithValue("@charge",chargeId);
+        insert.Parameters.AddWithValue("@owner",ownerId);
+        insert.Parameters.AddWithValue("@stars",stars);
+        if(await insert.ExecuteNonQueryAsync(ct)!=1){await tx.RollbackAsync(ct);return false;}
+        await using var update=new MySqlCommand("""
+            INSERT INTO channel_promotions(channel_id,active_until)
+            SELECT telegram_id,DATE_ADD(UTC_TIMESTAMP(), INTERVAL @days DAY)
+            FROM channels WHERE telegram_id=@channel AND connected_by=@owner AND is_listed=TRUE
+            ON DUPLICATE KEY UPDATE active_until=DATE_ADD(GREATEST(active_until,UTC_TIMESTAMP()),INTERVAL @days DAY)
+            """,conn,tx);
+        update.Parameters.AddWithValue("@days",days);
+        update.Parameters.AddWithValue("@channel",channelId);
+        update.Parameters.AddWithValue("@owner",ownerId);
+        if(await update.ExecuteNonQueryAsync(ct)!=1 && await OwnsListedChannelAsync(ownerId,channelId,ct)==false){await tx.RollbackAsync(ct);return false;}
+        await tx.CommitAsync(ct);
+        return true;
     }
 
 }
