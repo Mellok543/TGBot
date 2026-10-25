@@ -809,24 +809,16 @@ public sealed class BotHandlers(Database database)
                 break;
             case "buy_pro":
                 await bot.SendMessage(origin.Chat.Id,
-                    "PRO теперь оформляется в рублях через платёжную кассу внутри Reklio. Пока касса не одобрена, оплата недоступна.",
+                    "Оформление PRO временно недоступно. Условия тарифа смотрите в Mini App.",
                     replyMarkup:Home(),cancellationToken:ct);
                 break;
             case "subscription_status":
                 var plan = await database.GetPlanAsync(actor.Id, ct);
                 var planText = plan.Pro
-                    ? $"⭐ PRO активен до {plan.ProEnds!.Value.Add(DisplayOffset):dd.MM.yyyy HH:mm} (UTC+3).\nЛимит: 10 каналов."
-                    : plan.TrialEnds == DateTime.MaxValue
-                        ? "🎁 Бесплатные 30 дней начнутся после подключения первого канала. Лимит: 1 канал."
-                        : plan.TrialEnds > DateTime.UtcNow
-                        ? $"🎁 Бесплатный период до {plan.TrialEnds.Add(DisplayOffset):dd.MM.yyyy HH:mm} (UTC+3).\nЛимит: 1 канал."
-                        : "⏳ Бесплатные 30 дней закончились. Для новых продаж и подключения каналов необходим PRO — 299 Stars / 30 дней.\nОплата Stars пока не подключена.";
+                    ? $"PRO действует до {plan.ProEnds!.Value.Add(DisplayOffset):dd.MM.yyyy HH:mm} (UTC+3).\\nДо 10 каналов, расширенная статистика, комиссия 2,5%."
+                    : "FREE: 1 канал без ограничения по времени, базовая статистика, комиссия 5%.\\nPRO: до 10 каналов, расширенная статистика, комиссия 2,5%.";
                 await bot.EditMessageText(origin.Chat.Id, origin.MessageId, planText,
-                    replyMarkup: new InlineKeyboardMarkup(new[]
-                    {
-                        new[] { InlineKeyboardButton.WithCallbackData("⭐ Купить / продлить PRO — 299 Stars", "buy_pro") },
-                        new[] { InlineKeyboardButton.WithCallbackData("⬅️ Главное меню", "home") }
-                    }), cancellationToken: ct);
+                    replyMarkup:Home(), cancellationToken: ct);
                 break;
             case "owner_earnings":
                 var earnings = await database.GetOwnerEarningsAsync(actor.Id, ct);
