@@ -378,6 +378,7 @@ function App() {
     }, tab === 'catalog' ? 250 : 0);
     return () => { active = false; clearTimeout(timer); };
   }, [tab, retry]);
+  const telegramUser = (tg as typeof tg & {initDataUnsafe?:{user?:{first_name?:string;username?:string}}})?.initDataUnsafe?.user;
   const money = (n: number) => new Intl.NumberFormat('ru-RU', { style: 'currency', currency: 'RUB', maximumFractionDigits: 0 }).format(n);
   const tabs: {id:Tab;label:string;icon:typeof Search}[] = [ {id:'catalog',label:'Каталог',icon:Search}, {id:'orders',label:'Заказы',icon:ClipboardList}, {id:'channels',label:'Каналы',icon:Megaphone}, {id:'profile',label:'Профиль',icon:UserRound} ];
   return <div className="app">
@@ -461,7 +462,7 @@ function App() {
         <button className="primary" disabled={sellerBusy} onClick={saveSellerRate}>{sellerBusy?'Сохранение...':'Сохранить тариф'}</button>
       </div></div>}
       {tab === 'profile' && <div className="profileOverview">
-        <div className="profileIdentity"><div className="profileAvatar">{(tg?.initDataUnsafe?.user?.first_name || 'R').slice(0,1).toUpperCase()}</div><div><span className="catalogEyebrow">ЛИЧНЫЙ КАБИНЕТ</span><h2>{tg?.initDataUnsafe?.user?.first_name || 'Пользователь Reklio'}</h2><p>{tg?.initDataUnsafe?.user?.username ? '@'+tg.initDataUnsafe.user.username : 'Управление рекламой и каналами'}</p></div></div>
+        <div className="profileIdentity"><div className="profileAvatar">{(telegramUser?.first_name || 'R').slice(0,1).toUpperCase()}</div><div><span className="catalogEyebrow">ЛИЧНЫЙ КАБИНЕТ</span><h2>{telegramUser?.first_name || 'Пользователь Reklio'}</h2><p>{telegramUser?.username ? '@'+telegramUser.username : 'Управление рекламой и каналами'}</p></div></div>
         <div className="profileSwitch"><button className={profileView==='seller'?'active':''} onClick={()=>setProfileView('seller')}>Мои каналы</button><button className={profileView==='buyer'?'active':''} onClick={()=>setProfileView('buyer')}>Рекламодатель</button></div>
         {profileView==='seller' ? <><div className="profileStats">
           <div><span>Подключено каналов</span><strong>{profileChannels.length}</strong></div>
