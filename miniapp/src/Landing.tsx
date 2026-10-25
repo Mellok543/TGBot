@@ -8,6 +8,7 @@ function PublicCatalog(){
  const [search,setSearch]=useState(()=>new URLSearchParams(window.location.search).get('q')||'');
  const [category,setCategory]=useState('');
  const [sort,setSort]=useState('default');
+ const [maxPrice,setMaxPrice]=useState('');
  const [loading,setLoading]=useState(true);
  const [error,setError]=useState('');
  useEffect(()=>{
@@ -19,15 +20,20 @@ function PublicCatalog(){
   return ()=>controller.abort();
  },[]);
  const categories=useMemo(()=>[...new Set(channels.map(c=>c.category).filter(Boolean))].sort(),[channels]);
- const visible=useMemo(()=>channels.filter(c=>(!category||c.category===category)&&[c.title,c.description,c.category,c.username||''].join(' ').toLocaleLowerCase('ru').includes(search.toLocaleLowerCase('ru')))
-  .sort((a,b)=>sort==='price'?a.price-b.price:sort==='audience'?(b.subscribers||0)-(a.subscribers||0):sort==='cpm'?(a.avgViews&&a.avgViews>0?a.price/a.avgViews:Infinity)-(b.avgViews&&b.avgViews>0?b.price/b.avgViews:Infinity):0),[channels,category,search,sort]);
- const money=(n:number)=>new Intl.NumberFormat('ru-RU',{style:'currency',currency:'RUB',maximumFractionDigits:0}).format(n);
- return <section id="catalog" className="lp-section lp-catalog"><div className="lp-section-head"><span className="lp-kicker">КАТАЛОГ REKLIO</span><h2>Выберите площадку.<br/><em>Запустите рекламу.</em></h2><p>Реальные каналы, стоимость и доступные показатели. Заказ оформляется в Telegram.</p></div>
- <div className="lp-catalog-filters"><input aria-label="Поиск каналов" placeholder="Поиск по названию и тематике" value={search} onChange={e=>setSearch(e.target.value)} /><select aria-label="Категория" value={category} onChange={e=>setCategory(e.target.value)}><option value="">Все категории</option>{categories.map(c=><option key={c}>{c}</option>)}</select><select aria-label="Сортировка" value={sort} onChange={e=>setSort(e.target.value)}><option value="default">Новые площадки</option><option value="price">Сначала дешевле</option><option value="audience">Больше подписчиков</option><option value="cpm">Выгодный CPM</option></select></div>
- {loading&&<p className="lp-catalog-hint">Загружаем площадки…</p>}{error&&<p className="lp-catalog-hint">{error}</p>}
- {!loading&&!error&&visible.length===0&&<p className="lp-catalog-hint">Каналов по выбранным условиям пока нет.</p>}
- <div className="lp-catalog-grid">{visible.map(c=><article key={c.id} className="lp-catalog-card"><div className="lp-catalog-heading"><span className="lp-catalog-avatar">{c.title.slice(0,1).toUpperCase()}</span><div><strong>{c.title}</strong><small>{c.category}</small></div></div><p>{c.description||'Рекламная площадка в Telegram'}</p><div className="lp-catalog-metrics"><span>Подписчики <b>{c.subscribers?.toLocaleString('ru-RU')||'Нет данных'}</b></span><span>Просмотры <b>{c.avgViews?.toLocaleString('ru-RU')||'Нет данных'}</b></span><span>CPM <b>{c.avgViews&&c.avgViews>0?money(c.price*1000/c.avgViews):'Нет данных'}</b></span></div><div className="lp-catalog-bottom"><div><small>Размещение от</small><strong>{money(c.price)}</strong></div><a className="lp-card-link" href={'/channels/'+c.id}>Подробнее ↗</a></div></article>)}</div>
-
+ const visible=useMemo(()=>channels.filter(c=>(!category||c.category===category)&&(!maxPrice||c.price<=Number(maxPrice))&&[c.title,c.description,c.category,c.username||''].join(' ').toLocaleLowerCase('ru').includes(search.trim().toLocaleLowerCase('ru')))
+ .sort((a,b)=>sort==='price'?a.price-b.price:sort==='audience'?(b.subscribers||0)-(a.subscribers||0):sort==='cpm'?(a.avgViews&&a.avgViews>0?a.price/a.avgViews:Infinity)-(b.avgViews&&b.avgViews>0?b.price/b.avgViews:Infinity):0),[channels,category,search,sort,maxPrice]);
+ const reset=()=>{setSearch('');setCategory('');setSort('default');setMaxPrice('');window.history.replaceState(null,'','/catalog');};
+ const hasFilters=Boolean(search||category||maxPrice||sort!=='default');
+ return <section id="catalog" className="lp-section lp-catalog lp-catalog-modern">
+  <div className="lp-catalog-title"><div><span className="lp-kicker">КАТАЛОГ REKLIO</span><h2>Рекламные площадки</h2><p>Сравнивайте предложения и переходите к оформлению заказа через Telegram.</p></div><a href="https://t.me/ReklioBot">Добавить свой канал ↗</a></div>
+  <div className="lp-catalog-toolbar"><label className="lp-filter-search"><span>Поиск</span><input type="search" aria-label="Поиск каналов" placeholder="Название, тематика или @username" value={search} onChange={e=>setSearch(e.target.value)}/></label>
+  <label><span>Категория</span><select aria-label="Категория" value={category} onChange={e=>setCategory(e.target.value)}><option value="">Все категории</option>{categories.map(c=><option key={c} value={c}>{c}</option>)}</select></label>
+  <label><span>Стоимость до</span><select aria-label="Максимальная цена" value={maxPrice} onChange={e=>setMaxPrice(e.target.value)}><option value="">Любая цена</option><option value="500">500 ₽</option><option value="1000">1 000 ₽</option><option value="3000">3 000 ₽</option><option value="5000">5 000 ₽</option><option value="10000">10 000 ₽</option></select></label>
+  <label><span>Сортировка</span><select aria-label="Сортировка" value={sort} onChange={e=>setSort(e.target.value)}><option value="default">Новые площадки</option><option value="price">Сначала дешевле</option><option value="audience">Больше подписчиков</option><option value="cpm">Выгодный CPM</option></select></label></div>
+  <div className="lp-catalog-status"><span aria-live="polite">{loading?'Загружаем площадки…':error?'Ошибка загрузки': 'Найдено каналов: '+visible.length}</span>{hasFilters&&<button type="button" onClick={reset}>Сбросить фильтры ×</button>}</div>
+  {error&&<div className="lp-catalog-message" role="alert"><h3>Каталог временно недоступен</h3><p>{error}. Попробуйте обновить страницу.</p><button type="button" onClick={()=>window.location.reload()}>Обновить</button></div>}
+  {!loading&&!error&&visible.length===0&&<div className="lp-catalog-message"><h3>Площадки не найдены</h3><p>Попробуйте изменить категорию, стоимость или поисковый запрос.</p><button type="button" onClick={reset}>Показать все каналы</button></div>}
+  <div className="lp-catalog-grid">{visible.map(c=><article key={c.id} className="lp-catalog-card"><div className="lp-catalog-heading"><span className="lp-catalog-avatar" aria-hidden="true">{c.title.slice(0,1).toUpperCase()}</span><div><strong>{c.title}</strong><small>{c.category||'Telegram-канал'}</small></div></div><p>{c.description||'Рекламная площадка в Telegram'}</p><div className="lp-catalog-metrics"><span>Подписчики <b>{c.subscribers?.toLocaleString('ru-RU')??'Нет данных'}</b></span><span>Средние просмотры <b>{c.avgViews?.toLocaleString('ru-RU')??'Нет данных'}</b></span><span>CPM <b>{c.avgViews&&c.avgViews>0?rub(c.price*1000/c.avgViews):'Нет данных'}</b></span></div><div className="lp-catalog-bottom"><div><small>Реклама от</small><strong>{rub(c.price)}</strong></div><a className="lp-card-link" href={'/channels/'+c.id}>Открыть канал ↗</a></div></article>)}</div>
  </section>;
 }
 function HomeFeatured(){
