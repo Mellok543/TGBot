@@ -144,6 +144,49 @@ app.MapGet("/api/channels/{channelId:long}/reviews", async (long channelId,HttpR
     while(await reader.ReadAsync(ct)) reviews.Add(new {stars=reader.GetInt32(0),comment=reader.IsDBNull(1)?null:reader.GetString(1),createdAt=reader.GetDateTime(2)});
     return Results.Ok(reviews);
 });
+// Public discovery is read-only and exposes no owner or buyer identifiers.
+app.MapGet("/api/public/channels", async (HttpRequest req,MySqlDataSource db,CancellationToken ct) =>
+{
+    var limit=int.TryParse(req.Query["limit"],out var requested)?Math.Clamp(requested,1,60):40;
+    await using var cmd=db.CreateCommand("""
+        SELECT c.telegram_id,c.title,c.category,c.ad_price_rub,c.ad_description,c.username,
+          (SELECT m.subscribers FROM channel_daily_metrics m WHERE m.channel_id=c.telegram_id AND m.subscribers IS NOT NULL ORDER BY m.day DESC LIMIT 1),
+          (SELECT CAST(ROUND(AVG(v.views)) AS SIGNED) FROM reklio_post_views v
+           JOIN channel_observed_posts op ON op.channel_id=v.channel_id AND op.message_id=v.message_id
+           WHERE v.channel_id=c.telegram_id AND op.posted_at>=UTC_TIMESTAMP()-INTERVAL 30 DAY)
+        FROM channels c WHERE c.is_listed=TRUE ORDER BY c.connected_at DESC LIMIT @limit
+        """);
+    cmd.Parameters.Add(new MySqlParameter("@limit",limit));
+    var rows=new List<object>();
+    await using var rd=await cmd.ExecuteReaderAsync(ct);
+    while(await rd.ReadAsync(ct)) rows.Add(new {
+      id=rd.GetInt64(0),title=rd.GetString(1),category=rd.GetString(2),
+      price=rd.GetDecimal(3),description=rd.IsDBNull(4)?"":rd.GetString(4),
+      username=rd.IsDBNull(5)?null:rd.GetString(5),
+      subscribers=rd.IsDBNull(6)?(int?)null:rd.GetInt32(6),
+      avgViews=rd.IsDBNull(7)?(long?)null:rd.GetInt64(7)
+    });
+    return Results.Ok(rows);
+});
+app.MapGet("/api/public/channels/{id:long}", async (long id,MySqlDataSource db,CancellationToken ct) =>
+{
+    await using var cmd=db.CreateCommand("""
+        SELECT c.telegram_id,c.title,c.category,c.ad_price_rub,c.ad_description,c.username,
+          (SELECT m.subscribers FROM channel_daily_metrics m WHERE m.channel_id=c.telegram_id AND m.subscribers IS NOT NULL ORDER BY m.day DESC LIMIT 1),
+          (SELECT CAST(ROUND(AVG(v.views)) AS SIGNED) FROM reklio_post_views v
+           JOIN channel_observed_posts op ON op.channel_id=v.channel_id AND op.message_id=v.message_id
+           WHERE v.channel_id=c.telegram_id AND op.posted_at>=UTC_TIMESTAMP()-INTERVAL 30 DAY)
+        FROM channels c WHERE c.telegram_id=@id AND c.is_listed=TRUE LIMIT 1
+        """);
+    cmd.Parameters.Add(new MySqlParameter("@id",id));
+    await using var rd=await cmd.ExecuteReaderAsync(ct);
+    if(!await rd.ReadAsync(ct))return Results.NotFound();
+    return Results.Ok(new {id=rd.GetInt64(0),title=rd.GetString(1),category=rd.GetString(2),
+      price=rd.GetDecimal(3),description=rd.IsDBNull(4)?"":rd.GetString(4),
+      username=rd.IsDBNull(5)?null:rd.GetString(5),
+      subscribers=rd.IsDBNull(6)?(int?)null:rd.GetInt32(6),
+      avgViews=rd.IsDBNull(7)?(long?)null:rd.GetInt64(7)});
+});
 app.MapGet("/api/channels", async (HttpRequest req, MySqlDataSource db, CancellationToken ct) =>
 {
     if (Authorized(req) is null) return Results.Unauthorized();
