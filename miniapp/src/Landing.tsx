@@ -145,7 +145,7 @@ function ChannelPage(){
    <div className="lp-price-start"><small>Стоимость размещения от</small><strong>{rub(lowest)}</strong></div>
    <a className="lp-buy-link" href={link}>Купить рекламу в Telegram ↗</a>
    <p className="lp-detail-note">Перейдите в @ReklioBot: он откроет предложение этого канала. Дата, материалы и заказ согласовываются в Telegram.</p>
-   <div className="lp-promo-entry"><strong>Владелец канала?</strong><p>Выделите площадку цветом и поднимите её выше остальных в каталоге.</p><div><span>7 дней · 99 ⭐</span><span>30 дней · 299 ⭐</span></div><a href={'https://t.me/ReklioBot?start=boost_'+channel.id}>Продвинуть канал ↗</a></div>
+   <div className="lp-promo-entry"><strong>Владелец канала?</strong><p>Выделите площадку цветом и поднимите её выше остальных в каталоге.</p><div><span>7 дней · 199 ₽</span><span>30 дней · 499 ₽</span></div><span>Покупка продвижения скоро появится в Mini App.</span></div>
   </aside></div></>}
  </section>;
 }
