@@ -565,6 +565,31 @@ public sealed class BotHandlers(Database database)
         await database.RegisterAsync(actor.Id, actor.Username, actor.FirstName + (actor.LastName is null ? "" : " " + actor.LastName), ct);
 
         var data = query.Data ?? "";
+        if (data.StartsWith("early:", StringComparison.Ordinal))
+        {
+            var bits=data.Split(':');
+            if(bits.Length==3 && long.TryParse(bits[2],out var earlyOrderId)
+               && bits[1] is ("republish" or "dispute"))
+            {
+                var republish=bits[1]=="republish";
+                if(await database.ResolveEarlyDeletionAsync(earlyOrderId,actor.Id,republish,ct))
+                {
+                    await bot.EditMessageText(origin.Chat.Id,origin.MessageId,
+                        republish
+                          ? $"🔄 Заказ #{earlyOrderId}: повторная публикация поставлена в очередь. Бот разместит исходный рекламный материал заново."
+                          : $"⚖️ Заказ #{earlyOrderId}: спор открыт. Решение доступно в Reklio.",
+                        cancellationToken:ct);
+                    var order=await database.GetAdRequestAsync(earlyOrderId,ct);
+                    if(order is { } current)
+                        await database.EnqueueNotificationToUserAsync(earlyOrderId,current.Advertiser,
+                            republish
+                              ? $"🔄 Заказ #{earlyOrderId}: владелец восстанавливает удалённую публикацию."
+                              : $"⚖️ Заказ #{earlyOrderId}: владелец открыл спор из-за досрочного удаления.",ct);
+                }
+                else await bot.SendMessage(origin.Chat.Id,"Действие недоступно: заявка уже обработана или принадлежит другому владельцу.",cancellationToken:ct);
+            }
+            return;
+        }
         if (data.StartsWith("admin:", StringComparison.Ordinal))
         {
             if (!IsAdmin(actor.Id))
