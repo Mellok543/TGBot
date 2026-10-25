@@ -50,11 +50,11 @@ def candidates(db):
             JOIN channels c ON c.telegram_id=p.channel_id
             LEFT JOIN reklio_post_monitor m ON m.order_id=p.order_id
             WHERE p.state='Published' AND p.telegram_message_id IS NOT NULL
-              AND p.deleted_at IS NULL AND p.delete_after_hours>0
+              AND p.deleted_at IS NULL AND p.delete_after_hours>=0
               AND a.status='Published'
               AND c.username IS NOT NULL AND c.username<>''
               AND p.published_at<=UTC_TIMESTAMP()
-              AND DATE_ADD(p.published_at, INTERVAL p.delete_after_hours HOUR)>DATE_ADD(UTC_TIMESTAMP(), INTERVAL 60 SECOND)
+              AND (p.delete_after_hours=0 OR DATE_ADD(p.published_at, INTERVAL p.delete_after_hours HOUR)>DATE_ADD(UTC_TIMESTAMP(), INTERVAL 60 SECOND))
             ORDER BY COALESCE(m.checked_at, '1970-01-01') ASC LIMIT 50
         """)
         return cur.fetchall()
@@ -86,7 +86,7 @@ def record(db, order_id, status):
             WHERE m.order_id=%s AND m.missing_count>=2
               AND a.status='Published' AND p.state='Published'
               AND p.deleted_at IS NULL AND a.payout_status NOT IN ('Paid','Refunded')
-              AND DATE_ADD(p.published_at, INTERVAL p.delete_after_hours HOUR)>UTC_TIMESTAMP()
+              AND (p.delete_after_hours=0 OR DATE_ADD(p.published_at, INTERVAL p.delete_after_hours HOUR)>UTC_TIMESTAMP())
             FOR UPDATE
         """, (order_id,))
         if cur.fetchone() is None:
