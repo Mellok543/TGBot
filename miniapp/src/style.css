@@ -101,3 +101,13 @@
 .reviewItem:first-of-type{margin-top:11px}
 .reviewItem b{color:#f1c865;letter-spacing:2px}
 .reviewItem p{margin:5px 0}
+
+/* Analytics and comparisons */
+.comparePanel{margin:14px 0 20px;padding:17px;background:linear-gradient(135deg,#1b3557,#13263f);border:1px solid #47739d;border-radius:17px}
+.comparePanel h3{font-size:16px;margin:0 0 12px}
+.compareGrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(115px,1fr));gap:9px;margin-bottom:13px}
+.compareGrid>div{display:flex;flex-direction:column;gap:9px;border-radius:12px;padding:11px;background:#0e1e34;border:1px solid #355474}
+.compareGrid strong{font-size:13px;overflow-wrap:anywhere}
+.compareGrid small{font-size:11px;color:#bad0e8}
+.compareToggle{display:flex;align-items:center;gap:8px;color:#afc9e5;font-size:12px;padding-top:7px;cursor:pointer}
+.compareToggle input{accent-color:#57a3fc;width:16px;height:16px}
