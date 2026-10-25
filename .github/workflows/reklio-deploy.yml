@@ -119,6 +119,16 @@ jobs:
           cors="$(curl -sS -D - -o /dev/null --max-time 15 -H 'Origin: https://reklio.site' https://api.reklio.site/api/channels | tr -d '\r')"
           echo "$cors" | grep -i 'access-control-allow-origin: https://reklio.site'
           echo "$cors" | head -n 15
+          echo 'Checking Telegram Mini App preflight request...'
+          curl -sS -D /tmp/reklio-preflight.headers -o /tmp/reklio-preflight.body --max-time 15 \
+            -X OPTIONS https://api.reklio.site/api/channels \
+            -H 'Origin: https://reklio.site' \
+            -H 'Access-Control-Request-Method: GET' \
+            -H 'Access-Control-Request-Headers: x-telegram-init-data,cache-control'
+          cat /tmp/reklio-preflight.headers
+          grep -qi '^access-control-allow-origin: https://reklio.site' /tmp/reklio-preflight.headers
+          grep -qi '^access-control-allow-headers:.*x-telegram-init-data' /tmp/reklio-preflight.headers
+
       - name: Verify public API
         run: |
           set -euo pipefail
