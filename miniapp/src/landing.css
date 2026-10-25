@@ -6,3 +6,37 @@
 .lp .lp-actions>a:first-child span{margin-left:20px}
 .lp .lp-nav-action{padding:12px 19px;background:#162b54;border:1px solid #426ca366;border-radius:12px;color:#e6f5ff;font-weight:650}
 @media(max-width:590px){.lp .lp-nav-action{font-size:11px;padding:10px}.lp .lp-actions>a:first-child{padding:15px 19px}}
+
+/* Public Reklio marketplace */
+.lp-catalog{max-width:1220px;margin:auto}
+.lp-catalog .lp-section-head p{color:#9fb1cc;line-height:1.65;max-width:580px}
+.lp-catalog-filters{display:grid;grid-template-columns:2fr 1fr 1fr;gap:10px;margin:28px 0 20px}
+.lp-catalog-filters input,.lp-catalog-filters select{width:100%;min-width:0;background:#132542;border:1px solid #35557d;border-radius:12px;padding:14px;color:#eff6ff;font:inherit;font-size:13px;outline:none}
+.lp-catalog-filters input:focus,.lp-catalog-filters select:focus{border-color:#3cb5ff}
+.lp-catalog-hint{padding:25px 0;color:#aec4e0}
+.lp-catalog-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:15px}
+.lp-catalog-card{padding:20px;border-radius:20px;background:linear-gradient(155deg,#182c4a,#101c31);border:1px solid #375777;display:flex;flex-direction:column;gap:16px;min-width:0}
+.lp-catalog-heading{display:flex;align-items:center;gap:12px;min-width:0}
+.lp-catalog-heading>div{display:grid;gap:5px;min-width:0}
+.lp-catalog-heading strong{font-size:16px;overflow-wrap:anywhere}
+.lp-catalog-heading small{font-size:12px;color:#8eb4d6}
+.lp-catalog-avatar{width:51px;height:51px;flex-shrink:0;display:grid;place-items:center;border-radius:15px;background:linear-gradient(140deg,#2198ff,#7761ef);font-size:24px;font-weight:800}
+.lp-catalog-card>p{color:#a8bdd5;font-size:13px;line-height:1.7;margin:0;flex:1;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+.lp-catalog-metrics{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.lp-catalog-metrics span{display:flex;flex-direction:column;gap:6px;background:#203754;border-radius:10px;color:#9bb3d2;font-size:11px;padding:11px}
+.lp-catalog-metrics b{color:#eef7ff;font-size:15px;overflow-wrap:anywhere}
+.lp-catalog-bottom{display:flex;align-items:center;justify-content:space-between;gap:8px;border-top:1px solid #3a5270;padding-top:15px}
+.lp-catalog-bottom>div{display:grid;gap:4px}
+.lp-catalog-bottom small{font-size:11px;color:#9bb3d2}
+.lp-catalog-bottom strong{font-size:20px}
+.lp-catalog-bottom button,.lp-modal-actions a{background:linear-gradient(100deg,#1dd5f1,#2e86fe);border:0;border-radius:11px;color:#091b30;font-size:13px;font-weight:800;padding:12px 15px;cursor:pointer}
+.lp-channel-overlay{position:fixed;inset:0;background:#030a17db;z-index:80;display:flex;align-items:center;justify-content:center;overflow:auto;padding:18px}
+.lp-channel-modal{width:100%;max-width:530px;border:1px solid #49729b;background:linear-gradient(150deg,#1a3454,#101c32);border-radius:22px;padding:25px;box-shadow:0 24px 80px #000a}
+.lp-channel-modal h2{font-size:29px;line-height:1.15;margin:12px 0}
+.lp-channel-modal p{line-height:1.65;color:#b8cbe4}
+.lp-channel-modal h3{font-size:20px;margin:22px 0}
+.lp-modal-close{background:transparent;color:#a9c8e9;border:0;padding:0 0 19px;display:block}
+.lp-modal-actions{display:flex;gap:12px;flex-wrap:wrap}
+.lp-modal-actions a:nth-child(2){background:#203e62;color:#d5e7fc}
+@media(max-width:900px){.lp-catalog-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:640px){.lp-catalog-filters{grid-template-columns:1fr}.lp-catalog-grid{grid-template-columns:1fr}.lp-catalog-card{padding:17px}.lp-channel-modal{padding:19px}.lp-catalog-bottom strong{font-size:18px}}
