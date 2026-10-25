@@ -1506,7 +1506,7 @@ public sealed class Database(string connectionString) : IAsyncDisposable
 
     public async Task<bool> RecordPromotionPaymentAsync(long ownerId,long channelId,int days,int stars,string chargeId,CancellationToken ct)
     {
-        if(string.IsNullOrWhiteSpace(chargeId)||days is not (7 or 30)||
+        if(!await OwnsListedChannelAsync(ownerId,channelId,ct)||string.IsNullOrWhiteSpace(chargeId)||days is not (7 or 30)||
            stars!=(days==7?99:299))return false;
         await using var conn=await _source.OpenConnectionAsync(ct);
         await using var tx=await conn.BeginTransactionAsync(ct);
@@ -1527,7 +1527,7 @@ public sealed class Database(string connectionString) : IAsyncDisposable
         update.Parameters.AddWithValue("@days",days);
         update.Parameters.AddWithValue("@channel",channelId);
         update.Parameters.AddWithValue("@owner",ownerId);
-        if(await update.ExecuteNonQueryAsync(ct)!=1 && await OwnsListedChannelAsync(ownerId,channelId,ct)==false){await tx.RollbackAsync(ct);return false;}
+        if(await update.ExecuteNonQueryAsync(ct)<1){await tx.RollbackAsync(ct);return false;}
         await tx.CommitAsync(ct);
         return true;
     }
