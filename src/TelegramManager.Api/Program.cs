@@ -61,6 +61,24 @@ catch(MySqlException ex)
     app.Logger.LogWarning(ex,"Reklio staff schema could not be initialized; verify DB CREATE permission");
 }
 
+try
+{
+    await using var likesDb=app.Services.GetRequiredService<MySqlDataSource>();
+    await using var createLikes=likesDb.CreateCommand("""
+        CREATE TABLE IF NOT EXISTS reklio_channel_likes (
+            user_id BIGINT NOT NULL,
+            channel_id BIGINT NOT NULL,
+            created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY(user_id,channel_id),
+            INDEX idx_channel_likes(channel_id)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+        """);
+    await createLikes.ExecuteNonQueryAsync();
+}
+catch(MySqlException ex)
+{
+    app.Logger.LogWarning(ex,"Could not initialize channel likes table");
+}
 app.UseCors("miniapp");
 
 static long? VerifyTelegram(string? initData, string token)
@@ -159,6 +177,37 @@ app.MapGet("/api/channels/{channelId:long}/reviews", async (long channelId,HttpR
     return Results.Ok(reviews);
 });
 // Public discovery is read-only and exposes no owner or buyer identifiers.
+// One reaction per Telegram account and channel; ranking is based on genuine reactions.
+app.MapGet("/api/channel-likes",async(HttpRequest req,MySqlDataSource db,CancellationToken ct)=>
+{
+    if(Authorized(req) is not long user)return Results.Unauthorized();
+    await using var cmd=db.CreateCommand("SELECT channel_id FROM reklio_channel_likes WHERE user_id=@user");
+    cmd.Parameters.Add(new MySqlParameter("@user",user));
+    var ids=new List<long>();
+    await using var rd=await cmd.ExecuteReaderAsync(ct);
+    while(await rd.ReadAsync(ct))ids.Add(rd.GetInt64(0));
+    return Results.Ok(ids);
+});
+app.MapPost("/api/channel-likes/{channelId:long}",async(long channelId,HttpRequest req,MySqlDataSource db,CancellationToken ct)=>
+{
+    if(Authorized(req) is not long user)return Results.Unauthorized();
+    await using var cmd=db.CreateCommand("""
+        INSERT IGNORE INTO reklio_channel_likes(user_id,channel_id)
+        SELECT @user,telegram_id FROM channels WHERE telegram_id=@channel AND is_listed=TRUE AND connected_by<>@user
+        """);
+    cmd.Parameters.Add(new MySqlParameter("@user",user));
+    cmd.Parameters.Add(new MySqlParameter("@channel",channelId));
+    return await cmd.ExecuteNonQueryAsync(ct)>0?Results.Ok(new {liked=true}):Results.Conflict(new {error="Нельзя оценивать собственный канал или канал недоступен"});
+});
+app.MapDelete("/api/channel-likes/{channelId:long}",async(long channelId,HttpRequest req,MySqlDataSource db,CancellationToken ct)=>
+{
+    if(Authorized(req) is not long user)return Results.Unauthorized();
+    await using var cmd=db.CreateCommand("DELETE FROM reklio_channel_likes WHERE user_id=@user AND channel_id=@channel");
+    cmd.Parameters.Add(new MySqlParameter("@user",user));
+    cmd.Parameters.Add(new MySqlParameter("@channel",channelId));
+    await cmd.ExecuteNonQueryAsync(ct);
+    return Results.Ok(new {liked=false});
+});
 app.MapGet("/api/public/channels", async (HttpRequest req,MySqlDataSource db,CancellationToken ct) =>
 {
     var limit=int.TryParse(req.Query["limit"],out var requested)?Math.Clamp(requested,1,60):40;
@@ -168,11 +217,12 @@ app.MapGet("/api/public/channels", async (HttpRequest req,MySqlDataSource db,Can
           (SELECT CAST(ROUND(AVG(v.views)) AS SIGNED) FROM reklio_post_views v
            JOIN channel_observed_posts op ON op.channel_id=v.channel_id AND op.message_id=v.message_id
            WHERE v.channel_id=c.telegram_id AND op.posted_at>=UTC_TIMESTAMP()-INTERVAL 30 DAY),
-          (SELECT p.active_until FROM channel_promotions p WHERE p.channel_id=c.telegram_id AND p.active_until>UTC_TIMESTAMP() LIMIT 1)
+          (SELECT p.active_until FROM channel_promotions p WHERE p.channel_id=c.telegram_id AND p.active_until>UTC_TIMESTAMP() LIMIT 1),
+          (SELECT COUNT(*) FROM reklio_channel_likes l WHERE l.channel_id=c.telegram_id)
         FROM channels c
         LEFT JOIN channel_promotions promotion ON promotion.channel_id=c.telegram_id
         WHERE c.is_listed=TRUE
-        ORDER BY (promotion.active_until>UTC_TIMESTAMP()) DESC, c.connected_at DESC LIMIT @limit
+        ORDER BY (promotion.active_until>UTC_TIMESTAMP()) DESC, (SELECT COUNT(*) FROM reklio_channel_likes l WHERE l.channel_id=c.telegram_id) DESC,c.connected_at DESC LIMIT @limit
         """);
     cmd.Parameters.Add(new MySqlParameter("@limit",limit));
     var rows=new List<object>();
@@ -182,7 +232,7 @@ app.MapGet("/api/public/channels", async (HttpRequest req,MySqlDataSource db,Can
       price=rd.GetDecimal(3),description=rd.IsDBNull(4)?"":rd.GetString(4),
       username=rd.IsDBNull(5)?null:rd.GetString(5),
       subscribers=rd.IsDBNull(6)?(int?)null:rd.GetInt32(6),
-      avgViews=rd.IsDBNull(7)?(long?)null:rd.GetInt64(7),promotedUntil=rd.IsDBNull(8)?(DateTime?)null:rd.GetDateTime(8)
+      avgViews=rd.IsDBNull(7)?(long?)null:rd.GetInt64(7),promotedUntil=rd.IsDBNull(8)?(DateTime?)null:rd.GetDateTime(8),likes=rd.GetInt64(9)
     });
     return Results.Ok(rows);
 });
@@ -243,7 +293,7 @@ app.MapGet("/api/public/channels/{id:long}", async (long id,MySqlDataSource db,C
       price=rd.GetDecimal(3),description=rd.IsDBNull(4)?"":rd.GetString(4),
       username=rd.IsDBNull(5)?null:rd.GetString(5),
       subscribers=rd.IsDBNull(6)?(int?)null:rd.GetInt32(6),
-      avgViews=rd.IsDBNull(7)?(long?)null:rd.GetInt64(7),promotedUntil=rd.IsDBNull(8)?(DateTime?)null:rd.GetDateTime(8)});
+      avgViews=rd.IsDBNull(7)?(long?)null:rd.GetInt64(7),promotedUntil=rd.IsDBNull(8)?(DateTime?)null:rd.GetDateTime(8),likes=rd.GetInt64(9)});
 });
 app.MapGet("/api/public/channels/{id:long}/details", async (long id,MySqlDataSource db,CancellationToken ct) =>
 {
@@ -296,11 +346,12 @@ app.MapGet("/api/channels", async (HttpRequest req, MySqlDataSource db, Cancella
                 WHERE v.channel_id=c.telegram_id AND p.posted_at>=UTC_TIMESTAMP()-INTERVAL 30 DAY) AS avgViews,
                (SELECT COUNT(*) FROM reklio_post_views v JOIN channel_observed_posts p
                 ON p.channel_id=v.channel_id AND p.message_id=v.message_id
-                WHERE v.channel_id=c.telegram_id AND p.posted_at>=UTC_TIMESTAMP()-INTERVAL 30 DAY) AS viewsSamples
+                WHERE v.channel_id=c.telegram_id AND p.posted_at>=UTC_TIMESTAMP()-INTERVAL 30 DAY) AS viewsSamples,
+               (SELECT COUNT(*) FROM reklio_channel_likes l WHERE l.channel_id=c.telegram_id) AS likes
         FROM channels c WHERE c.is_listed=TRUE
           AND (@category='' OR c.category=@category)
           AND (@search='' OR c.title LIKE @pattern)
-        ORDER BY (promotedUntil IS NOT NULL) DESC,c.connected_at DESC LIMIT @limit
+        ORDER BY (EXISTS(SELECT 1 FROM channel_promotions cp WHERE cp.channel_id=c.telegram_id AND cp.active_until>UTC_TIMESTAMP())) DESC,likes DESC,c.connected_at DESC LIMIT @limit
         """);
     cmd.Parameters.Add(new MySqlParameter("@category", category));
     cmd.Parameters.Add(new MySqlParameter("@search", search));
@@ -316,7 +367,7 @@ app.MapGet("/api/channels", async (HttpRequest req, MySqlDataSource db, Cancella
             subscribers = reader.IsDBNull(6) ? (int?)null : reader.GetInt32(6),
             posts30d = reader.IsDBNull(7) ? 0L : reader.GetInt64(7),
             avgViews = reader.IsDBNull(8) ? (long?)null : reader.GetInt64(8),
-            viewsSamples = reader.GetInt64(9), promotedUntil=reader.IsDBNull(10)?(DateTime?)null:reader.GetDateTime(10)
+            viewsSamples = reader.GetInt64(9), likes=reader.GetInt64(10), promotedUntil=(DateTime?)null
         });
     return Results.Ok(channels);
 });
