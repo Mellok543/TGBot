@@ -788,7 +788,7 @@ public sealed class BotHandlers(Database database)
                 var analyticsPlan = await database.GetPlanAsync(actor.Id, ct);
                 if (!analyticsPlan.Pro)
                 {
-                    await bot.EditMessageText(origin.Chat.Id, origin.MessageId, "📊 Детальная статистика по каждому каналу доступна в PRO (299 Stars / 30 дней).\nБесплатная сводка доступна в профиле.", replyMarkup: Back(), cancellationToken: ct);
+                    await bot.EditMessageText(origin.Chat.Id, origin.MessageId, "📊 Расширенная статистика доступна на тарифе PRO.\nБесплатная сводка доступна в профиле.", replyMarkup: Back(), cancellationToken: ct);
                     break;
                 }
                 var channelAnalytics = await database.GetChannelAnalyticsAsync(actor.Id, ct);
