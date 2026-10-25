@@ -115,3 +115,18 @@ html{scroll-behavior:smooth;scroll-padding-top:90px}
  .lp-nav-links.open a:active{background:#244465}
  .lp-mobile-menu{position:relative;z-index:130}
 }
+
+/* Independent mobile drawer — outside sticky header stacking context */
+.lp-mobile-drawer-wrap{display:none}
+@media(max-width:760px){
+ .lp-nav-links{display:none!important}
+ .lp-mobile-drawer-wrap{display:block;position:fixed;inset:0;z-index:9999;isolation:isolate}
+ .lp-mobile-scrim{position:absolute;inset:0;border:0;background:rgba(1,7,20,.74);width:100%;height:100%;padding:0}
+ .lp-mobile-drawer{position:absolute;top:0;right:0;bottom:0;width:min(86vw,360px);padding:24px 20px;overflow-y:auto;background:#11233e;border-left:1px solid #517bac;box-shadow:-25px 0 70px #000b;display:flex;flex-direction:column;gap:5px}
+ .lp-drawer-title{display:flex;align-items:center;justify-content:space-between;margin-bottom:20px;font-size:20px}
+ .lp-drawer-title button{background:#254466;border:1px solid #5475a1;border-radius:11px;color:white;padding:8px 13px}
+ .lp-mobile-drawer>a{display:block;padding:14px 12px;border-radius:12px;color:#e4efff;font-size:15px}
+ .lp-mobile-drawer>a:active{background:#294765}
+ .lp-drawer-divider{height:1px;background:#47617d;margin:12px 0}
+ .lp-mobile-drawer .lp-drawer-cta{margin-top:22px;background:linear-gradient(100deg,#13c8ee,#3483ff);color:#07182d;text-align:center;font-weight:800}
+}
