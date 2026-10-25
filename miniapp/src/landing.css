@@ -252,3 +252,18 @@ html{scroll-behavior:smooth;scroll-padding-top:90px}
 @media(max-width:1050px){.lp-catalog-toolbar{grid-template-columns:repeat(3,minmax(0,1fr))}.lp-catalog-toolbar .lp-filter-search{grid-column:1/-1}}
 @media(max-width:650px){.lp-catalog-title{align-items:flex-start;flex-direction:column}.lp-catalog-title>a{width:100%;text-align:center}.lp-catalog-toolbar{grid-template-columns:repeat(2,minmax(0,1fr));padding:12px;gap:10px}.lp-catalog-toolbar .lp-filter-search{grid-column:1/-1}.lp-catalog-toolbar label:last-child{grid-column:1/-1}.lp-catalog-modern .lp-catalog-card{padding:17px}.lp-catalog-modern .lp-catalog-card>p{min-height:0}}
 @media(prefers-reduced-motion:reduce){.lp-catalog-modern .lp-catalog-card{transition:none}}
+
+/* First-visit guided journeys */
+.lp-start{max-width:1164px;margin:22px auto 24px;padding:30px;background:linear-gradient(145deg,#172c4c,#0d1d33);border:1px solid #3a638b;border-radius:24px}
+.lp-start-heading h2{font-size:clamp(27px,3.2vw,38px);margin:11px 0}.lp-start-heading p{color:#a8c0dd;font-size:14px;line-height:1.6;margin:0 0 22px}
+.lp-start-tabs{display:grid;grid-template-columns:1fr 1fr;gap:7px;padding:6px;background:#09192d;border:1px solid #345375;border-radius:14px;max-width:650px}
+.lp-start-tabs button{border:0;border-radius:10px;padding:14px 10px;background:transparent;color:#abc1db;font-weight:750;font-size:13px}
+.lp-start-tabs button.active{color:#05192d;background:linear-gradient(110deg,#28d0f0,#4e97ff)}
+.lp-start-steps{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin-top:21px}
+.lp-start-steps article{padding:18px;background:#1b3454;border:1px solid #365b80;border-radius:15px;min-width:0}
+.lp-start-steps article>span{font-size:12px;font-weight:800;color:#71d5ff}.lp-start-steps h3{font-size:17px;margin:13px 0 8px}.lp-start-steps p{font-size:12px;color:#adc1dd;line-height:1.65;margin:0}
+.lp-start-actions{display:flex;align-items:center;gap:20px;flex-wrap:wrap;margin-top:22px}
+.lp-start-actions .lp-start-primary{padding:14px 20px;background:linear-gradient(100deg,#1dd4f1,#3789ff);color:#071a30;border-radius:12px;font-size:13px;font-weight:800}
+.lp-start-actions>a:last-child{font-size:13px;color:#8dd4ff;font-weight:700}
+@media(max-width:760px){.lp-start{margin:16px 16px 24px;padding:21px 16px}.lp-start-steps{grid-template-columns:1fr;gap:9px}.lp-start-steps article{padding:14px}.lp-start-steps h3{margin:5px 0}.lp-start-tabs button{font-size:12px;padding:13px 7px}}
+@media(max-width:370px){.lp-start-tabs{grid-template-columns:1fr}}
