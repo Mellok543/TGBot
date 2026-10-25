@@ -2,7 +2,7 @@ import {useEffect,useMemo,useState} from 'react';
 import './landing.css';
 const items=[{n:'01',title:'Выберите канал',desc:'Изучайте тематику, описание площадки и стоимость размещения до подачи заявки.'},{n:'02',title:'Запланируйте рекламу',desc:'Укажите время размещения и передайте готовый рекламный пост владельцу канала.'},{n:'03',title:'Следите за публикацией',desc:'Управляйте заказами через Telegram. Reklio проверяет доступность опубликованных сообщений.'}];
 type PublicChannel={id:number;title:string;category:string;price:number;description:string;username:string|null;subscribers:number|null;avgViews:number|null};
-const publicApi=(import.meta.env.VITE_API_URL || 'https://api.reklio.site').replace(/\\/$/,'');
+const publicApi=import.meta.env.VITE_API_URL || 'https://api.reklio.site';
 function PublicCatalog(){
  const [channels,setChannels]=useState<PublicChannel[]>([]);
  const [selected,setSelected]=useState<PublicChannel|null>(null);
