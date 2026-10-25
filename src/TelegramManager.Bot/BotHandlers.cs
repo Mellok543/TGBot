@@ -228,24 +228,9 @@ public sealed class BotHandlers(Database database)
     }
 
     private static readonly TimeSpan DisplayOffset = TimeSpan.FromHours(3);
-    private static string MiniAppUrl()
-    {
-        var configured = Environment.GetEnvironmentVariable("MINIAPP_URL");
-        return Uri.TryCreate(configured, UriKind.Absolute, out var uri) && uri.Scheme == Uri.UriSchemeHttps
-            ? uri.ToString() : "https://reklio.site";
-    }
-
-    private static ReplyKeyboardMarkup MainKeyboard() => new(new[]
-    {
-        new KeyboardButton("🚀 Открыть Reklio")
-        {
-            WebApp = new WebAppInfo { Url = MiniAppUrl() }
-        }
-    }) { ResizeKeyboard = true, IsPersistent = true };
-
     private static InlineKeyboardMarkup Home() => new(new[]
     {
-        new[] { new InlineKeyboardButton("🚀 Открыть Reklio") { WebApp = new WebAppInfo { Url = MiniAppUrl() } } }
+        new[] { InlineKeyboardButton.WithUrl("🌐 Открыть сайт Reklio", "https://reklio.site") }
     });
 
     private static InlineKeyboardMarkup ForRole(string? role) => Home();
@@ -587,10 +572,20 @@ public sealed class BotHandlers(Database database)
                 {
                     await ShowOfferAsync(bot, message.Chat.Id, null, directId, ct);
                 }
-                else await bot.SendMessage(message.Chat.Id, "🚀 Добро пожаловать в Reklio!\n\nПокупайте рекламу, подключайте свои каналы и управляйте размещениями в одном приложении.\n\nНажмите кнопку «Открыть Reklio» ниже.", replyMarkup: MainKeyboard(), cancellationToken: ct);
+                else
+                {
+                    // Remove the old persistent reply keyboard without leaving a service message.
+                    var cleanup = await bot.SendMessage(message.Chat.Id, "Обновляем меню…",
+                        replyMarkup: new ReplyKeyboardRemove(), cancellationToken: ct);
+                    try { await bot.DeleteMessage(message.Chat.Id, cleanup.MessageId, cancellationToken: ct); }
+                    catch (Telegram.Bot.Exceptions.ApiRequestException) { /* Older clients can retain the notice. */ }
+                    await bot.SendMessage(message.Chat.Id,
+                        "🚀 Добро пожаловать в Reklio!\\n\\nНа сайте можно найти каналы для рекламы, узнать об услугах платформы и открыть приложение Reklio.\\n\\nНажмите кнопку ниже, чтобы перейти на сайт.",
+                        replyMarkup: Home(), cancellationToken: ct);
+                }
             }
             else if (message.Text?.StartsWith("/cancel", StringComparison.Ordinal) == true)
-                await bot.SendMessage(message.Chat.Id, "Действие отменено. Откройте Reklio кнопкой ниже.", replyMarkup: MainKeyboard(), cancellationToken: ct);
+                await bot.SendMessage(message.Chat.Id, "Действие отменено. Перейти на сайт можно по кнопке ниже.", replyMarkup: Home(), cancellationToken: ct);
             return;
         }
 
