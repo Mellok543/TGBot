@@ -189,6 +189,29 @@ app.MapGet("/api/public/channels/{id:long}", async (long id,MySqlDataSource db,C
       subscribers=rd.IsDBNull(6)?(int?)null:rd.GetInt32(6),
       avgViews=rd.IsDBNull(7)?(long?)null:rd.GetInt64(7)});
 });
+app.MapGet("/api/public/channels/{id:long}/details", async (long id,MySqlDataSource db,CancellationToken ct) =>
+{
+    await using var cmd=db.CreateCommand("""
+      SELECT r.duration_hours,r.price_rub FROM channel_duration_rates r
+      JOIN channels c ON c.telegram_id=r.channel_id
+      WHERE c.telegram_id=@id AND c.is_listed=TRUE AND r.is_active=TRUE
+      ORDER BY r.duration_hours LIMIT 20
+    """);
+    cmd.Parameters.Add(new MySqlParameter("@id",id));
+    var rates=new List<object>();
+    await using(var reader=await cmd.ExecuteReaderAsync(ct))
+       while(await reader.ReadAsync(ct))rates.Add(new {hours=reader.GetInt32(0),price=reader.GetDecimal(1)});
+    await using var reviewsCmd=db.CreateCommand("""
+      SELECT stars,comment,created_at FROM channel_reviews
+      WHERE channel_id=@id AND EXISTS(SELECT 1 FROM channels c WHERE c.telegram_id=@id AND c.is_listed=TRUE)
+      ORDER BY created_at DESC LIMIT 10
+    """);
+    reviewsCmd.Parameters.Add(new MySqlParameter("@id",id));
+    var reviews=new List<object>();
+    await using(var reader=await reviewsCmd.ExecuteReaderAsync(ct))
+       while(await reader.ReadAsync(ct))reviews.Add(new {stars=reader.GetInt32(0),comment=reader.IsDBNull(1)?null:reader.GetString(1),createdAt=reader.GetDateTime(2)});
+    return Results.Ok(new {rates,reviews});
+});
 app.MapGet("/api/channels", async (HttpRequest req, MySqlDataSource db, CancellationToken ct) =>
 {
     if (Authorized(req) is null) return Results.Unauthorized();
