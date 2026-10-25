@@ -990,7 +990,7 @@ app.MapGet("/api/my-channels", async (HttpRequest req, MySqlDataSource db, Cance
 {
     if (Authorized(req) is not long userId) return Results.Unauthorized();
     await using var cmd = db.CreateCommand("""
-        SELECT telegram_id,title,is_listed,ad_price_rub FROM channels
+        SELECT telegram_id,title,is_listed,ad_price_rub,category FROM channels
         WHERE connected_by=@user ORDER BY connected_at DESC LIMIT 50
         """);
     cmd.Parameters.Add(new MySqlParameter("@user", userId));
@@ -998,10 +998,22 @@ app.MapGet("/api/my-channels", async (HttpRequest req, MySqlDataSource db, Cance
     await using var reader = await cmd.ExecuteReaderAsync(ct);
     while (await reader.ReadAsync(ct))
         channels.Add(new { id = reader.GetInt64(0), title = reader.GetString(1),
-            listed = reader.GetBoolean(2), price = reader.GetDecimal(3) });
+            listed = reader.GetBoolean(2), price = reader.GetDecimal(3), category = reader.IsDBNull(4) ? "" : reader.GetString(4) });
     return Results.Ok(channels);
 });
 
+app.MapPost("/api/my-channels/{channelId:long}/category", async (long channelId,UpdateCategoryInput input,HttpRequest req,MySqlDataSource db,CancellationToken ct) =>
+{
+    if (Authorized(req) is not long userId) return Results.Unauthorized();
+    var category=input.Category?.Trim()??"";
+    var allowed=new HashSet<string>(StringComparer.Ordinal){"Технологии","Игры","Новости","Бизнес","Финансы","Образование","Развлечения","Юмор","Спорт","Путешествия","Авто","Красота и стиль","Здоровье","Кулинария","Музыка","Кино","Другое"};
+    if(!allowed.Contains(category))return Results.BadRequest(new {error="Выберите категорию из списка"});
+    await using var cmd=db.CreateCommand("UPDATE channels SET category=@category WHERE telegram_id=@channel AND connected_by=@owner");
+    cmd.Parameters.Add(new MySqlParameter("@category",category));
+    cmd.Parameters.Add(new MySqlParameter("@channel",channelId));
+    cmd.Parameters.Add(new MySqlParameter("@owner",userId));
+    return await cmd.ExecuteNonQueryAsync(ct)>0?Results.Ok(new {category}):Results.NotFound();
+});
 app.MapGet("/api/my-channels/{channelId:long}/rates", async (long channelId, HttpRequest req, MySqlDataSource db, CancellationToken ct) =>
 {
     if (Authorized(req) is not long userId) return Results.Unauthorized();
@@ -1573,5 +1585,6 @@ record ScheduleOrderInput(long RateId, DateTimeOffset ScheduledAt);
 
 record UpdateRateInput(int Hours, decimal Price);
 record UpdateListingInput(bool Listed);
+record UpdateCategoryInput(string Category);
 
 record ConnectChannelRequest(string Username);
