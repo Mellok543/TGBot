@@ -283,7 +283,8 @@ app.MapGet("/api/public/channels/{id:long}", async (long id,MySqlDataSource db,C
           (SELECT CAST(ROUND(AVG(v.views)) AS SIGNED) FROM reklio_post_views v
            JOIN channel_observed_posts op ON op.channel_id=v.channel_id AND op.message_id=v.message_id
            WHERE v.channel_id=c.telegram_id AND op.posted_at>=UTC_TIMESTAMP()-INTERVAL 30 DAY),
-          (SELECT p.active_until FROM channel_promotions p WHERE p.channel_id=c.telegram_id AND p.active_until>UTC_TIMESTAMP() LIMIT 1)
+          (SELECT p.active_until FROM channel_promotions p WHERE p.channel_id=c.telegram_id AND p.active_until>UTC_TIMESTAMP() LIMIT 1),
+          (SELECT COUNT(*) FROM reklio_channel_likes l WHERE l.channel_id=c.telegram_id)
         FROM channels c WHERE c.telegram_id=@id AND c.is_listed=TRUE LIMIT 1
         """);
     cmd.Parameters.Add(new MySqlParameter("@id",id));
@@ -347,7 +348,8 @@ app.MapGet("/api/channels", async (HttpRequest req, MySqlDataSource db, Cancella
                (SELECT COUNT(*) FROM reklio_post_views v JOIN channel_observed_posts p
                 ON p.channel_id=v.channel_id AND p.message_id=v.message_id
                 WHERE v.channel_id=c.telegram_id AND p.posted_at>=UTC_TIMESTAMP()-INTERVAL 30 DAY) AS viewsSamples,
-               (SELECT COUNT(*) FROM reklio_channel_likes l WHERE l.channel_id=c.telegram_id) AS likes
+               (SELECT COUNT(*) FROM reklio_channel_likes l WHERE l.channel_id=c.telegram_id) AS likes,
+               (SELECT cp.active_until FROM channel_promotions cp WHERE cp.channel_id=c.telegram_id AND cp.active_until>UTC_TIMESTAMP() LIMIT 1) AS promotedUntil
         FROM channels c WHERE c.is_listed=TRUE
           AND (@category='' OR c.category=@category)
           AND (@search='' OR c.title LIKE @pattern)
@@ -367,7 +369,7 @@ app.MapGet("/api/channels", async (HttpRequest req, MySqlDataSource db, Cancella
             subscribers = reader.IsDBNull(6) ? (int?)null : reader.GetInt32(6),
             posts30d = reader.IsDBNull(7) ? 0L : reader.GetInt64(7),
             avgViews = reader.IsDBNull(8) ? (long?)null : reader.GetInt64(8),
-            viewsSamples = reader.GetInt64(9), likes=reader.GetInt64(10), promotedUntil=(DateTime?)null
+            viewsSamples = reader.GetInt64(9), likes=reader.GetInt64(10), promotedUntil=reader.IsDBNull(11)?(DateTime?)null:reader.GetDateTime(11)
         });
     return Results.Ok(channels);
 });
