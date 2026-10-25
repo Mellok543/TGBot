@@ -85,3 +85,19 @@
 .profileQuick .secondary{margin-top:14px}
 .profileQuick p,.profileFootnote{color:#a6bad4;font-size:11px;line-height:1.5}
 @media(max-width:365px){.catalogCardFoot{align-items:stretch;flex-direction:column}.catalogCardFoot button{width:100%}.profileIdentity h2{font-size:19px}.profileStats strong{font-size:20px}}
+
+/* Favorites and verified reviews */
+.favoriteFilter{display:flex;gap:8px;margin:0 0 15px}
+.favoriteFilter button{flex:1;padding:11px;border-radius:12px;background:#162941;color:#c1d3ed;border:1px solid #335879;font-size:13px;font-weight:700}
+.favoriteFilter button.active{background:linear-gradient(115deg,#1767af,#534ac6);border-color:#5994df;color:white}
+.catalogCard .favoriteHeart{flex-shrink:0;border:1px solid #3b5a82;border-radius:12px;background:#243b58;color:#bfcee6;font-size:27px;line-height:1;padding:7px 10px}
+.catalogCard .favoriteHeart.active{color:#ff759e;background:#3c2747;border-color:#a45588}
+.reviewsPreview{border:1px solid #3d587c6b;border-radius:17px;background:#172840;padding:15px;margin:15px 0}
+.reviewsPreview h3{font-size:15px;margin:0 0 11px}
+.reviewsPreview>strong{font-size:20px;color:#f0c965}
+.reviewsPreview small{font-size:11px;color:#adbfdd;font-weight:500}
+.reviewsPreview>p,.reviewItem p{color:#b2c4de;font-size:12px;line-height:1.5}
+.reviewItem{padding:11px 0;border-top:1px solid #3d587c55}
+.reviewItem:first-of-type{margin-top:11px}
+.reviewItem b{color:#f1c865;letter-spacing:2px}
+.reviewItem p{margin:5px 0}
