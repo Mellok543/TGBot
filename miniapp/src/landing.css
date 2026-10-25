@@ -299,3 +299,6 @@ html{scroll-behavior:smooth;scroll-padding-top:90px}
 .lp .lp-detail-panel h2,.lp .lp-route-heading h1{letter-spacing:-.025em}
 .lp .lp-review p,.lp .lp-detail-note,.lp .lp-rate-row,.lp .lp-channel-identity>p{font-size:calc(14px * var(--lp-font-scale))}
 .lp .lp-footer,.lp .lp-footer-links a{font-size:calc(12px * var(--lp-font-scale))}
+
+.lp .lp-catalog-avatar{position:relative;overflow:hidden;flex-shrink:0;display:grid;place-items:center}
+.lp .lp-catalog-avatar img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;border-radius:inherit}
