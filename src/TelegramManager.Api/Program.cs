@@ -258,7 +258,7 @@ app.MapGet("/api/channels", async (HttpRequest req, MySqlDataSource db, Cancella
         FROM channels c WHERE c.is_listed=TRUE
           AND (@category='' OR c.category=@category)
           AND (@search='' OR c.title LIKE @pattern)
-        ORDER BY c.connected_at DESC LIMIT @limit
+        ORDER BY (promotedUntil IS NOT NULL) DESC,c.connected_at DESC LIMIT @limit
         """);
     cmd.Parameters.Add(new MySqlParameter("@category", category));
     cmd.Parameters.Add(new MySqlParameter("@search", search));
@@ -274,7 +274,7 @@ app.MapGet("/api/channels", async (HttpRequest req, MySqlDataSource db, Cancella
             subscribers = reader.IsDBNull(6) ? (int?)null : reader.GetInt32(6),
             posts30d = reader.IsDBNull(7) ? 0L : reader.GetInt64(7),
             avgViews = reader.IsDBNull(8) ? (long?)null : reader.GetInt64(8),
-            viewsSamples = reader.GetInt64(9)
+            viewsSamples = reader.GetInt64(9), promotedUntil=reader.IsDBNull(10)?(DateTime?)null:reader.GetDateTime(10)
         });
     return Results.Ok(channels);
 });
