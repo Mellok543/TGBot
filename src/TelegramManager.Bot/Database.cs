@@ -397,7 +397,7 @@ public sealed class Database(string connectionString) : IAsyncDisposable
     {
         await using var cmd = _source.CreateCommand("""
             SELECT c.telegram_id, c.title, c.ad_price_rub, COALESCE(c.ad_description,''), c.ad_formats
-            FROM channels c JOIN users u ON u.telegram_id=c.connected_by WHERE c.is_listed=TRUE AND ((u.subscription_until>UTC_TIMESTAMP() OR u.pro_granted_until>UTC_TIMESTAMP()) OR u.created_at>UTC_TIMESTAMP()-INTERVAL 30 DAY) ORDER BY c.connected_at DESC LIMIT 50
+            FROM channels c JOIN users u ON u.telegram_id=c.connected_by WHERE c.is_listed=TRUE AND ((u.subscription_until>UTC_TIMESTAMP() OR u.pro_granted_until>UTC_TIMESTAMP()) OR u.created_at>UTC_TIMESTAMP()-INTERVAL 30 DAY) ORDER BY EXISTS(SELECT 1 FROM channel_promotions cp WHERE cp.channel_id=c.telegram_id AND cp.active_until>UTC_TIMESTAMP()) DESC,c.connected_at DESC LIMIT 50
             """);
         await using var reader = await cmd.ExecuteReaderAsync(ct);
         var items = new List<(long, string, decimal, string, string)>();
@@ -420,7 +420,7 @@ public sealed class Database(string connectionString) : IAsyncDisposable
     {
         await using var cmd = _source.CreateCommand("""
             SELECT c.telegram_id, c.title, c.ad_price_rub FROM channels c JOIN users u ON u.telegram_id=c.connected_by
-            WHERE c.is_listed=TRUE AND c.category=@category AND ((u.subscription_until>UTC_TIMESTAMP() OR u.pro_granted_until>UTC_TIMESTAMP()) OR u.created_at>UTC_TIMESTAMP()-INTERVAL 30 DAY) ORDER BY c.connected_at DESC LIMIT 50
+            WHERE c.is_listed=TRUE AND c.category=@category AND ((u.subscription_until>UTC_TIMESTAMP() OR u.pro_granted_until>UTC_TIMESTAMP()) OR u.created_at>UTC_TIMESTAMP()-INTERVAL 30 DAY) ORDER BY EXISTS(SELECT 1 FROM channel_promotions cp WHERE cp.channel_id=c.telegram_id AND cp.active_until>UTC_TIMESTAMP()) DESC,c.connected_at DESC LIMIT 50
             """);
         cmd.Parameters.Add(new MySqlParameter("@category", category));
         await using var r = await cmd.ExecuteReaderAsync(ct);
