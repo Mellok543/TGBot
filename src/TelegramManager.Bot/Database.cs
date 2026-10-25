@@ -975,7 +975,7 @@ public sealed class Database(string connectionString) : IAsyncDisposable
         await cmd.ExecuteNonQueryAsync(ct);
     }
 
-    public async Task<List<(long Id,long Recipient,string Body)>> ClaimNotificationsAsync(CancellationToken ct)
+    public async Task<List<(long Id,long Recipient,string Body,long OrderId)>> ClaimNotificationsAsync(CancellationToken ct)
     {
         await using (var recover = _source.CreateCommand("""
             UPDATE notification_outbox
@@ -985,13 +985,13 @@ public sealed class Database(string connectionString) : IAsyncDisposable
             """))
             await recover.ExecuteNonQueryAsync(ct);
         await using var cmd = _source.CreateCommand("""
-            SELECT id,recipient_id,body FROM notification_outbox
+            SELECT id,recipient_id,body,order_id FROM notification_outbox
             WHERE state='Pending' AND next_attempt_at<=UTC_TIMESTAMP()
             ORDER BY id LIMIT 20
             """);
-        var items = new List<(long,long,string)>();
+        var items = new List<(long,long,string,long)>();
         await using var reader = await cmd.ExecuteReaderAsync(ct);
-        while (await reader.ReadAsync(ct)) items.Add((reader.GetInt64(0),reader.GetInt64(1),reader.GetString(2)));
+        while (await reader.ReadAsync(ct)) items.Add((reader.GetInt64(0),reader.GetInt64(1),reader.GetString(2),reader.IsDBNull(3) ? 0 : reader.GetInt64(3)));
         return items;
     }
 
