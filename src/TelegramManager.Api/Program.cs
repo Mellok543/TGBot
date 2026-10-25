@@ -882,6 +882,11 @@ app.MapGet("/api/my-channels/{channelId:long}/analytics", async (long channelId,
 {
     if (Authorized(req) is not long owner) return Results.Unauthorized();
     var days=int.TryParse(req.Query["days"],out var requested) && requested is 7 or 30 or 90 ? requested : 30;
+    await using var planCmd=db.CreateCommand("SELECT COALESCE(GREATEST(subscription_until,pro_granted_until),subscription_until,pro_granted_until) FROM users WHERE telegram_id=@id");
+    planCmd.Parameters.Add(new MySqlParameter("@id",owner));
+    var planUntil=await planCmd.ExecuteScalarAsync(ct);
+    var analyticsPro=planUntil is DateTime expiry&&expiry>DateTime.UtcNow;
+    if(!analyticsPro)days=7;
     await using var verify=db.CreateCommand("SELECT COUNT(*) FROM channels WHERE telegram_id=@channel AND connected_by=@owner");
     verify.Parameters.Add(new MySqlParameter("@channel",channelId));
     verify.Parameters.Add(new MySqlParameter("@owner",owner));
@@ -955,16 +960,13 @@ app.MapPost("/api/my-channels/connect", async (HttpRequest req, MySqlDataSource 
     await using var tx=await connection.BeginTransactionAsync(ct);
     await using var access=new MySqlCommand("SELECT first_channel_at, COALESCE(GREATEST(subscription_until,pro_granted_until),subscription_until,pro_granted_until) FROM users WHERE telegram_id=@id FOR UPDATE",connection,tx);
     access.Parameters.Add(new MySqlParameter("@id",userId));
-    DateTime started;DateTime? proUntil;
+    DateTime? proUntil;
     await using(var reader=await access.ExecuteReaderAsync(ct))
     {
         if(!await reader.ReadAsync(ct))return Results.BadRequest(new {error="Откройте профиль Reklio и попробуйте снова"});
-        started=reader.IsDBNull(0)?DateTime.UtcNow:reader.GetDateTime(0);
         proUntil=reader.IsDBNull(1)?null:reader.GetDateTime(1);
     }
     bool pro=proUntil>DateTime.UtcNow;
-    if(!pro&&started.AddDays(30)<=DateTime.UtcNow)
-        return Results.BadRequest(new {error="Пробный период закончился. Для добавления канала нужен PRO"});
     await using var count=new MySqlCommand("SELECT COUNT(*) FROM channels WHERE connected_by=@id",connection,tx);
     count.Parameters.Add(new MySqlParameter("@id",userId));
     var total=Convert.ToInt32(await count.ExecuteScalarAsync(ct));
@@ -986,6 +988,18 @@ app.MapPost("/api/my-channels/connect", async (HttpRequest req, MySqlDataSource 
     return Results.Ok(new {id=channelId,title});
 });
 
+app.MapGet("/api/subscription", async (HttpRequest req,MySqlDataSource db,CancellationToken ct) =>
+{
+    if(Authorized(req) is not long userId)return Results.Unauthorized();
+    await using var cmd=db.CreateCommand("SELECT COALESCE(GREATEST(subscription_until,pro_granted_until),subscription_until,pro_granted_until) FROM users WHERE telegram_id=@id");
+    cmd.Parameters.Add(new MySqlParameter("@id",userId));
+    var value=await cmd.ExecuteScalarAsync(ct);
+    var expiry=value is DateTime date ? date : (DateTime?)null;
+    var isPro=expiry>DateTime.UtcNow;
+    var priceConfigured=decimal.TryParse(Environment.GetEnvironmentVariable("REKLIO_PRO_PRICE_RUB"),System.Globalization.NumberStyles.Number,System.Globalization.CultureInfo.InvariantCulture,out var price)&&price>=1m;
+    return Results.Ok(new {plan=isPro?"PRO":"FREE",isPro,expiresAt=isPro?expiry:null,channelLimit=isPro?10:1,commissionPercent=isPro?2.5m:5m,fullAnalytics=isPro,
+        proPriceRub=priceConfigured?price:(decimal?)null,checkoutAvailable=false,checkoutMessage="Ожидается подключение кассы"});
+});
 app.MapGet("/api/my-channels", async (HttpRequest req, MySqlDataSource db, CancellationToken ct) =>
 {
     if (Authorized(req) is not long userId) return Results.Unauthorized();
