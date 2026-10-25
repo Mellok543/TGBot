@@ -200,7 +200,11 @@ app.MapGet("/api/channels/{channelId:long}/history", async (long channelId, Http
 {
     if (Authorized(req) is null) return Results.Unauthorized();
     await using var cmd = db.CreateCommand("""
-        SELECT m.day,m.subscribers,m.posts
+        SELECT m.day,m.subscribers,m.posts,
+               (SELECT CAST(ROUND(AVG(v.views)) AS SIGNED)
+                  FROM reklio_post_views v JOIN channel_observed_posts op
+                    ON op.channel_id=v.channel_id AND op.message_id=v.message_id
+                 WHERE op.channel_id=m.channel_id AND DATE(op.posted_at)=m.day) AS avg_views
         FROM channel_daily_metrics m
         JOIN channels c ON c.telegram_id=m.channel_id
         WHERE m.channel_id=@channel AND c.is_listed=TRUE
@@ -214,9 +218,26 @@ app.MapGet("/api/channels/{channelId:long}/history", async (long channelId, Http
         history.Add(new {
             day = reader.GetDateTime(0).ToString("yyyy-MM-dd"),
             subscribers = reader.IsDBNull(1) ? (int?)null : reader.GetInt32(1),
-            posts = reader.GetInt32(2)
+            posts = reader.GetInt32(2),
+            avgViews = reader.IsDBNull(3) ? (long?)null : reader.GetInt64(3)
         });
     return Results.Ok(history);
+});
+app.MapGet("/api/me/publication-events", async (HttpRequest req, MySqlDataSource db, CancellationToken ct) =>
+{
+    if(Authorized(req) is not long user) return Results.Unauthorized();
+    await using var cmd=db.CreateCommand("""
+        SELECT e.order_id,c.title,e.event_type,e.created_at
+        FROM ad_order_events e JOIN ad_requests a ON a.id=e.order_id
+        JOIN channels c ON c.telegram_id=a.channel_id
+        WHERE a.owner_id=@user AND e.event_type IN ('EarlyDeletionDetected','EarlyDeletionRepublishRequested','EarlyDeletionDisputeOpened')
+        ORDER BY e.created_at DESC LIMIT 30
+        """);
+    cmd.Parameters.Add(new MySqlParameter("@user",user));
+    var events=new List<object>();
+    await using var rd=await cmd.ExecuteReaderAsync(ct);
+    while(await rd.ReadAsync(ct)) events.Add(new {orderId=rd.GetInt64(0),channel=rd.GetString(1),type=rd.GetString(2),createdAt=rd.GetDateTime(3)});
+    return Results.Ok(events);
 });
 app.MapGet("/api/finance", async (HttpRequest req, MySqlDataSource db, CancellationToken ct) =>
 {
