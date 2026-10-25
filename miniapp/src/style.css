@@ -132,3 +132,6 @@
 .channelAddPanel p{margin:6px 0 0;font-size:13px;line-height:1.5;color:#a9c1db}
 .channelAddButton{width:auto;flex-shrink:0;margin:0;white-space:nowrap;min-height:44px}
 @media(max-width:600px){.channelAddPanel{flex-direction:column;align-items:stretch;padding:17px}.channelAddButton{width:100%;margin-top:2px}}
+
+.app .avatar{position:relative;overflow:hidden}
+.app .avatar img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;border-radius:inherit}
