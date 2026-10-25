@@ -42,9 +42,20 @@ async function post<T>(path: string, data: unknown): Promise<T> {
   return response.json() as Promise<T>;
 }
 async function get<T>(path: string): Promise<T> {
-  const response = await fetch(API + path, { signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS), headers: { 'X-Telegram-Init-Data': tg?.initData || '' } });
-  if (!response.ok) throw new Error(response.status === 401 ? 'Откройте приложение из Telegram' : 'Не удалось загрузить данные');
-  return response.json() as Promise<T>;
+  for(let attempt=0;attempt<2;attempt++){
+    try {
+      const response=await fetch(API+path,{signal:AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+        headers:{'X-Telegram-Init-Data':tg?.initData||''},cache:'no-store'});
+      if(!response.ok)throw new Error(response.status===401?'Откройте приложение из Telegram':`Ошибка API (${response.status}) при загрузке данных`);
+      return await response.json() as T;
+    }catch(error){
+      // Only retry connection errors/timeouts. Never retry authorization or API errors.
+      if(error instanceof Error && !(error instanceof TypeError) && error.name!=='TimeoutError')throw error;
+      if(attempt===1)throw new Error('Нет соединения с API Reklio. Проверьте VPN/сеть и нажмите «Повторить».');
+      await new Promise(resolve=>setTimeout(resolve,700));
+    }
+  }
+  throw new Error('Не удалось загрузить данные');
 }
 function App() {
   const [tab, setTab] = useState<Tab>('catalog');
