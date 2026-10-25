@@ -141,3 +141,8 @@
 .promotionPrices{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin:12px 0}
 .promotionPrices>div{padding:13px;border:1px solid rgba(154,120,255,.25);border-radius:12px;display:flex;flex-direction:column;gap:4px}
 .promotionPrices span{font-size:20px;font-weight:800}.channelPromotionPanel button{width:100%;margin:8px 0}.channelPromotionPanel .hint{display:block}
+
+.channelLikeRow{display:flex;align-items:center;gap:10px;margin:12px 0;color:#a9bed9;font-size:13px}
+.channelLikeButton{border:1px solid rgba(155,172,211,.4);background:rgba(100,128,173,.1);color:#e1ebff;border-radius:999px;padding:7px 13px;font-weight:700;cursor:pointer}
+.channelLikeButton.active{border-color:rgba(239,105,155,.55);background:rgba(239,105,155,.16);color:#ff9bb9}
+.channelLikeButton:disabled{opacity:.6;cursor:wait}
