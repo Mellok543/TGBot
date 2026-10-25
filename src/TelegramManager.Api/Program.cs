@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Caching.Memory;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -10,6 +11,7 @@ var connectionString = Environment.GetEnvironmentVariable("DATABASE_URL")
     ?? throw new InvalidOperationException("DATABASE_URL is required");
 builder.Services.AddSingleton(new MySqlDataSourceBuilder(connectionString).Build());
 builder.Services.AddHttpClient();
+builder.Services.AddMemoryCache();
 builder.Services.AddHostedService<TelegramManager.Api.Publishing.PublicationWorker>();
 builder.Services.AddHostedService<TelegramManager.Api.Notifications.NotificationWorker>();
 var allowedOrigin = Environment.GetEnvironmentVariable("MINIAPP_ORIGIN");
@@ -182,6 +184,45 @@ app.MapGet("/api/public/channels", async (HttpRequest req,MySqlDataSource db,Can
       avgViews=rd.IsDBNull(7)?(long?)null:rd.GetInt64(7),promotedUntil=rd.IsDBNull(8)?(DateTime?)null:rd.GetDateTime(8)
     });
     return Results.Ok(rows);
+});
+// Proxy channel photos without exposing the Telegram bot token or file URLs to browsers.
+app.MapGet("/api/public/channels/{id:long}/avatar", async (long id, MySqlDataSource db, IHttpClientFactory clients, IMemoryCache cache, CancellationToken ct) =>
+{
+    var cacheKey="channel-avatar:"+id;
+    if(cache.TryGetValue(cacheKey,out byte[]? cached))
+        return cached is null ? Results.NotFound() : Results.File(cached,"image/jpeg");
+    await using var check=db.CreateCommand("SELECT 1 FROM channels WHERE telegram_id=@id AND is_listed=TRUE LIMIT 1");
+    check.Parameters.Add(new MySqlParameter("@id",id));
+    if(await check.ExecuteScalarAsync(ct) is null)return Results.NotFound();
+    try
+    {
+        using var http=clients.CreateClient();
+        http.Timeout=TimeSpan.FromSeconds(8);
+        using var chat=await http.GetFromJsonAsync<JsonDocument>($"https://api.telegram.org/bot{token}/getChat?chat_id={id}",ct);
+        var result=chat?.RootElement.GetProperty("result");
+        if(result is null || !result.Value.TryGetProperty("photo",out var photo) ||
+           !photo.TryGetProperty("small_file_id",out var fileId))
+        {
+            cache.Set<byte[]?>(cacheKey,null,TimeSpan.FromMinutes(15));
+            return Results.NotFound();
+        }
+        var idValue=Uri.EscapeDataString(fileId.GetString()??"");
+        using var file=await http.GetFromJsonAsync<JsonDocument>($"https://api.telegram.org/bot{token}/getFile?file_id={idValue}",ct);
+        if(file is null || !file.RootElement.GetProperty("ok").GetBoolean() ||
+           !file.RootElement.GetProperty("result").TryGetProperty("file_path",out var path))
+            return Results.NotFound();
+        using var response=await http.GetAsync($"https://api.telegram.org/file/bot{token}/{path.GetString()}",ct);
+        if(!response.IsSuccessStatusCode || response.Content.Headers.ContentLength>1024*1024)return Results.NotFound();
+        var bytes=await response.Content.ReadAsByteArrayAsync(ct);
+        if(bytes.Length==0||bytes.Length>1024*1024)return Results.NotFound();
+        cache.Set(cacheKey,bytes,TimeSpan.FromHours(2));
+        return Results.File(bytes,"image/jpeg");
+    }
+    catch(Exception ex) when(ex is HttpRequestException or TaskCanceledException or JsonException or InvalidOperationException or KeyNotFoundException)
+    {
+        app.Logger.LogWarning("Channel avatar unavailable for {ChannelId}: {Type}",id,ex.GetType().Name);
+        return Results.NotFound();
+    }
 });
 app.MapGet("/api/public/channels/{id:long}", async (long id,MySqlDataSource db,CancellationToken ct) =>
 {
