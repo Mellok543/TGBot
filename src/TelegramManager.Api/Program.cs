@@ -768,8 +768,8 @@ app.MapGet("/api/my-channels/{channelId:long}/rates", async (long channelId, Htt
 app.MapPost("/api/my-channels/{channelId:long}/rates", async (long channelId, UpdateRateInput input, HttpRequest req, MySqlDataSource db, CancellationToken ct) =>
 {
     if (Authorized(req) is not long userId) return Results.Unauthorized();
-    if(input.Hours<1 || input.Hours>720 || input.Price<1 || input.Price>1000000)
-        return Results.BadRequest(new {error="Укажите длительность 1–720 ч и цену 1–1000000 ₽"});
+    if(input.Hours<0 || input.Hours>720 || input.Price<1 || input.Price>1000000)
+        return Results.BadRequest(new {error="Укажите длительность 0 (навсегда) или 1–720 ч и цену 1–1000000 ₽"});
     await using var cmd=db.CreateCommand("""
         INSERT INTO channel_duration_rates(channel_id,duration_hours,price_rub,is_active)
         SELECT telegram_id,@hours,@price,TRUE FROM channels
