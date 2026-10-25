@@ -600,6 +600,25 @@ public sealed class BotHandlers(Database database)
         await database.RegisterAsync(actor.Id, actor.Username, actor.FirstName + (actor.LastName is null ? "" : " " + actor.LastName), ct);
 
         var data = query.Data ?? "";
+        if (data.StartsWith("boost:",StringComparison.Ordinal))
+        {
+            var parts=data.Split(':');
+            if(parts.Length==3 && int.TryParse(parts[1],out var days)
+                && days is 7 or 30 && long.TryParse(parts[2],out var channelId)
+                && await database.OwnsListedChannelAsync(actor.Id,channelId,ct))
+            {
+                var price=days==7?99:299;
+                await bot.SendInvoice(origin.Chat.Id,
+                    title:$"Продвижение канала · {days} дней",
+                    description:"Приоритетное место и цветная карточка в каталоге Reklio.",
+                    payload:PromotionPayload(actor.Id,channelId,days),
+                    currency:"XTR",
+                    prices:new[]{new LabeledPrice($"Продвижение · {days} дней",price)},
+                    providerToken:"",cancellationToken:ct);
+            }
+            else await bot.SendMessage(origin.Chat.Id,"Канал недоступен для продвижения.",cancellationToken:ct);
+            return;
+        }
         if (data.StartsWith("early:", StringComparison.Ordinal))
         {
             var bits=data.Split(':');
