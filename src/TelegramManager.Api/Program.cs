@@ -152,13 +152,27 @@ app.MapGet("/api/channels", async (HttpRequest req, MySqlDataSource db, Cancella
     var category = req.Query["category"].ToString();
     if (category.Length > 32) return Results.BadRequest();
     var limit = int.TryParse(req.Query["limit"], out var n) ? Math.Clamp(n, 1, 100) : 100;
+    await using (var init = db.CreateCommand("""
+        CREATE TABLE IF NOT EXISTS reklio_post_views (
+            channel_id BIGINT NOT NULL, message_id INT NOT NULL, views INT NOT NULL,
+            observed_at DATETIME NOT NULL,
+            PRIMARY KEY(channel_id,message_id), INDEX idx_channel_views(channel_id,observed_at)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+        """))
+        await init.ExecuteNonQueryAsync(ct);
     await using var cmd = db.CreateCommand("""
         SELECT c.telegram_id,c.title,c.category,c.ad_price_rub,c.ad_description,c.username,
                (SELECT m.subscribers FROM channel_daily_metrics m
                 WHERE m.channel_id=c.telegram_id AND m.subscribers IS NOT NULL
                 ORDER BY m.day DESC LIMIT 1) AS subscribers,
                (SELECT CAST(COALESCE(SUM(m.posts),0) AS SIGNED) FROM channel_daily_metrics m
-                WHERE m.channel_id=c.telegram_id AND m.day>=UTC_DATE()-INTERVAL 29 DAY) AS posts30d
+                WHERE m.channel_id=c.telegram_id AND m.day>=UTC_DATE()-INTERVAL 29 DAY) AS posts30d,
+               (SELECT CAST(ROUND(AVG(v.views)) AS SIGNED) FROM reklio_post_views v
+                JOIN channel_observed_posts p ON p.channel_id=v.channel_id AND p.message_id=v.message_id
+                WHERE v.channel_id=c.telegram_id AND p.posted_at>=UTC_TIMESTAMP()-INTERVAL 30 DAY) AS avgViews,
+               (SELECT COUNT(*) FROM reklio_post_views v JOIN channel_observed_posts p
+                ON p.channel_id=v.channel_id AND p.message_id=v.message_id
+                WHERE v.channel_id=c.telegram_id AND p.posted_at>=UTC_TIMESTAMP()-INTERVAL 30 DAY) AS viewsSamples
         FROM channels c WHERE c.is_listed=TRUE
           AND (@category='' OR c.category=@category)
           AND (@search='' OR c.title LIKE @pattern)
@@ -176,7 +190,9 @@ app.MapGet("/api/channels", async (HttpRequest req, MySqlDataSource db, Cancella
             price = reader.GetDecimal(3), description = reader.IsDBNull(4) ? "" : reader.GetString(4),
             username = reader.IsDBNull(5) ? null : reader.GetString(5),
             subscribers = reader.IsDBNull(6) ? (int?)null : reader.GetInt32(6),
-            posts30d = reader.IsDBNull(7) ? 0L : reader.GetInt64(7)
+            posts30d = reader.IsDBNull(7) ? 0L : reader.GetInt64(7),
+            avgViews = reader.IsDBNull(8) ? (long?)null : reader.GetInt64(8),
+            viewsSamples = reader.GetInt64(9)
         });
     return Results.Ok(channels);
 });
