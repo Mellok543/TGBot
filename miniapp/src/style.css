@@ -135,3 +135,9 @@
 
 .app .avatar{position:relative;overflow:hidden}
 .app .avatar img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;border-radius:inherit}
+
+.channelPromotionPanel{margin:16px 0;padding:18px;border:1px solid rgba(154,120,255,.35);border-radius:16px;background:linear-gradient(125deg,rgba(116,70,210,.15),rgba(38,54,91,.2))}
+.channelPromotionPanel h3{margin:0 0 8px;font-size:17px}.channelPromotionPanel p{font-size:13px;line-height:1.55;margin:0 0 13px}
+.promotionPrices{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin:12px 0}
+.promotionPrices>div{padding:13px;border:1px solid rgba(154,120,255,.25);border-radius:12px;display:flex;flex-direction:column;gap:4px}
+.promotionPrices span{font-size:20px;font-weight:800}.channelPromotionPanel button{width:100%;margin:8px 0}.channelPromotionPanel .hint{display:block}
