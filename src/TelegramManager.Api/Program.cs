@@ -872,6 +872,78 @@ app.MapGet("/api/my-channels/{channelId:long}/analytics", async (long channelId,
     return Results.Ok(new {days,points,orders=stats.GetInt64(0),published=stats.GetInt64(1),
         revenue=stats.GetDecimal(2),pending=stats.GetInt64(3)});
 });
+app.MapPost("/api/my-channels/connect", async (HttpRequest req, MySqlDataSource db, IHttpClientFactory clients, CancellationToken ct) =>
+{
+    if (Authorized(req) is not long userId) return Results.Unauthorized();
+    ConnectChannelRequest? input;
+    try { input=await req.ReadFromJsonAsync<ConnectChannelRequest>(cancellationToken:ct); }
+    catch (JsonException) { return Results.BadRequest(new {error="Неверный формат запроса"}); }
+    var username=input?.Username?.Trim().TrimStart('@');
+    if (string.IsNullOrWhiteSpace(username) || !System.Text.RegularExpressions.Regex.IsMatch(username,@"^[a-zA-Z][a-zA-Z0-9_]{4,31}$"))
+        return Results.BadRequest(new {error="Укажите публичный @username канала (5–32 символа)"});
+    using var http=clients.CreateClient();
+    async Task<JsonDocument?> Telegram(string method,string parameters)
+    {
+        using var response=await http.GetAsync($"https://api.telegram.org/bot{token}/{method}?{parameters}",ct);
+        var body=await response.Content.ReadAsStringAsync(ct);
+        using var data=JsonDocument.Parse(body);
+        return data.RootElement.TryGetProperty("ok",out var ok)&&ok.GetBoolean()
+            ? JsonDocument.Parse(body) : null;
+    }
+    var chatParam="chat_id="+Uri.EscapeDataString("@"+username);
+    using var chat=await Telegram("getChat",chatParam);
+    if(chat is null)return Results.BadRequest(new {error="Канал не найден. Убедитесь, что он публичный, а бот добавлен в администраторы."});
+    var info=chat.RootElement.GetProperty("result");
+    if(info.GetProperty("type").GetString()!="channel")return Results.BadRequest(new {error="Нужен Telegram-канал, не группа"});
+    var channelId=info.GetProperty("id").GetInt64();
+    using var owner=await Telegram("getChatMember", "chat_id="+channelId+"&user_id="+userId);
+    var ownerStatus=owner?.RootElement.GetProperty("result").GetProperty("status").GetString();
+    if(ownerStatus is not ("creator" or "administrator"))
+        return Results.BadRequest(new {error="Вы должны быть администратором этого канала"});
+    using var me=await Telegram("getMe","");
+    if(me is null)return Results.Json(new {error="Не удалось проверить бота" },statusCode:503);
+    var botId=me.RootElement.GetProperty("result").GetProperty("id").GetInt64();
+    using var botMember=await Telegram("getChatMember","chat_id="+channelId+"&user_id="+botId);
+    var botStatus=botMember?.RootElement.GetProperty("result").GetProperty("status").GetString();
+    var canPost=botMember is not null && botMember.RootElement.GetProperty("result").TryGetProperty("can_post_messages",out var post)&&post.ValueKind==JsonValueKind.True;
+    if(botStatus!="administrator"||!canPost)
+        return Results.BadRequest(new {error="Добавьте @ReklioBot в администраторы канала с правом публикации"});
+    var title=info.GetProperty("title").GetString()??username;
+    await using var connection=await db.OpenConnectionAsync(ct);
+    await using var tx=await connection.BeginTransactionAsync(ct);
+    await using var access=new MySqlCommand("SELECT first_channel_at, COALESCE(GREATEST(subscription_until,pro_granted_until),subscription_until,pro_granted_until) FROM users WHERE telegram_id=@id FOR UPDATE",connection,tx);
+    access.Parameters.Add(new MySqlParameter("@id",userId));
+    DateTime started;DateTime? proUntil;
+    await using(var reader=await access.ExecuteReaderAsync(ct))
+    {
+        if(!await reader.ReadAsync(ct))return Results.BadRequest(new {error="Откройте профиль Reklio и попробуйте снова"});
+        started=reader.IsDBNull(0)?DateTime.UtcNow:reader.GetDateTime(0);
+        proUntil=reader.IsDBNull(1)?null:reader.GetDateTime(1);
+    }
+    bool pro=proUntil>DateTime.UtcNow;
+    if(!pro&&started.AddDays(30)<=DateTime.UtcNow)
+        return Results.BadRequest(new {error="Пробный период закончился. Для добавления канала нужен PRO"});
+    await using var count=new MySqlCommand("SELECT COUNT(*) FROM channels WHERE connected_by=@id",connection,tx);
+    count.Parameters.Add(new MySqlParameter("@id",userId));
+    var total=Convert.ToInt32(await count.ExecuteScalarAsync(ct));
+    await using var existing=new MySqlCommand("SELECT connected_by FROM channels WHERE telegram_id=@ch FOR UPDATE",connection,tx);
+    existing.Parameters.Add(new MySqlParameter("@ch",channelId));
+    var ownerId=await existing.ExecuteScalarAsync(ct);
+    if(ownerId is not null&&Convert.ToInt64(ownerId)!=userId)return Results.Conflict(new {error="Канал уже подключён другим пользователем"});
+    if(ownerId is null&&total>=(pro?10:1))return Results.BadRequest(new {error="Лимит каналов исчерпан. Для подключения дополнительных каналов нужен PRO"});
+    await using var save=new MySqlCommand("INSERT INTO channels (telegram_id,title,username,connected_by) VALUES (@ch,@title,@username,@id) ON DUPLICATE KEY UPDATE title=VALUES(title),username=VALUES(username)",connection,tx);
+    save.Parameters.Add(new MySqlParameter("@ch",channelId));
+    save.Parameters.Add(new MySqlParameter("@title",title.Length>255?title[..255]:title));
+    save.Parameters.Add(new MySqlParameter("@username",username));
+    save.Parameters.Add(new MySqlParameter("@id",userId));
+    await save.ExecuteNonQueryAsync(ct);
+    await using var initial=new MySqlCommand("UPDATE users SET first_channel_at=UTC_TIMESTAMP() WHERE telegram_id=@id AND first_channel_at IS NULL",connection,tx);
+    initial.Parameters.Add(new MySqlParameter("@id",userId));
+    await initial.ExecuteNonQueryAsync(ct);
+    await tx.CommitAsync(ct);
+    return Results.Ok(new {id=channelId,title});
+});
+
 app.MapGet("/api/my-channels", async (HttpRequest req, MySqlDataSource db, CancellationToken ct) =>
 {
     if (Authorized(req) is not long userId) return Results.Unauthorized();
@@ -1459,3 +1531,5 @@ record ScheduleOrderInput(long RateId, DateTimeOffset ScheduledAt);
 
 record UpdateRateInput(int Hours, decimal Price);
 record UpdateListingInput(bool Listed);
+
+record ConnectChannelRequest(string Username);
