@@ -66,6 +66,26 @@ async function get<T>(path: string): Promise<T> {
   }
   throw new Error('Не удалось загрузить данные');
 }
+async function loadCatalog(): Promise<Channel[]> {
+  try {
+    return await get<Channel[]>('/api/channels');
+  } catch (error) {
+    // Public catalog is readable without Telegram authentication and without custom headers.
+    // Keep protected order, owner and profile endpoints on their authenticated paths.
+    const networkFailure=error instanceof Error &&
+      (error.message.includes('API доступен') || error.message.includes('Telegram не может подключиться'));
+    if(!networkFailure)throw error;
+    const response=await fetch(API+'/api/public/channels?limit=60',{signal:AbortSignal.timeout(REQUEST_TIMEOUT_MS)});
+    if(!response.ok)throw new Error('Не удалось загрузить публичный каталог ('+response.status+')');
+    const publicChannels=await response.json() as Array<Partial<Channel>&{id:number;title:string;price:number;category:string}>;
+    return publicChannels.map(c=>({
+      id:c.id,title:c.title,price:c.price,category:c.category,
+      description:c.description??'',username:c.username??null,
+      subscribers:c.subscribers??null,posts30d:0,avgViews:c.avgViews??null,
+      viewsSamples:0,promotedUntil:c.promotedUntil??null
+    }));
+  }
+}
 function App() {
   const [tab, setTab] = useState<Tab>('catalog');
   const [showAbout, setShowAbout] = useState(false);
@@ -431,7 +451,7 @@ function App() {
     setLoading(true); setError('');
     const path = tab === 'catalog' ? '/api/channels' : tab === 'orders' ? '/api/orders' : tab === 'channels' ? '/api/my-channels' : '/api/me';
     const timer = setTimeout(() => {
-      get<Channel[] | Order[] | Mine[] | {id:number}>(path)
+      (tab === 'catalog' ? loadCatalog() : get<Order[] | Mine[] | {id:number}>(path))
         .then(data => { if (!active) return; if (tab === 'catalog') setChannels(data as Channel[]); if (tab === 'orders') setOrders(data as Order[]); if (tab === 'channels') setMine(data as Mine[]); })
         .catch(e => { if (active) setError(e instanceof Error && e.name === 'TimeoutError' ? 'Сервер долго не отвечает. Попробуйте снова.' : e instanceof Error ? e.message : 'Ошибка'); })
         .finally(() => { if (active) setLoading(false); });
