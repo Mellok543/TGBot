@@ -103,6 +103,47 @@ app.MapGet("/api/me", async (HttpRequest req,MySqlDataSource db,CancellationToke
     return Results.Ok(new {id,isDisputeAdmin=role is not null,adminRole=role});
 });
 
+// Favorites are private to the Telegram account and are independent of channel listing state.
+app.MapGet("/api/favorites", async (HttpRequest req, MySqlDataSource db, CancellationToken ct) =>
+{
+    if (Authorized(req) is not long user) return Results.Unauthorized();
+    await using var create=db.CreateCommand("CREATE TABLE IF NOT EXISTS reklio_favorites (user_id BIGINT NOT NULL,channel_id BIGINT NOT NULL,created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,PRIMARY KEY(user_id,channel_id)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+    await create.ExecuteNonQueryAsync(ct);
+    await using var cmd=db.CreateCommand("SELECT f.channel_id FROM reklio_favorites f JOIN channels c ON c.telegram_id=f.channel_id AND c.is_listed=TRUE WHERE f.user_id=@user ORDER BY f.created_at DESC LIMIT 100");
+    cmd.Parameters.Add(new MySqlParameter("@user",user));
+    var ids=new List<long>();
+    await using var reader=await cmd.ExecuteReaderAsync(ct);
+    while(await reader.ReadAsync(ct)) ids.Add(reader.GetInt64(0));
+    return Results.Ok(ids);
+});
+app.MapPost("/api/favorites/{channelId:long}", async (long channelId,HttpRequest req,MySqlDataSource db,CancellationToken ct) =>
+{
+    if(Authorized(req) is not long user) return Results.Unauthorized();
+    await using var create=db.CreateCommand("CREATE TABLE IF NOT EXISTS reklio_favorites (user_id BIGINT NOT NULL,channel_id BIGINT NOT NULL,created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,PRIMARY KEY(user_id,channel_id)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+    await create.ExecuteNonQueryAsync(ct);
+    await using var cmd=db.CreateCommand("INSERT IGNORE INTO reklio_favorites(user_id,channel_id) SELECT @user,telegram_id FROM channels WHERE telegram_id=@channel AND is_listed=TRUE");
+    cmd.Parameters.Add(new MySqlParameter("@user",user));cmd.Parameters.Add(new MySqlParameter("@channel",channelId));
+    await cmd.ExecuteNonQueryAsync(ct);
+    return Results.Ok(new {favorite=true});
+});
+app.MapDelete("/api/favorites/{channelId:long}", async (long channelId,HttpRequest req,MySqlDataSource db,CancellationToken ct) =>
+{
+    if(Authorized(req) is not long user) return Results.Unauthorized();
+    await using var cmd=db.CreateCommand("DELETE FROM reklio_favorites WHERE user_id=@user AND channel_id=@channel");
+    cmd.Parameters.Add(new MySqlParameter("@user",user));cmd.Parameters.Add(new MySqlParameter("@channel",channelId));
+    await cmd.ExecuteNonQueryAsync(ct);
+    return Results.Ok(new {favorite=false});
+});
+app.MapGet("/api/channels/{channelId:long}/reviews", async (long channelId,HttpRequest req,MySqlDataSource db,CancellationToken ct) =>
+{
+    if(Authorized(req) is null) return Results.Unauthorized();
+    await using var cmd=db.CreateCommand("SELECT stars,comment,created_at FROM channel_reviews WHERE channel_id=@id ORDER BY created_at DESC LIMIT 20");
+    cmd.Parameters.Add(new MySqlParameter("@id",channelId));
+    var reviews=new List<object>();
+    await using var reader=await cmd.ExecuteReaderAsync(ct);
+    while(await reader.ReadAsync(ct)) reviews.Add(new {stars=reader.GetInt32(0),comment=reader.IsDBNull(1)?null:reader.GetString(1),createdAt=reader.GetDateTime(2)});
+    return Results.Ok(reviews);
+});
 app.MapGet("/api/channels", async (HttpRequest req, MySqlDataSource db, CancellationToken ct) =>
 {
     if (Authorized(req) is null) return Results.Unauthorized();
