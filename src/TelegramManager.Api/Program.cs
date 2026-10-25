@@ -488,10 +488,10 @@ app.MapPost("/api/admin/publication-issues/{orderId:long}/review",async(long ord
     await audit.ExecuteNonQueryAsync(ct);
     await using var notice=new MySqlCommand("""
         INSERT IGNORE INTO notification_outbox(recipient_id,order_id,body)
-        SELECT advertiser_id,id,CONCAT('Заказ #',id,': модератор проверил проблему публикации. Решение доступно в заказе.')
+        SELECT advertiser_id,id,CONCAT('🛡️ Проверка публикации · заказ #',id,CHAR(10),'Модератор изучил проблему.',CHAR(10),'📋 Результат доступен в разделе заказов.')
         FROM ad_requests WHERE id=@id
         UNION ALL
-        SELECT owner_id,id,CONCAT('Заказ #',id,': модератор проверил проблему публикации. Выплата остаётся заблокированной.')
+        SELECT owner_id,id,CONCAT('🛡️ Проверка публикации · заказ #',id,CHAR(10),'Проверка завершена.',CHAR(10),'⏳ Выплата пока заблокирована.')
         FROM ad_requests WHERE id=@id
         """,conn,tx);
     notice.Parameters.AddWithValue("@id",orderId);
@@ -547,10 +547,10 @@ app.MapPost("/api/admin/disputes/{orderId:long}/resolve",async(long orderId,Http
     }
     await using var notice=new MySqlCommand("""
         INSERT IGNORE INTO notification_outbox(recipient_id,order_id,body)
-        SELECT advertiser_id,id,CONCAT('Спор по заказу #',id,' рассмотрен. Решение: ',@decision)
+        SELECT advertiser_id,id,CONCAT('⚖️ Спор рассмотрен · заказ #',id,CHAR(10),'📋 Решение: ',@decision)
         FROM ad_requests WHERE id=@id
         UNION ALL
-        SELECT owner_id,id,CONCAT('Спор по заказу #',id,' рассмотрен. Решение: ',@decision)
+        SELECT owner_id,id,CONCAT('⚖️ Спор рассмотрен · заказ #',id,CHAR(10),'📋 Решение: ',@decision)
         FROM ad_requests WHERE id=@id
         """,conn,tx);
     notice.Parameters.AddWithValue("@id",orderId);
@@ -586,7 +586,7 @@ app.MapPost("/api/orders/{orderId:long}/dispute", async (long orderId, HttpReque
     }
     await using var notice=new MySqlCommand("""
         INSERT IGNORE INTO notification_outbox(recipient_id,order_id,body)
-        SELECT owner_id,id,CONCAT('По заказу #',id,' открыт спор. Выплата приостановлена.')
+        SELECT owner_id,id,CONCAT('⚖️ Открыт спор · заказ #',id,CHAR(10),'⏸ Выплата временно приостановлена.',CHAR(10),'📋 Следите за решением в Reklio.')
         FROM ad_requests WHERE id=@id
         """,conn,tx);
     notice.Parameters.AddWithValue("@id",orderId);
@@ -916,7 +916,7 @@ app.MapPost("/api/orders/{orderId:long}/approve", async (long orderId, HttpReque
 
     await using var notify = new MySqlCommand("""
         INSERT INTO notification_outbox (recipient_id,order_id,body)
-        SELECT advertiser_id,id,CONCAT('Заявка #',id,' одобрена. ',IF(status='Scheduled','Размещение запланировано.','Ожидается оплата.'))
+        SELECT advertiser_id,id,CONCAT('✅ Заявка #',id,' одобрена',CHAR(10),IF(status='Scheduled','📅 Размещение запланировано.','💳 Следующий шаг — оплата.'),CHAR(10),'Откройте заказ в Reklio.')
         FROM ad_requests WHERE id=@order
         """, conn, tx);
     notify.Parameters.AddWithValue("@order", orderId);
@@ -950,7 +950,7 @@ app.MapPost("/api/orders/{orderId:long}/reject", async (long orderId, HttpReques
 
     await using var notify = new MySqlCommand("""
         INSERT INTO notification_outbox (recipient_id,order_id,body)
-        SELECT advertiser_id,id,CONCAT('Заявка #',id,' отклонена владельцем канала.')
+        SELECT advertiser_id,id,CONCAT('❌ Заявка #',id,' отклонена',CHAR(10),'Владелец канала не подтвердил размещение.',CHAR(10),'🔎 Вы можете выбрать другую площадку.')
         FROM ad_requests WHERE id=@order
         """, conn, tx);
     notify.Parameters.AddWithValue("@order", orderId);
@@ -1152,10 +1152,10 @@ app.MapPost("/api/payments/yookassa/notification", async (HttpRequest req, MySql
         {
             await using var notice=new MySqlCommand("""
                 INSERT IGNORE INTO notification_outbox(recipient_id,order_id,body)
-                SELECT advertiser_id,id,CONCAT('Тестовая оплата заказа #',id,' подтверждена. Реклама запланирована.')
+                SELECT advertiser_id,id,CONCAT('🧪 Тестовая оплата подтверждена · заказ #',id,CHAR(10),'✅ Размещение запланировано.',CHAR(10),'Реальные деньги не списаны.')
                   FROM ad_requests WHERE id=@order
                 UNION ALL
-                SELECT owner_id,id,CONCAT('Тестовый заказ #',id,' оплачен. Ожидается публикация.')
+                SELECT owner_id,id,CONCAT('🧪 Тестовый заказ #',id,CHAR(10),'✅ Оплата имитирована, деньги не списаны.',CHAR(10),'📅 Ожидается публикация.')
                   FROM ad_requests WHERE id=@order
                 """,conn,tx);
             notice.Parameters.AddWithValue("@order",orderId);
@@ -1230,10 +1230,10 @@ app.MapPost("/api/orders/{orderId:long}/payment/check", async (long orderId, Htt
         {
             await using var notice = new MySqlCommand("""
                 INSERT IGNORE INTO notification_outbox (recipient_id,order_id,body)
-                SELECT advertiser_id,id,CONCAT('Оплата заказа #',id,' подтверждена. Реклама запланирована.')
+                SELECT advertiser_id,id,CONCAT('💳 Оплата подтверждена · заказ #',id,CHAR(10),'✅ Реклама запланирована.',CHAR(10),'📅 Ожидайте публикации в назначенное время.')
                 FROM ad_requests WHERE id=@id
                 UNION ALL
-                SELECT owner_id,id,CONCAT('Заказ #',id,' оплачен. Ожидается публикация.')
+                SELECT owner_id,id,CONCAT('💳 Заказ #',id,' оплачен',CHAR(10),'✅ Оплата подтверждена.',CHAR(10),'📅 Публикация ожидается по расписанию.')
                 FROM ad_requests WHERE id=@id
                 """, conn, tx);
             notice.Parameters.AddWithValue("@id", orderId);
