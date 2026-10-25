@@ -133,6 +133,14 @@ public sealed class AdScheduler(Database database, ITelegramBotClient bot)
                             });
                         }
                     }
+                    if(item.OrderId>0 && item.Body.StartsWith("⚠️ Досрочное удаление",StringComparison.Ordinal))
+                    {
+                        actions=new InlineKeyboardMarkup(new[]
+                        {
+                            new[] { InlineKeyboardButton.WithCallbackData("🔄 Опубликовать заново",$"early:republish:{item.OrderId}") },
+                            new[] { InlineKeyboardButton.WithCallbackData("⚖️ Открыть спор",$"early:dispute:{item.OrderId}") }
+                        });
+                    }
                     await bot.SendMessage(item.Recipient, notificationText, replyMarkup: actions, cancellationToken: ct);
                     await database.CompleteNotificationAsync(item.Id, null, false, ct);
                 }
