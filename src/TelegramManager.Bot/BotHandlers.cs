@@ -561,7 +561,13 @@ public sealed class BotHandlers(Database database)
             if (message.Text?.StartsWith("/start", StringComparison.Ordinal) == true)
             {
                 var payload = message.Text.Split(' ', 2, StringSplitOptions.RemoveEmptyEntries);
-                if(payload.Length==2 && payload[1].StartsWith("boost_") &&
+                if(payload.Length==2 && payload[1]=="connect")
+                {
+                    await bot.SendMessage(message.Chat.Id,
+                        "📺 Подключение канала\\n\\n1. Добавьте @ReklioBot в администраторы канала с разрешением публиковать сообщения.\\n2. Нажмите «Выбрать канал».\\n3. Подтвердите подключение.",
+                        replyMarkup:Connect(),cancellationToken:ct);
+                }
+                else if(payload.Length==2 && payload[1].StartsWith("boost_") &&
                     long.TryParse(payload[1][6..],out var channelToBoost))
                 {
                     if(!await database.OwnsListedChannelAsync(user.Id,channelToBoost,ct))
