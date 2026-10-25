@@ -116,6 +116,56 @@ def record(db, order_id, status):
     db.commit()
 
 
+def view_candidates(db):
+    # Measure posts only after they have had a full 24 hours to accumulate views.
+    # Bound samples per run to avoid excessive Telegram API traffic.
+    with db.cursor() as cur:
+        cur.execute("""
+            SELECT p.channel_id,c.username,p.message_id
+            FROM channel_observed_posts p
+            JOIN channels c ON c.telegram_id=p.channel_id
+            LEFT JOIN reklio_post_views v ON v.channel_id=p.channel_id AND v.message_id=p.message_id
+            WHERE c.is_listed=TRUE AND c.username IS NOT NULL AND c.username<>''
+              AND p.posted_at BETWEEN UTC_TIMESTAMP()-INTERVAL 30 DAY AND UTC_TIMESTAMP()-INTERVAL 24 HOUR
+              AND v.message_id IS NULL
+            ORDER BY p.posted_at DESC LIMIT 15
+        """)
+        return cur.fetchall()
+
+
+async def collect_views(client, db):
+    with db.cursor() as cur:
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS reklio_post_views (
+                channel_id BIGINT NOT NULL,
+                message_id INT NOT NULL,
+                views INT NOT NULL,
+                observed_at DATETIME NOT NULL,
+                PRIMARY KEY(channel_id,message_id),
+                INDEX idx_channel_views (channel_id,observed_at)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+        """)
+    db.commit()
+    for channel_id, username, message_id in view_candidates(db):
+        try:
+            peer = await client.get_input_entity(username if username.startswith("@") else "@"+username)
+            response = await client(functions.channels.GetMessagesRequest(
+                channel=peer,id=[types.InputMessageID(id=int(message_id))]))
+            message = next((m for m in response.messages if getattr(m,"id",None)==int(message_id)),None)
+            views = getattr(message,"views",None)
+            if isinstance(views,int) and views>=0:
+                with db.cursor() as cur:
+                    cur.execute("""
+                        INSERT INTO reklio_post_views(channel_id,message_id,views,observed_at)
+                        VALUES(%s,%s,%s,UTC_TIMESTAMP())
+                        ON DUPLICATE KEY UPDATE views=GREATEST(views,VALUES(views)),observed_at=VALUES(observed_at)
+                    """,(channel_id,message_id,views))
+                db.commit()
+        except (RPCError,ValueError,OSError,TimeoutError) as exc:
+            db.rollback()
+            LOG.warning("View collection unavailable for channel %s: %s",channel_id,type(exc).__name__)
+
+
 async def check(client, username, message_id):
     peer = await client.get_input_entity(username if username.startswith("@") else "@" + username)
     result = await client(functions.channels.GetMessagesRequest(
@@ -147,6 +197,7 @@ async def main():
             try:
                 db = pymysql.connect(**database_kwargs())
                 try:
+                    await collect_views(client,db)
                     for order_id, username, msg_id in candidates(db):
                         try:
                             status = await check(client, username, msg_id)
