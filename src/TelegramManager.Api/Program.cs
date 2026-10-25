@@ -754,6 +754,42 @@ app.MapGet("/api/orders", async (HttpRequest req, MySqlDataSource db, Cancellati
             paymentStatus=reader.GetString(9),payoutStatus=reader.GetString(10),isTest=reader.GetBoolean(11),disputeReason=reader.IsDBNull(12)?null:reader.GetString(12),publicationIssue=reader.IsDBNull(13)?null:reader.GetString(13) });
     return Results.Ok(orders);
 });
+app.MapGet("/api/my-channels/{channelId:long}/analytics", async (long channelId, HttpRequest req, MySqlDataSource db, CancellationToken ct) =>
+{
+    if (Authorized(req) is not long owner) return Results.Unauthorized();
+    var days=int.TryParse(req.Query["days"],out var requested) && requested is 7 or 30 or 90 ? requested : 30;
+    await using var verify=db.CreateCommand("SELECT COUNT(*) FROM channels WHERE telegram_id=@channel AND connected_by=@owner");
+    verify.Parameters.Add(new MySqlParameter("@channel",channelId));
+    verify.Parameters.Add(new MySqlParameter("@owner",owner));
+    if(Convert.ToInt32(await verify.ExecuteScalarAsync(ct))==0)return Results.NotFound();
+    await using var metrics=db.CreateCommand("""
+        SELECT m.day,m.subscribers,m.posts,
+               (SELECT CAST(ROUND(AVG(v.views)) AS SIGNED)
+                FROM reklio_post_views v JOIN channel_observed_posts op
+                ON op.channel_id=v.channel_id AND op.message_id=v.message_id
+                WHERE op.channel_id=m.channel_id AND DATE(op.posted_at)=m.day) AS avgViews
+        FROM channel_daily_metrics m WHERE m.channel_id=@channel
+        AND m.day>=UTC_DATE()-INTERVAL @days DAY ORDER BY m.day
+        """);
+    metrics.Parameters.Add(new MySqlParameter("@channel",channelId));
+    metrics.Parameters.Add(new MySqlParameter("@days",days-1));
+    var points=new List<object>();
+    await using(var rd=await metrics.ExecuteReaderAsync(ct))
+        while(await rd.ReadAsync(ct))points.Add(new {day=rd.GetDateTime(0).ToString("yyyy-MM-dd"),subscribers=rd.IsDBNull(1)?(int?)null:rd.GetInt32(1),posts=rd.GetInt32(2),avgViews=rd.IsDBNull(3)?(long?)null:rd.GetInt64(3)});
+    await using var orders=db.CreateCommand("""
+        SELECT COUNT(*),
+          COALESCE(SUM(CASE WHEN status IN ('Published','Deleted','Disputed','DisputeResolved','EarlyDeletionPending') THEN 1 ELSE 0 END),0),
+          COALESCE(SUM(CASE WHEN payment_status='Paid' AND is_test_order=FALSE THEN price_rub ELSE 0 END),0),
+          COALESCE(SUM(CASE WHEN status='Pending' THEN 1 ELSE 0 END),0)
+        FROM ad_requests WHERE channel_id=@channel AND created_at>=DATE_SUB(UTC_TIMESTAMP(),INTERVAL @days DAY)
+        """);
+    orders.Parameters.Add(new MySqlParameter("@channel",channelId));
+    orders.Parameters.Add(new MySqlParameter("@days",days));
+    await using var stats=await orders.ExecuteReaderAsync(ct);
+    await stats.ReadAsync(ct);
+    return Results.Ok(new {days,points,orders=stats.GetInt64(0),published=stats.GetInt64(1),
+        revenue=stats.GetDecimal(2),pending=stats.GetInt64(3)});
+});
 app.MapGet("/api/my-channels", async (HttpRequest req, MySqlDataSource db, CancellationToken ct) =>
 {
     if (Authorized(req) is not long userId) return Results.Unauthorized();
