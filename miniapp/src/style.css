@@ -44,3 +44,44 @@
 .brandName{font-size:24px;line-height:1.12;font-weight:850;letter-spacing:-.9px;color:#f8faff}
 .brandName span{color:#28a7ff}
 .brandLine .eyebrow{margin-top:6px;color:#67d9ff;font-size:9px}
+
+/* Catalog and account redesign */
+.catalogIntro{padding:21px 19px;margin:4px 0 17px;background:radial-gradient(circle at 95% 5%,#224f98 0,transparent 55%),linear-gradient(135deg,#142c53,#111d39);border:1px solid #36609a66;border-radius:22px;box-shadow:0 16px 38px #080e2455}
+.catalogEyebrow{font-size:10px;font-weight:800;letter-spacing:1.6px;color:#67d9ff}
+.catalogIntro h2{font-size:24px;line-height:1.17;letter-spacing:-.7px;margin:10px 0}
+.catalogIntro p{font-size:13px;line-height:1.65;color:#b5c8e2;margin:0 0 14px}
+.catalogPills{display:flex;flex-wrap:wrap;gap:8px}
+.catalogPills span{background:#24446b99;color:#d6eaff;border:1px solid #5475a366;padding:7px 10px;border-radius:99px;font-size:11px;font-weight:650}
+.catalogCard{background:linear-gradient(160deg,#172b48,#121d32);border:1px solid #37577e7d;border-radius:20px;padding:17px;margin-bottom:12px;box-shadow:0 10px 28px #060c1f44}
+.catalogCard .cardTop{align-items:center;gap:11px}
+.catalogAvatar{width:52px;height:52px;min-width:52px;border-radius:15px;background:linear-gradient(145deg,#258be9,#7458e9);color:white;font-size:23px;box-shadow:0 7px 17px #225cf750}
+.catalogCard .cardTop .price{font-size:13px;white-space:nowrap}
+.catalogCard .channelStats{display:flex;flex-wrap:wrap;gap:8px;margin:13px 0}
+.catalogCard .channelStats span{background:#223957;padding:7px 9px;border-radius:9px;font-size:11px;color:#c9d8f0}
+.catalogCard .description{line-height:1.55}
+.catalogCardFoot{display:flex;align-items:center;justify-content:space-between;gap:10px;border-top:1px solid #49628459;padding-top:13px;margin-top:14px}
+.catalogCardFoot>div{display:grid;gap:4px}
+.catalogCardFoot small{font-size:10px;color:#95accb}
+.catalogCardFoot strong{font-size:18px;color:#fff}
+.catalogCardFoot button{flex-shrink:0}
+.catalogControls{border:1px solid #33547755;border-radius:16px;padding:12px;background:#12243d66}
+.profileOverview{display:grid;gap:15px;margin:5px 0 22px}
+.profileIdentity{display:flex;align-items:center;gap:14px;padding:19px;border:1px solid #365a8580;border-radius:21px;background:linear-gradient(130deg,#1c3358,#121d36)}
+.profileAvatar{width:60px;height:60px;display:flex;align-items:center;justify-content:center;flex-shrink:0;border-radius:20px;background:linear-gradient(145deg,#2db4ef,#6650ea);font-size:27px;font-weight:800;color:white}
+.profileIdentity h2{font-size:22px;margin:6px 0 3px;color:#f8fbff}
+.profileIdentity p{margin:0;color:#a8bed8;font-size:12px}
+.profileSwitch{display:grid;grid-template-columns:1fr 1fr;gap:5px;padding:5px;border-radius:15px;background:#101e32;border:1px solid #344b66}
+.profileSwitch button{padding:11px 7px;border:0;border-radius:11px;background:transparent;color:#b0c5df;font-size:13px;font-weight:750}
+.profileSwitch button.active{color:white;background:linear-gradient(100deg,#1b6cba,#3f5ed5);box-shadow:0 3px 12px #1147ad33}
+.profileStats{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+.profileStats>div{display:flex;flex-direction:column;gap:10px;padding:16px 13px;min-height:98px;background:linear-gradient(140deg,#1b3050,#131f35);border:1px solid #37577b77;border-radius:16px}
+.profileStats span{color:#aabfdd;font-size:11px;line-height:1.4}
+.profileStats strong{font-size:23px;letter-spacing:-.5px;color:#f4f9ff;overflow-wrap:anywhere}
+.profileQuick{background:#162740;border-radius:18px;padding:17px;border:1px solid #38557677}
+.profileQuick h3{margin:0 0 13px;font-size:15px}
+.profileQuickLine{display:flex;justify-content:space-between;align-items:center;gap:14px;padding:11px 0;border-top:1px solid #42597755;font-size:12px}
+.profileQuickLine span{min-width:0;overflow-wrap:anywhere}
+.profileQuickLine small{color:#9db7d4;text-align:right;flex-shrink:0}
+.profileQuick .secondary{margin-top:14px}
+.profileQuick p,.profileFootnote{color:#a6bad4;font-size:11px;line-height:1.5}
+@media(max-width:365px){.catalogCardFoot{align-items:stretch;flex-direction:column}.catalogCardFoot button{width:100%}.profileIdentity h2{font-size:19px}.profileStats strong{font-size:20px}}
