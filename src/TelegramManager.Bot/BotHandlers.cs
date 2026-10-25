@@ -228,22 +228,26 @@ public sealed class BotHandlers(Database database)
     }
 
     private static readonly TimeSpan DisplayOffset = TimeSpan.FromHours(3);
-    private static InlineKeyboardMarkup Home()
+    private static string MiniAppUrl()
     {
-        var rows = new List<InlineKeyboardButton[]>();
-        var miniAppUrl = Environment.GetEnvironmentVariable("MINIAPP_URL");
-        if (Uri.TryCreate(miniAppUrl,UriKind.Absolute,out var uri) && uri.Scheme==Uri.UriSchemeHttps)
-            rows.Add(new[] { new InlineKeyboardButton("🚀 Открыть приложение")
-            {
-                WebApp = new WebAppInfo { Url = uri.ToString() }
-            } });
-        // Legacy bot controls remain available until all write workflows move to Mini App.
-        rows.Add(new[] { InlineKeyboardButton.WithCallbackData("📺 Мои каналы", "owner_home") });
-        rows.Add(new[] { InlineKeyboardButton.WithCallbackData("🛒 Покупка рекламы", "buyer_home") });
-        rows.Add(new[] { InlineKeyboardButton.WithCallbackData("📅 Мои размещения", "placements") });
-        rows.Add(new[] { InlineKeyboardButton.WithCallbackData("👤 Мой профиль", "profile") });
-        return new InlineKeyboardMarkup(rows);
+        var configured = Environment.GetEnvironmentVariable("MINIAPP_URL");
+        return Uri.TryCreate(configured, UriKind.Absolute, out var uri) && uri.Scheme == Uri.UriSchemeHttps
+            ? uri.ToString() : "https://reklio.site";
     }
+
+    private static ReplyKeyboardMarkup MainKeyboard() => new(new[]
+    {
+        new KeyboardButton("🚀 Открыть Reklio")
+        {
+            WebApp = new WebAppInfo { Url = MiniAppUrl() }
+        }
+    }) { ResizeKeyboard = true, IsPersistent = true };
+
+    private static InlineKeyboardMarkup Home() => new(new[]
+    {
+        new[] { new InlineKeyboardButton("🚀 Открыть Reklio") { WebApp = new WebAppInfo { Url = MiniAppUrl() } } }
+    });
+
     private static InlineKeyboardMarkup ForRole(string? role) => Home();
     private static InlineKeyboardMarkup OwnerHome() => new(new[]
     {
@@ -583,10 +587,10 @@ public sealed class BotHandlers(Database database)
                 {
                     await ShowOfferAsync(bot, message.Chat.Id, null, directId, ct);
                 }
-                else await bot.SendMessage(message.Chat.Id, "Telegram Manager\nГлавное меню:", replyMarkup: Home(), cancellationToken: ct);
+                else await bot.SendMessage(message.Chat.Id, "🚀 Добро пожаловать в Reklio!\n\nПокупайте рекламу, подключайте свои каналы и управляйте размещениями в одном приложении.\n\nНажмите кнопку «Открыть Reklio» ниже.", replyMarkup: MainKeyboard(), cancellationToken: ct);
             }
             else if (message.Text?.StartsWith("/cancel", StringComparison.Ordinal) == true)
-                await bot.SendMessage(message.Chat.Id, "Действие отменено.", replyMarkup: Home(), cancellationToken: ct);
+                await bot.SendMessage(message.Chat.Id, "Действие отменено. Откройте Reklio кнопкой ниже.", replyMarkup: MainKeyboard(), cancellationToken: ct);
             return;
         }
 
