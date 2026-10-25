@@ -9,7 +9,7 @@ type Rate = { id: number; hours: number; price: number };
 type HistoryPoint = { day: string; subscribers: number | null; posts: number; avgViews:number|null };
 type PublicationEvent={orderId:number;channel:string;type:string;createdAt:string};
 type ChannelReview = {stars:number;comment:string|null;createdAt:string};
-type Channel = { id: number; title: string; category: string; price: number; description: string; username: string | null; subscribers: number | null; posts30d: number; avgViews: number | null; viewsSamples: number; promotedUntil?: string|null };
+type Channel = { id: number; title: string; category: string; price: number; description: string; username: string | null; subscribers: number | null; posts30d: number; avgViews: number | null; viewsSamples: number; promotedUntil?: string|null; likes:number };
 type StaffMember={id:number;role:string;grantedBy:number;createdAt:string};
 type AdminUser={id:number;name:string;username:string|null;channels:number;purchases:number};
 type AdminOrder={id:number;channel:string;status:string;price:number;buyerId:number;ownerId:number;createdAt:string};
@@ -84,7 +84,7 @@ async function loadCatalog(): Promise<Channel[]> {
       id:c.id,title:c.title,price:c.price,category:c.category,
       description:c.description??'',username:c.username??null,
       subscribers:c.subscribers??null,posts30d:0,avgViews:c.avgViews??null,
-      viewsSamples:0,promotedUntil:c.promotedUntil??null
+      viewsSamples:0,promotedUntil:c.promotedUntil??null,likes:c.likes??0
     }));
   }
 }
@@ -126,6 +126,20 @@ function App() {
   const [compareIds,setCompareIds] = useState<number[]>([]);
   const [profileEvents,setProfileEvents] = useState<PublicationEvent[]>([]);
   const [favoriteIds,setFavoriteIds] = useState<number[]>([]);
+  const [likedIds,setLikedIds]=useState<number[]>([]);
+  const [likeBusy,setLikeBusy]=useState<number|null>(null);
+  async function toggleLike(channelId:number){
+    if(likeBusy!==null)return;
+    const liked=likedIds.includes(channelId);
+    setLikeBusy(channelId);
+    try{
+      const response=await fetch(API+'/api/channel-likes/'+channelId,{method:liked?'DELETE':'POST',headers:{'X-Telegram-Init-Data':tg?.initData||''}});
+      if(!response.ok)throw new Error('Не удалось изменить оценку');
+      setLikedIds(previous=>liked?previous.filter(id=>id!==channelId):[...previous,channelId]);
+      setChannels(previous=>previous.map(c=>c.id===channelId?{...c,likes:Math.max(0,(c.likes??0)+(liked?-1:1))}:c));
+    }catch(e){setBookingMessage(e instanceof Error?e.message:'Ошибка оценки');}
+    finally{setLikeBusy(null);}
+  }
   const [onlyFavorites,setOnlyFavorites] = useState(false);
   const [favoriteBusy,setFavoriteBusy] = useState<number|null>(null);
   async function toggleFavorite(channelId:number) {
@@ -143,6 +157,7 @@ function App() {
     if(tab!=='catalog')return;
     let active=true;
     get<number[]>('/api/favorites').then(ids=>{if(active)setFavoriteIds(ids);}).catch(()=>{});
+    get<number[]>('/api/channel-likes').then(ids=>{if(active)setLikedIds(ids);}).catch(()=>{});
     return ()=>{active=false;};
   },[tab]);
   const [detailsLoading, setDetailsLoading] = useState(false);
@@ -223,7 +238,8 @@ function App() {
     : sortBy === 'subscribers' ? (b.subscribers ?? -1) - (a.subscribers ?? -1)
     : sortBy === 'posts' ? b.posts30d - a.posts30d
     : sortBy === 'cpm' ? ((a.avgViews && a.avgViews>0 ? a.price/a.avgViews : Number.POSITIVE_INFINITY) - (b.avgViews && b.avgViews>0 ? b.price/b.avgViews : Number.POSITIVE_INFINITY))
-    : sortBy === 'title' ? a.title.localeCompare(b.title, 'ru') : 0));
+    : sortBy === 'title' ? a.title.localeCompare(b.title, 'ru') : (b.likes??0)-(a.likes??0)));
+
   const [orders, setOrders] = useState<Order[]>([]);
   const [finance, setFinance] = useState<FinanceData | null>(null);
   const [financeError, setFinanceError] = useState('');
@@ -557,7 +573,7 @@ function App() {
       {error && <div className="notice">{error}<button onClick={()=>setRetry(n=>n+1)}>Повторить</button></div>}
       {loading && <div className="muted loading"><RefreshCw size={16}/> Загрузка...</div>}
       {tab === 'catalog' && compareIds.length>0 && <div className="comparePanel"><h3>Сравнение площадок ({compareIds.length}/3)</h3><div className="compareGrid">{channels.filter(c=>compareIds.includes(c.id)).map(c=><div key={c.id}><strong>{c.title}</strong><small>{c.subscribers?.toLocaleString('ru-RU')??'—'} подписчиков</small><small>{c.avgViews?.toLocaleString('ru-RU')??'—'} просмотров</small><small>CPM: {c.avgViews&&c.avgViews>0?money(c.price*1000/c.avgViews):'Нет данных'}</small></div>)}</div><button className="secondary small" onClick={()=>setCompareIds([])}>Очистить сравнение</button></div>}
-      {tab === 'catalog' && <section>{!loading && visibleChannels.length === 0 && !error && <div className="empty">Каналы не найдены. Попробуйте изменить запрос.</div>}{visibleChannels.map(c=><article className={c.promotedUntil?"card catalogCard catalogCardPromoted":"card catalogCard"} key={c.id}>{c.promotedUntil&&<div className="catalogPromotedFlag">✦ Продвигается</div>}<div className="cardTop"><ChannelAvatar id={c.id} title={c.title} extraClass="catalogAvatar"/><div className="grow"><strong>{c.title}</strong><small>{c.category}</small></div><button className={'favoriteHeart'+(favoriteIds.includes(c.id)?' active':'')} aria-label={favoriteIds.includes(c.id)?'Убрать из избранного':'Добавить в избранное'} disabled={favoriteBusy!==null} onClick={()=>toggleFavorite(c.id)}>{favoriteIds.includes(c.id)?'♥':'♡'}</button></div><div className="channelStats"><span>👥 Подписчики: <b>{c.subscribers === null ? "Нет данных" : c.subscribers.toLocaleString("ru-RU")}</b></span><span>✦ Постов за 30 дней: <b>{c.posts30d}</b></span><span>👁 Средние просмотры: <b>{c.avgViews === null ? "Нет данных" : c.avgViews.toLocaleString("ru-RU")}</b></span><span>📊 CPM: <b>{c.avgViews && c.avgViews>0 ? money(c.price*1000/c.avgViews) : "Нет данных"}</b></span></div>{c.description && <p className="description">{c.description}</p>}<label className="compareToggle"><input type="checkbox" checked={compareIds.includes(c.id)} onChange={e=>setCompareIds(previous=>e.target.checked?(previous.length>=3?previous:[...previous,c.id]):previous.filter(id=>id!==c.id))} disabled={!compareIds.includes(c.id)&&compareIds.length>=3}/> Сравнить площадку</label><div className="catalogCardFoot"><div><small>Размещение от</small><strong>{money(c.price)}</strong></div><button className="primary small" onClick={()=>openChannel(c)}>Смотреть тарифы →</button></div>{c.username && <button className="link" onClick={()=>tg?.openTelegramLink('https://t.me/'+c.username!.replace(/^@/,''))}>Открыть канал <ArrowUpRight size={15}/></button>}</article>)}</section>}
+      {tab === 'catalog' && <section>{!loading && visibleChannels.length === 0 && !error && <div className="empty">Каналы не найдены. Попробуйте изменить запрос.</div>}{visibleChannels.map(c=><article className={c.promotedUntil?"card catalogCard catalogCardPromoted":"card catalogCard"} key={c.id}>{c.promotedUntil&&<div className="catalogPromotedFlag">✦ Продвигается</div>}<div className="cardTop"><ChannelAvatar id={c.id} title={c.title} extraClass="catalogAvatar"/><div className="grow"><strong>{c.title}</strong><small>{c.category}</small></div><button className={'favoriteHeart'+(favoriteIds.includes(c.id)?' active':'')} aria-label={favoriteIds.includes(c.id)?'Убрать из избранного':'Добавить в избранное'} disabled={favoriteBusy!==null} onClick={()=>toggleFavorite(c.id)}>{favoriteIds.includes(c.id)?'♥':'♡'}</button></div><div className="channelLikeRow"><button type="button" className={'channelLikeButton'+(likedIds.includes(c.id)?' active':'')} disabled={likeBusy!==null} onClick={()=>void toggleLike(c.id)}>{likedIds.includes(c.id)?'♥ Нравится':'♡ Нравится'}</button><span>{c.likes??0} лайков</span></div><div className="channelStats"><span>👥 Подписчики: <b>{c.subscribers === null ? "Нет данных" : c.subscribers.toLocaleString("ru-RU")}</b></span><span>✦ Постов за 30 дней: <b>{c.posts30d}</b></span><span>👁 Средние просмотры: <b>{c.avgViews === null ? "Нет данных" : c.avgViews.toLocaleString("ru-RU")}</b></span><span>📊 CPM: <b>{c.avgViews && c.avgViews>0 ? money(c.price*1000/c.avgViews) : "Нет данных"}</b></span></div>{c.description && <p className="description">{c.description}</p>}<label className="compareToggle"><input type="checkbox" checked={compareIds.includes(c.id)} onChange={e=>setCompareIds(previous=>e.target.checked?(previous.length>=3?previous:[...previous,c.id]):previous.filter(id=>id!==c.id))} disabled={!compareIds.includes(c.id)&&compareIds.length>=3}/> Сравнить площадку</label><div className="catalogCardFoot"><div><small>Размещение от</small><strong>{money(c.price)}</strong></div><button className="primary small" onClick={()=>openChannel(c)}>Смотреть тарифы →</button></div>{c.username && <button className="link" onClick={()=>tg?.openTelegramLink('https://t.me/'+c.username!.replace(/^@/,''))}>Открыть канал <ArrowUpRight size={15}/></button>}</article>)}</section>}
       {tab === 'orders' && <section>{orderSummary && <div className="sellerDashboard"><h3>Статистика размещений</h3><div className="dashboardGrid"><div><small>Оплаченные продажи</small><strong>{money(orderSummary.salesVolume)}</strong></div><div><small>Оплаченные покупки</small><strong>{money(orderSummary.purchaseVolume)}</strong></div><div><small>Ожидают решения</small><strong>{orderSummary.incomingPending}</strong></div><div><small>Запланированы</small><strong>{orderSummary.upcomingSales}</strong></div><div><small>Продано размещений</small><strong>{orderSummary.completedSales}</strong></div><div><small>Куплено размещений</small><strong>{orderSummary.completedPurchases}</strong></div></div><p>Суммы включают только подтверждённые нетестовые платежи. Это оборот, не доступный к выводу баланс.</p></div>}{orderMessage && <div className="notice">{orderMessage}</div>}<div className="orderFilters"><button className={orderFilter==='incoming'?'active':''} onClick={()=>setOrderFilter('incoming')}>Входящие ({orders.filter(o=>o.isOwner).length})</button><button className={orderFilter==='outgoing'?'active':''} onClick={()=>setOrderFilter('outgoing')}>Мои покупки ({orders.filter(o=>!o.isOwner).length})</button><button className={orderFilter==='all'?'active':''} onClick={()=>setOrderFilter('all')}>Все</button></div>{!loading && !filteredOrders.length && !error && <div className="empty">Заявок пока нет</div>}{filteredOrders.map(o=><article className="card" key={o.id}><div className="cardTop"><div className="grow"><strong>Заказ #{o.id}</strong><small>{o.channel} · {o.isOwner ? 'Входящая заявка' : 'Моя заявка'}</small></div><div className="price">{money(o.price)}</div></div><span className="status">{({Draft:'Черновик',Pending:'Ожидает согласования',AwaitingPayment:'Ожидает оплаты',Rejected:'Отклонена',Scheduled:'Запланирована',Publishing:'Публикуется',Published:'Опубликована',PaidReschedule:'Оплачено — нужен перенос',PendingPaid:'Ожидает повторного согласования'} as Record<string,string>)[o.status] || o.status}</span>{!o.isOwner && (o.status==='PaidReschedule'||((o.status==='Pending'||o.status==='AwaitingPayment')&&o.scheduledAt&&new Date(o.scheduledAt).getTime()<=Date.now()+600000)) && <div className="rescheduleBox"><button className="secondary small" onClick={()=>{setRescheduleOrder(rescheduleOrder===o.id?null:o.id);setRescheduleTime('');}}>Выбрать новое время</button>{rescheduleOrder===o.id&&<><label className="field">Новая дата и время<input type="datetime-local" value={rescheduleTime} onChange={e=>setRescheduleTime(e.target.value)}/></label><button className="primary small" disabled={processingOrder!==null} onClick={()=>reschedule(o.id)}>Отправить на согласование</button></>}</div>}<button className="orderDetailsButton" onClick={()=>showOrderDetails(o.id)}>{expandedOrder===o.id?'Скрыть подробности':'Подробнее о заявке'}</button>{expandedOrder===o.id && <div className="orderDetails"><strong>Рекламный текст</strong><p>{o.text||'Текст не указан'}</p><strong>Дата публикации</strong><p>{o.scheduledAt ? new Date(o.scheduledAt.endsWith('Z')?o.scheduledAt:o.scheduledAt+'Z').toLocaleString('ru-RU') : 'Не назначена'}</p><strong>Длительность</strong><p>{o.durationHours===null?'Не выбрана':o.durationHours+' ч'}</p><div className="dealTimeline"><strong>Этапы сделки {o.isTest?'(тестовая)':''}</strong>{[
               {name:'Согласование заявки',done:!['Draft','Pending','Rejected'].includes(o.status)},
               {name:'Оплата подтверждена',done:['Paid','TestPaid'].includes(o.paymentStatus)},
