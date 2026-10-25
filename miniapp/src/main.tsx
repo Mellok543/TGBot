@@ -45,13 +45,22 @@ async function get<T>(path: string): Promise<T> {
   for(let attempt=0;attempt<2;attempt++){
     try {
       const response=await fetch(API+path,{signal:AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-        headers:{'X-Telegram-Init-Data':tg?.initData||''},cache:'no-store'});
+        headers:{'X-Telegram-Init-Data':tg?.initData||''}});
       if(!response.ok)throw new Error(response.status===401?'Откройте приложение из Telegram':`Ошибка API (${response.status}) при загрузке данных`);
       return await response.json() as T;
     }catch(error){
       // Only retry connection errors/timeouts. Never retry authorization or API errors.
       if(error instanceof Error && !(error instanceof TypeError) && error.name!=='TimeoutError')throw error;
-      if(attempt===1)throw new Error('Нет соединения с API Reklio. Проверьте VPN/сеть и нажмите «Повторить».');
+      if(attempt===1){
+        let apiReachable=false;
+        try {
+          const health=await fetch(API+'/api/health',{signal:AbortSignal.timeout(5000)});
+          apiReachable=health.ok;
+        } catch { /* Detect network access from within Telegram WebView. */ }
+        throw new Error(apiReachable
+          ? 'API доступен, но запрос каталога блокируется внутри Telegram. Закройте Mini App и откройте заново.'
+          : 'Telegram не может подключиться к API. Попробуйте сменить сеть или VPN и открыть Mini App снова.');
+      }
       await new Promise(resolve=>setTimeout(resolve,700));
     }
   }
