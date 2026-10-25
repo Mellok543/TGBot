@@ -600,7 +600,7 @@ function App() {
           <p>{subscription?.isPro?'Расширенная статистика': 'FREE без ограничения по времени · базовая статистика'}</p>
           {subscription?.isPro&&subscription.expiresAt&&<p>Действует до {new Date(subscription.expiresAt).toLocaleDateString('ru-RU')}</p>}
           {!subscription?.isPro&&<p>PRO: до 10 каналов, расширенная статистика, комиссия 2,5%.</p>}
-          <button className="primary" type="button" disabled={!subscription?.checkoutAvailable} onClick={()=>{}}>Оформление PRO скоро доступно{subscription?.proPriceRub?' · '+subscription.proPriceRub+' ₽':''}</button>
+          <button className="primary" type="button" disabled={!subscription?.checkoutAvailable} onClick={()=>{}}>PRO · {subscription?.proPriceRub??399} ₽ / 30 дней (скоро)</button>
           {!subscription?.checkoutAvailable&&<p className="hint">{subscription?.checkoutMessage??'Подключение кассы ожидается'}</p>}
         </section>
         <div className="profileIdentity"><div className="profileAvatar">{(telegramUser?.first_name || 'R').slice(0,1).toUpperCase()}</div><div><span className="catalogEyebrow">ЛИЧНЫЙ КАБИНЕТ</span><h2>{telegramUser?.first_name || 'Пользователь Reklio'}</h2><p>{telegramUser?.username ? '@'+telegramUser.username : 'Управление рекламой и каналами'}</p></div></div>
