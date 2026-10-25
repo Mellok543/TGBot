@@ -40,3 +40,26 @@
 .lp-modal-actions a:nth-child(2){background:#203e62;color:#d5e7fc}
 @media(max-width:900px){.lp-catalog-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media(max-width:640px){.lp-catalog-filters{grid-template-columns:1fr}.lp-catalog-grid{grid-template-columns:1fr}.lp-catalog-card{padding:17px}.lp-channel-modal{padding:19px}.lp-catalog-bottom strong{font-size:18px}}
+
+/* Public pages and plans */
+.lp-mobile-menu{display:none;background:#172e50;border:1px solid #45648d;color:#e9f4ff;border-radius:10px;padding:9px 12px;font-size:19px}
+.lp-pricing-grid{display:grid;grid-template-columns:1fr 1fr;gap:18px;margin-top:29px}
+.lp-pricing-grid article{padding:28px;background:linear-gradient(145deg,#142746,#0e1b33);border:1px solid #355373;border-radius:23px;display:flex;flex-direction:column;gap:20px}
+.lp-pricing-grid article.featured{border-color:#347ff5;box-shadow:0 12px 45px #1d6bf128}
+.lp-pricing-head{display:flex;flex-direction:column;gap:9px}
+.lp-pricing-head h3{margin:0;font-size:17px;color:#6bc9ff;letter-spacing:2px}
+.lp-pricing-head strong{font-size:29px}
+.lp-pricing-grid ul{margin:0;padding-left:21px;color:#c6d8ef;line-height:2}
+.lp-pricing-grid article p{color:#8ea8c7;line-height:1.65;font-size:12px}
+.lp-pricing-grid a{display:inline-block;margin-top:auto;background:linear-gradient(110deg,#16cdf4,#3185ff);padding:14px 20px;text-align:center;border-radius:12px;color:#091a2d;font-weight:800}
+.lp-footer-links{display:flex;flex-wrap:wrap;gap:14px}
+.lp-footer-links a{color:#a4bedc;font-size:12px}
+.lp-footer-links a:hover{color:#fff}
+.lp-legal{max-width:920px;margin:auto;padding-top:70px;padding-bottom:90px}
+.lp-legal h1{font-size:clamp(32px,5vw,52px);letter-spacing:-1.5px}
+.lp-legal-note{color:#e6c785!important;border:1px solid #ae8a4255;background:#72541919;border-radius:11px;padding:14px}
+.lp-legal article{border-bottom:1px solid #344663;padding:20px 0}
+.lp-legal article h2{font-size:20px;letter-spacing:0}
+.lp-legal article p{color:#b2c4db;line-height:1.8}
+.lp-legal-back{display:inline-block;margin-top:25px;color:#6dc4ff!important}
+@media(max-width:760px){.lp-mobile-menu{display:block;margin-left:auto}.lp-nav{gap:13px}.lp-nav .lp-nav-action{font-size:11px;padding:10px}.lp-nav-links{display:none!important;position:absolute;top:78px;left:16px;right:16px;background:#112440;border:1px solid #42678e;border-radius:15px;padding:17px;z-index:40;box-shadow:0 18px 36px #020614}.lp-nav-links.open{display:flex!important;flex-direction:column;align-items:stretch;gap:16px}.lp-pricing-grid{grid-template-columns:1fr}.lp-pricing-grid article{padding:21px}.lp-footer-links{justify-content:center}}
