@@ -13,8 +13,10 @@ builder.Services.AddHttpClient();
 builder.Services.AddHostedService<TelegramManager.Api.Publishing.PublicationWorker>();
 builder.Services.AddHostedService<TelegramManager.Api.Notifications.NotificationWorker>();
 var allowedOrigin = Environment.GetEnvironmentVariable("MINIAPP_ORIGIN");
-if (!string.IsNullOrWhiteSpace(allowedOrigin))
-    builder.Services.AddCors(o => o.AddPolicy("miniapp", p => p.WithOrigins(allowedOrigin).AllowAnyHeader().AllowAnyMethod()));
+builder.Services.AddCors(o => o.AddPolicy("miniapp", p => p
+    .WithOrigins(new[] { allowedOrigin, "https://reklio.site", "https://www.reklio.site" }
+        .Where(origin => !string.IsNullOrWhiteSpace(origin)).Select(origin => origin!).Distinct().ToArray())
+    .AllowAnyHeader().AllowAnyMethod()));
 var app = builder.Build();
 // Bootstrap only the role/audit tables. Existing payment and Safe Deal migrations remain manual.
 try
@@ -47,7 +49,7 @@ catch(MySqlException ex)
     app.Logger.LogWarning(ex,"Reklio staff schema could not be initialized; verify DB CREATE permission");
 }
 
-if (!string.IsNullOrWhiteSpace(allowedOrigin)) app.UseCors("miniapp");
+app.UseCors("miniapp");
 
 static long? VerifyTelegram(string? initData, string token)
 {
