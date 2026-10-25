@@ -97,3 +97,12 @@ html{scroll-behavior:smooth;scroll-padding-top:90px}
 }
 @media(max-width:355px){.lp-shortcuts{grid-template-columns:1fr}.lp-nav .lp-nav-action{padding:8px!important;font-size:10px!important}}
 @media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}}
+
+/* Multi-page site layout */
+.lp-route-heading{max-width:1164px;margin:0 auto;padding:68px 28px 18px}
+.lp-route-heading span{font-size:11px;font-weight:800;letter-spacing:2px;color:#60b7fc}
+.lp-route-heading h1{font-size:clamp(36px,5vw,55px);letter-spacing:-1.7px;margin:14px 0 9px}
+.lp-route-heading p{font-size:16px;color:#a2bad8;max-width:650px;line-height:1.65}
+.lp-route-heading+.lp-section{padding-top:24px}
+.lp-nav-links a.active{color:#79d5ff}
+@media(max-width:760px){.lp-route-heading{padding:38px 17px 5px}.lp-route-heading h1{font-size:35px}}
