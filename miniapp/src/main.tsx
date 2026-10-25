@@ -24,6 +24,7 @@ type FinanceOperation = {id:number;channel:string;amount:number;commission:numbe
 type FinanceData = {pending:number;readyForReview:number;readyNet:number;paid:number;refunded:number;commissionPercent:number;blocked:number;operations:FinanceOperation[];note:string};
 type OrderSummary = { incomingPending:number; completedSales:number; completedPurchases:number; salesVolume:number; purchaseVolume:number; upcomingSales:number };
 type Order = { id: number; channel: string; price: number; status: string; createdAt: string; isOwner: boolean; text: string; scheduledAt: string | null; durationHours: number | null; paymentStatus:string; payoutStatus:string; isTest:boolean;disputeReason:string|null;publicationIssue:string|null };
+type ChannelAnalytics={days:number;points:HistoryPoint[];orders:number;published:number;revenue:number;pending:number};
 type Mine = { id: number; title: string; listed: boolean; price: number };
 type SellerRate = Rate & { active: boolean };
 type Tab = 'catalog' | 'orders' | 'channels' | 'profile';
@@ -263,12 +264,22 @@ function App() {
   const [mine, setMine] = useState<Mine[]>([]);
   const [editingChannel, setEditingChannel] = useState<Mine | null>(null);
   const [sellerRates, setSellerRates] = useState<SellerRate[]>([]);
+  const [analyticsPeriod,setAnalyticsPeriod] = useState<7|30|90>(30);
+  const [analytics,setAnalytics] = useState<ChannelAnalytics|null>(null);
+  const [analyticsLoading,setAnalyticsLoading] = useState(false);
+  const [analyticsError,setAnalyticsError] = useState('');
+  async function loadChannelAnalytics(channelId:number,days:7|30|90){
+    setAnalyticsLoading(true);setAnalyticsError('');setAnalytics(null);
+    try{setAnalytics(await get<ChannelAnalytics>('/api/my-channels/'+channelId+'/analytics?days='+days));}
+    catch(e){setAnalyticsError(e instanceof Error?e.message:'Не удалось загрузить аналитику');}
+    finally{setAnalyticsLoading(false);}
+  }
   const [sellerHours, setSellerHours] = useState('24');
   const [sellerPrice, setSellerPrice] = useState('');
   const [sellerBusy, setSellerBusy] = useState(false);
   const [sellerMessage, setSellerMessage] = useState('');
   async function loadSellerRates(channel: Mine) {
-    setEditingChannel(channel); setSellerMessage(''); setSellerRates([]);
+    setEditingChannel(channel); setSellerMessage(''); setSellerRates([]);setAnalyticsPeriod(30);void loadChannelAnalytics(channel.id,30);
     try { setSellerRates(await get<SellerRate[]>('/api/my-channels/'+channel.id+'/rates')); }
     catch(e) { setSellerMessage(e instanceof Error ? e.message : 'Ошибка загрузки тарифов'); }
   }
@@ -490,6 +501,15 @@ function App() {
         <button className="back" onClick={()=>setEditingChannel(null)}>← К моим каналам</button>
         <h2>{editingChannel.title}</h2>
         <p className="description">{editingChannel.listed?'Канал виден покупателям':'Канал скрыт из каталога'}</p>
+        <div className="analyticsPanel"><h3>Аналитика канала</h3><div className="analyticsPeriods">{([7,30,90] as const).map(d=><button key={d} className={analyticsPeriod===d?'active':''} onClick={()=>{setAnalyticsPeriod(d);void loadChannelAnalytics(editingChannel.id,d);}}>{d} дней</button>)}</div>
+        {analyticsLoading&&<p className="description">Загрузка аналитики…</p>}
+        {analyticsError&&<p className="notice">{analyticsError}</p>}
+        {analytics&&<><div className="profileStats"><div><span>Заказов за период</span><strong>{analytics.orders}</strong></div><div><span>Размещений</span><strong>{analytics.published}</strong></div><div><span>Продажи (оплаченные)*</span><strong>{money(analytics.revenue)}</strong></div><div><span>Ожидают согласования</span><strong>{analytics.pending}</strong></div></div>
+        {([{field:'subscribers',label:'Динамика подписчиков',color:'#80b5ff'},{field:'avgViews',label:'Просмотры публикаций',color:'#63dec9'}] as const).map(graph=>{
+          const points=analytics.points.filter(p=>p[graph.field]!==null);const values=points.map(p=>p[graph.field] as number);const min=Math.min(...values),max=Math.max(...values);
+          return <div className="analyticsGraph" key={graph.field}><h4>{graph.label}</h4>{points.length<2?<p className="description">Недостаточно данных за выбранный период.</p>:<div className="historyCard"><svg viewBox="0 0 100 100" preserveAspectRatio="none" role="img" aria-label={graph.label}><polyline points={values.map((v,i)=>`${(i/(values.length-1)*100).toFixed(2)},${(95-(v-min)/Math.max(1,max-min)*85).toFixed(2)}`).join(' ')} fill="none" stroke={graph.color} strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" vectorEffect="non-scaling-stroke"/></svg><div className="historyLabels"><span>{points[0].day}</span><span>{points[points.length-1].day}</span></div><small>Последнее: {values[values.length-1].toLocaleString('ru-RU')}</small></div>}</div>;
+        })}
+        <p className="profileFootnote">*Только подтверждённые реальные оплаты по заказам, созданным в периоде. Оборот, не доступный баланс.</p></>}</div>
         <button className="secondary sellerToggle" disabled={sellerBusy} onClick={()=>toggleListing(editingChannel)}>{editingChannel.listed?'Скрыть из каталога':'Опубликовать в каталоге'}</button>
         <h3 className="detailSubtitle">Рекламные тарифы</h3>
         {sellerRates.length===0 && <p className="description">Нет тарифов. Добавьте первый ниже.</p>}
