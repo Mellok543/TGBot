@@ -1492,14 +1492,14 @@ public sealed class Database(string connectionString) : IAsyncDisposable
     {
         await using var cmd=_source.CreateCommand("SELECT 1 FROM channels WHERE telegram_id=@id AND connected_by=@owner AND is_listed=TRUE LIMIT 1");
         cmd.Parameters.Add(new MySqlParameter("@id",channelId));
-        cmd.Parameters.AddWithValue("@owner",ownerId);
+        cmd.Parameters.Add(new MySqlParameter("@owner",ownerId));
         return await cmd.ExecuteScalarAsync(ct) is not null;
     }
 
     public async Task<DateTime?> GetPromotionUntilAsync(long channelId,CancellationToken ct)
     {
         await using var cmd=_source.CreateCommand("SELECT active_until FROM channel_promotions WHERE channel_id=@id");
-        cmd.Parameters.AddWithValue("@id",channelId);
+        cmd.Parameters.Add(new MySqlParameter("@id",channelId));
         var value=await cmd.ExecuteScalarAsync(ct);
         return value is null or DBNull?null:Convert.ToDateTime(value);
     }
