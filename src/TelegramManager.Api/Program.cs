@@ -1001,9 +1001,9 @@ app.MapGet("/api/subscription", async (HttpRequest req,MySqlDataSource db,Cancel
     var value=await cmd.ExecuteScalarAsync(ct);
     var expiry=value is DateTime date ? date : (DateTime?)null;
     var isPro=expiry>DateTime.UtcNow;
-    var priceConfigured=decimal.TryParse(Environment.GetEnvironmentVariable("REKLIO_PRO_PRICE_RUB"),System.Globalization.NumberStyles.Number,System.Globalization.CultureInfo.InvariantCulture,out var price)&&price>=1m;
+    const decimal price=399m;
     return Results.Ok(new {plan=isPro?"PRO":"FREE",isPro,expiresAt=isPro?expiry:null,channelLimit=isPro?10:1,commissionPercent=isPro?2.5m:5m,fullAnalytics=isPro,
-        proPriceRub=priceConfigured?price:(decimal?)null,checkoutAvailable=false,checkoutMessage="Ожидается подключение кассы"});
+        proPriceRub=price,checkoutAvailable=false,checkoutMessage="Ожидается подключение кассы"});
 });
 app.MapGet("/api/my-channels", async (HttpRequest req, MySqlDataSource db, CancellationToken ct) =>
 {
