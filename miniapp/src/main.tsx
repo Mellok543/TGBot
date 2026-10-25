@@ -172,12 +172,12 @@ function App() {
     (!maxCatalogPrice || c.price <= Number(maxCatalogPrice)) &&
     (!minCatalogSubscribers || (c.subscribers !== null && c.subscribers >= Number(minCatalogSubscribers))) &&
     (!normalizedSearch || [c.title, c.category, c.description, c.username || ''].some(value => value.toLocaleLowerCase('ru').includes(normalizedSearch)))
-  ).sort((a,b) => sortBy === 'priceAsc' ? a.price - b.price
+  ).sort((a,b) => (Number(Boolean(b.promotedUntil))-Number(Boolean(a.promotedUntil))) || (sortBy === 'priceAsc' ? a.price - b.price
     : sortBy === 'priceDesc' ? b.price - a.price
     : sortBy === 'subscribers' ? (b.subscribers ?? -1) - (a.subscribers ?? -1)
     : sortBy === 'posts' ? b.posts30d - a.posts30d
     : sortBy === 'cpm' ? ((a.avgViews && a.avgViews>0 ? a.price/a.avgViews : Number.POSITIVE_INFINITY) - (b.avgViews && b.avgViews>0 ? b.price/b.avgViews : Number.POSITIVE_INFINITY))
-    : sortBy === 'title' ? a.title.localeCompare(b.title, 'ru') : 0);
+    : sortBy === 'title' ? a.title.localeCompare(b.title, 'ru') : 0));
   const [orders, setOrders] = useState<Order[]>([]);
   const [finance, setFinance] = useState<FinanceData | null>(null);
   const [financeError, setFinanceError] = useState('');
