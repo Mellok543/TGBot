@@ -277,9 +277,6 @@ public sealed class Database(string connectionString) : IAsyncDisposable
             subscribed = reader.IsDBNull(1) ? null : reader.GetDateTime(1);
         }
         var pro = subscribed is { } expiry && expiry > DateTime.UtcNow;
-        var trial = created.AddDays(30) > DateTime.UtcNow;
-        if (!pro && !trial)
-            throw new InvalidOperationException("Бесплатные 30 дней закончились. Для подключения каналов требуется PRO (299 Stars / 30 дней).");
         await using var count = new MySqlCommand("SELECT COUNT(*) FROM channels WHERE connected_by=@user", connection, tx);
         count.Parameters.Add(new MySqlParameter("@user", userId));
         var existingCount = Convert.ToInt32(await count.ExecuteScalarAsync(ct));
@@ -318,7 +315,7 @@ public sealed class Database(string connectionString) : IAsyncDisposable
         var created = r.IsDBNull(0) ? (DateTime?)null : r.GetDateTime(0);
         DateTime? expires = r.IsDBNull(1) ? null : r.GetDateTime(1);
         var pro = expires is { } at && at > DateTime.UtcNow;
-        return (pro, created?.AddDays(30) ?? DateTime.MaxValue, expires, pro ? 10 : 1);
+        return (pro, DateTime.MaxValue, expires, pro ? 10 : 1);
     }
 
     public async Task<List<(long Id, string Title, string? Username)>> GetChannelsAsync(long ownerId, CancellationToken ct)
