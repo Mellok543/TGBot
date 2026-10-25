@@ -27,6 +27,7 @@ type Order = { id: number; channel: string; price: number; status: string; creat
 type ChannelAnalytics={days:number;points:HistoryPoint[];orders:number;published:number;revenue:number;pending:number};
 type Mine = { id: number; title: string; listed: boolean; price: number; category: string };
 type SellerRate = Rate & { active: boolean };
+type Subscription={plan:'FREE'|'PRO';isPro:boolean;expiresAt:string|null;channelLimit:number;commissionPercent:number;fullAnalytics:boolean;proPriceRub:number|null;checkoutAvailable:boolean;checkoutMessage:string};
 type Tab = 'catalog' | 'orders' | 'channels' | 'profile';
 const CHANNEL_CATEGORIES=['Технологии','Игры','Новости','Бизнес','Финансы','Образование','Развлечения','Юмор','Спорт','Путешествия','Авто','Красота и стиль','Здоровье','Кулинария','Музыка','Кино','Другое'];
 const API = import.meta.env.VITE_API_URL || '';
@@ -306,10 +307,12 @@ function App() {
       try { setOrders(await get<Order[]>('/api/orders')); } catch { /* Preserve the last known list. */ }
     } finally { setProcessingOrder(null); }
   }
+  const [subscription,setSubscription]=useState<Subscription|null>(null);
+  useEffect(()=>{get<Subscription>('/api/subscription').then(setSubscription).catch(()=>{});},[tab]);
   const [mine, setMine] = useState<Mine[]>([]);
   const [editingChannel, setEditingChannel] = useState<Mine | null>(null);
   const [sellerRates, setSellerRates] = useState<SellerRate[]>([]);
-  const [analyticsPeriod,setAnalyticsPeriod] = useState<7|30|90>(30);
+  const [analyticsPeriod,setAnalyticsPeriod] = useState<7|30|90>(7);
   const [analytics,setAnalytics] = useState<ChannelAnalytics|null>(null);
   const [analyticsLoading,setAnalyticsLoading] = useState(false);
   const [analyticsError,setAnalyticsError] = useState('');
@@ -337,7 +340,7 @@ function App() {
   const [sellerBusy, setSellerBusy] = useState(false);
   const [sellerMessage, setSellerMessage] = useState('');
   async function loadSellerRates(channel: Mine) {
-    setEditingChannel(channel); setSellerMessage(''); setSellerRates([]);setAnalyticsPeriod(30);void loadChannelAnalytics(channel.id,30);
+    setEditingChannel(channel); setSellerMessage(''); setSellerRates([]);setAnalyticsPeriod(subscription?.isPro?30:7);void loadChannelAnalytics(channel.id,subscription?.isPro?30:7);
     try { setSellerRates(await get<SellerRate[]>('/api/my-channels/'+channel.id+'/rates')); }
     catch(e) { setSellerMessage(e instanceof Error ? e.message : 'Ошибка загрузки тарифов'); }
   }
@@ -571,7 +574,7 @@ function App() {
         <button className="back" onClick={()=>setEditingChannel(null)}>← К моим каналам</button>
         <h2>{editingChannel.title}</h2>
         <p className="description">{editingChannel.listed?'Канал виден покупателям':'Канал скрыт из каталога'}</p><label className="field">Категория канала<select value={CHANNEL_CATEGORIES.includes(editingChannel.category)?editingChannel.category:''} disabled={sellerBusy} onChange={e=>void saveChannelCategory(e.target.value)}><option value="" disabled>Выберите категорию</option>{CHANNEL_CATEGORIES.map(item=><option key={item} value={item}>{item}</option>)}</select><small className="hint">Категория отображается в каталоге и используется при фильтрации.</small></label>{sellerMessage&&<div className="notice">{sellerMessage}</div>}
-        <div className="analyticsPanel"><h3>Аналитика канала</h3><div className="analyticsPeriods">{([7,30,90] as const).map(d=><button key={d} className={analyticsPeriod===d?'active':''} onClick={()=>{setAnalyticsPeriod(d);void loadChannelAnalytics(editingChannel.id,d);}}>{d} дней</button>)}</div>
+        <div className="analyticsPanel"><h3>Аналитика канала</h3>{!subscription?.isPro&&<p className="hint">FREE: базовая статистика за 7 дней. Расширенные периоды и аналитика доступны в PRO.</p>}<div className="analyticsPeriods">{(subscription?.isPro?[7,30,90] as const:[7] as const).map(d=><button key={d} className={analyticsPeriod===d?'active':''} onClick={()=>{setAnalyticsPeriod(d);void loadChannelAnalytics(editingChannel.id,d);}}>{d} дней</button>)}</div>
         {analyticsLoading&&<p className="description">Загрузка аналитики…</p>}
         {analyticsError&&<p className="notice">{analyticsError}</p>}
         {analytics&&<><div className="profileStats"><div><span>Заказов за период</span><strong>{analytics.orders}</strong></div><div><span>Размещений</span><strong>{analytics.published}</strong></div><div><span>Продажи (оплаченные)*</span><strong>{money(analytics.revenue)}</strong></div><div><span>Ожидают согласования</span><strong>{analytics.pending}</strong></div></div>
@@ -592,6 +595,14 @@ function App() {
         <button className="primary" disabled={sellerBusy} onClick={saveSellerRate}>{sellerBusy?'Сохранение...':'Сохранить тариф'}</button>
       </div></div>}
       {tab === 'profile' && <div className="profileOverview">
+        <section className="card planCard"><strong>Тариф {subscription?.plan??'FREE'}</strong>
+          <p>Каналов: до {subscription?.channelLimit??1} · Комиссия: {subscription?.commissionPercent??5}%</p>
+          <p>{subscription?.isPro?'Расширенная статистика': 'FREE без ограничения по времени · базовая статистика'}</p>
+          {subscription?.isPro&&subscription.expiresAt&&<p>Действует до {new Date(subscription.expiresAt).toLocaleDateString('ru-RU')}</p>}
+          {!subscription?.isPro&&<p>PRO: до 10 каналов, расширенная статистика, комиссия 2,5%.</p>}
+          <button className="primary" type="button" disabled={!subscription?.checkoutAvailable} onClick={()=>{}}>Оформить PRO через ЮKassa{subscription?.proPriceRub?' · '+subscription.proPriceRub+' ₽':''}</button>
+          {!subscription?.checkoutAvailable&&<p className="hint">{subscription?.checkoutMessage??'Подключение кассы ожидается'}</p>}
+        </section>
         <div className="profileIdentity"><div className="profileAvatar">{(telegramUser?.first_name || 'R').slice(0,1).toUpperCase()}</div><div><span className="catalogEyebrow">ЛИЧНЫЙ КАБИНЕТ</span><h2>{telegramUser?.first_name || 'Пользователь Reklio'}</h2><p>{telegramUser?.username ? '@'+telegramUser.username : 'Управление рекламой и каналами'}</p></div></div>
         <div className="profileSwitch"><button className={profileView==='seller'?'active':''} onClick={()=>setProfileView('seller')}>Мои каналы</button><button className={profileView==='buyer'?'active':''} onClick={()=>setProfileView('buyer')}>Рекламодатель</button></div>
         {profileView==='seller' ? <><div className="profileStats">
