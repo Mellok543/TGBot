@@ -230,8 +230,18 @@ public sealed class BotHandlers(Database database)
     private static readonly TimeSpan DisplayOffset = TimeSpan.FromHours(3);
     private static InlineKeyboardMarkup Home() => new(new[]
     {
-        new[] { InlineKeyboardButton.WithUrl("🌐 Открыть сайт Reklio", "https://reklio.site") }
+        new[] { new InlineKeyboardButton("🚀 Открыть Reklio")
+        {
+            WebApp = new WebAppInfo { Url = MiniAppUrl() }
+        } }
     });
+
+    private static string MiniAppUrl()
+    {
+        var configured = Environment.GetEnvironmentVariable("MINIAPP_URL");
+        return Uri.TryCreate(configured, UriKind.Absolute, out var uri) && uri.Scheme == Uri.UriSchemeHttps
+            ? uri.ToString() : "https://reklio.site";
+    }
 
     private static InlineKeyboardMarkup ForRole(string? role) => Home();
     private static InlineKeyboardMarkup OwnerHome() => new(new[]
@@ -580,12 +590,12 @@ public sealed class BotHandlers(Database database)
                     try { await bot.DeleteMessage(message.Chat.Id, cleanup.MessageId, cancellationToken: ct); }
                     catch (Telegram.Bot.Exceptions.ApiRequestException) { /* Older clients can retain the notice. */ }
                     await bot.SendMessage(message.Chat.Id,
-                        "🚀 Добро пожаловать в Reklio!\\n\\nНа сайте можно найти каналы для рекламы, узнать об услугах платформы и открыть приложение Reklio.\\n\\nНажмите кнопку ниже, чтобы перейти на сайт.",
+                        "🚀 Добро пожаловать в Reklio!\\n\\nПокупайте рекламу, подключайте свои каналы и управляйте размещениями в приложении.\\n\\nНажмите кнопку ниже, чтобы открыть Reklio.",
                         replyMarkup: Home(), cancellationToken: ct);
                 }
             }
             else if (message.Text?.StartsWith("/cancel", StringComparison.Ordinal) == true)
-                await bot.SendMessage(message.Chat.Id, "Действие отменено. Перейти на сайт можно по кнопке ниже.", replyMarkup: Home(), cancellationToken: ct);
+                await bot.SendMessage(message.Chat.Id, "Действие отменено. Откройте Reklio кнопкой ниже.", replyMarkup: Home(), cancellationToken: ct);
             return;
         }
 
