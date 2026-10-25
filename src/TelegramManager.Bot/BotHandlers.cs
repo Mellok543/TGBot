@@ -905,7 +905,7 @@ public sealed class BotHandlers(Database database)
                     var confirmed = await database.GetAdRequestAsync(confirmId, ct);
                     if (confirmed is not null)
                         await database.EnqueueNotificationToUserAsync(confirmId, confirmed.Value.Advertiser,
-                            $"✅ Заявка #{confirmId}: владелец согласовал размещение. Оплата ещё не получена. Откройте заказ, чтобы продолжить.", ct);
+                            $"✅ Заявка #{confirmId} одобрена!\nВладелец подтвердил размещение.\n💳 Следующий шаг — оплата в Reklio.", ct);
                 }
                 else await bot.SendMessage(origin.Chat.Id, "Не удалось подтвердить: заявка недоступна или время уже занято.", cancellationToken: ct);
                 break;
@@ -1076,7 +1076,7 @@ public sealed class BotHandlers(Database database)
                     var testOrder = await database.GetAdRequestAsync(testPaymentOrderId, ct);
                     if (testOrder is not null)
                         await database.EnqueueNotificationToUserAsync(testPaymentOrderId, testOrder.Value.Owner,
-                            $"🧪 Заказ #{testPaymentOrderId} оплачен в тестовом режиме (без денег).", ct);
+                            $"🧪 Тестовая оплата · заказ #{testPaymentOrderId}\n✅ Оплата имитирована, средства не списывались.\n📅 Ожидается публикация.", ct);
                 }
                 else await bot.SendMessage(origin.Chat.Id, "Тестовая оплата недоступна: проверьте статус заказа, время публикации и разрешение тестового аккаунта.", cancellationToken: ct);
                 break;
@@ -1092,7 +1092,7 @@ public sealed class BotHandlers(Database database)
                     var rejected = await database.GetAdRequestAsync(decisionId, ct);
                     if (rejected is not null)
                         await database.EnqueueNotificationToUserAsync(decisionId, rejected.Value.Advertiser,
-                            $"❌ Заявка #{decisionId} отклонена владельцем.", ct);
+                            $"❌ Заявка #{decisionId} отклонена\nВладелец не подтвердил размещение.\n🔎 Попробуйте выбрать другой канал в Reklio.", ct);
                 }
                 else await bot.SendMessage(origin.Chat.Id, "Заявка уже обработана.", cancellationToken: ct);
                 break;
