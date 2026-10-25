@@ -130,3 +130,25 @@ html{scroll-behavior:smooth;scroll-padding-top:90px}
  .lp-drawer-divider{height:1px;background:#47617d;margin:12px 0}
  .lp-mobile-drawer .lp-drawer-cta{margin-top:22px;background:linear-gradient(100deg,#13c8ee,#3483ff);color:#07182d;text-align:center;font-weight:800}
 }
+
+/* Dedicated channel detail page */
+.lp-card-link{background:linear-gradient(100deg,#1dd5f1,#2e86fe);border-radius:11px;color:#091b30!important;font-size:13px;font-weight:800;padding:12px 15px;text-align:center}
+.lp-channel-page{max-width:1164px;margin:0 auto;padding:20px 28px 85px}
+.lp-back-link{display:inline-block;color:#85caff!important;margin:10px 0 24px;font-size:14px}
+.lp-channel-page-hero{display:flex;align-items:center;gap:22px;padding:30px;background:linear-gradient(125deg,#1c385c,#101d36);border:1px solid #456a92;border-radius:22px}
+.lp-channel-page-hero .lp-catalog-avatar{height:85px;width:85px;font-size:39px;border-radius:22px}
+.lp-channel-page-hero h1{font-size:clamp(28px,4vw,45px);letter-spacing:-1px;margin:9px 0 12px}
+.lp-channel-page-hero p{font-size:15px;color:#bad0ea;line-height:1.6;margin:0 0 10px}
+.lp-channel-page-hero a{color:#6cc7ff}
+.lp-channel-layout{display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:18px;margin-top:20px;align-items:start}
+.lp-channel-layout>div{display:grid;gap:18px}
+.lp-detail-panel{border:1px solid #385979;background:#142740;border-radius:20px;padding:23px}
+.lp-detail-panel h2{font-size:21px;margin:0 0 20px}
+.lp-detail-note{font-size:12px;color:#a4bbd7;line-height:1.7;margin-top:17px}
+.lp-rate-row{display:flex;justify-content:space-between;gap:10px;padding:14px 0;border-bottom:1px solid #44628677;font-size:14px}
+.lp-rate-row strong{color:white}
+.lp-buy-link{display:block;text-align:center;border-radius:12px;background:linear-gradient(100deg,#1bd3ee,#3484ff);color:#071a32!important;font-weight:800;padding:16px 12px;margin-top:23px}
+.lp-review{border-top:1px solid #3c5777;padding:13px 0}
+.lp-review strong{color:#f7c766;letter-spacing:2px}
+.lp-review p{margin:7px 0;color:#c0d3e7;font-size:13px}
+@media(max-width:760px){.lp-channel-layout{grid-template-columns:1fr}.lp-channel-page{padding:12px 16px 65px}.lp-channel-page-hero{padding:19px;align-items:flex-start;gap:12px}.lp-channel-page-hero .lp-catalog-avatar{height:55px;width:55px;font-size:25px;flex-shrink:0}.lp-detail-panel{padding:17px}}
