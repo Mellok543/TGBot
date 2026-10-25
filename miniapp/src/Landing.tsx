@@ -21,7 +21,7 @@ function PublicCatalog(){
  },[]);
  const categories=useMemo(()=>[...new Set(channels.map(c=>c.category).filter(Boolean))].sort(),[channels]);
  const visible=useMemo(()=>channels.filter(c=>(!category||c.category===category)&&(!maxPrice||c.price<=Number(maxPrice))&&[c.title,c.description,c.category,c.username||''].join(' ').toLocaleLowerCase('ru').includes(search.trim().toLocaleLowerCase('ru')))
- .sort((a,b)=>(Boolean(b.promotedUntil)-Boolean(a.promotedUntil))||(sort==='price'?a.price-b.price:sort==='audience'?(b.subscribers||0)-(a.subscribers||0):sort==='cpm'?(a.avgViews&&a.avgViews>0?a.price/a.avgViews:Infinity)-(b.avgViews&&b.avgViews>0?b.price/b.avgViews:Infinity):0)),[channels,category,search,sort,maxPrice]);
+ .sort((a,b)=>(Number(Boolean(b.promotedUntil))-Number(Boolean(a.promotedUntil)))||(sort==='price'?a.price-b.price:sort==='audience'?(b.subscribers||0)-(a.subscribers||0):sort==='cpm'?(a.avgViews&&a.avgViews>0?a.price/a.avgViews:Infinity)-(b.avgViews&&b.avgViews>0?b.price/b.avgViews:Infinity):0)),[channels,category,search,sort,maxPrice]);
  const reset=()=>{setSearch('');setCategory('');setSort('default');setMaxPrice('');window.history.replaceState(null,'','/catalog');};
  const hasFilters=Boolean(search||category||maxPrice||sort!=='default');
  return <section id="catalog" className="lp-section lp-catalog lp-catalog-modern">
