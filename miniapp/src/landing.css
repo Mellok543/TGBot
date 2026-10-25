@@ -106,3 +106,12 @@ html{scroll-behavior:smooth;scroll-padding-top:90px}
 .lp-route-heading+.lp-section{padding-top:24px}
 .lp-nav-links a.active{color:#79d5ff}
 @media(max-width:760px){.lp-route-heading{padding:38px 17px 5px}.lp-route-heading h1{font-size:35px}}
+
+/* Mobile menu must sit above page sections and sticky navigation */
+.lp-nav{z-index:100;isolation:isolate}
+@media(max-width:760px){
+ .lp-nav-links.open{position:fixed!important;top:70px!important;left:12px!important;right:12px!important;z-index:120!important;display:flex!important;flex-direction:column!important;align-items:stretch!important;background:#122742!important;border:1px solid #567aa9!important;border-radius:16px;padding:18px!important;box-shadow:0 22px 65px #020711e8!important}
+ .lp-nav-links.open a{display:block;padding:12px 8px;border-radius:9px;color:#e7f1ff}
+ .lp-nav-links.open a:active{background:#244465}
+ .lp-mobile-menu{position:relative;z-index:130}
+}
