@@ -11,7 +11,6 @@ from datetime import datetime, timezone
 import pymysql
 from telethon import TelegramClient, functions, types
 from telethon.errors import RPCError
-from telethon.sessions import StringSession
 
 LOG = logging.getLogger("reklio-monitor")
 INTERVAL = 300
@@ -189,7 +188,11 @@ async def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--once", action="store_true")
     args = parser.parse_args()
-    client = TelegramClient(StringSession(), int(os.environ["TELEGRAM_API_ID"]),
+    # Persist the MTProto authorization between runs. A fresh StringSession on every
+    # cron execution repeatedly imports bot authorization and triggers Telegram FloodWait.
+    session_dir = Path.home() / ".local" / "share" / "reklio-mtproto"
+    session_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+    client = TelegramClient(str(session_dir / "monitor"), int(os.environ["TELEGRAM_API_ID"]),
                             os.environ["TELEGRAM_API_HASH"])
     await client.start(bot_token=os.environ["BOT_TOKEN"])
     try:
