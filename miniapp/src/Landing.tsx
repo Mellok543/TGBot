@@ -3,6 +3,10 @@ import './landing.css';
 const items=[{n:'01',title:'Выберите канал',desc:'Изучайте тематику, описание площадки и стоимость размещения до подачи заявки.'},{n:'02',title:'Запланируйте рекламу',desc:'Укажите время размещения и передайте готовый рекламный пост владельцу канала.'},{n:'03',title:'Следите за публикацией',desc:'Управляйте заказами через Telegram. Reklio проверяет доступность опубликованных сообщений.'}];
 type PublicChannel={id:number;title:string;category:string;price:number;description:string;username:string|null;subscribers:number|null;avgViews:number|null;promotedUntil?:string|null};
 const publicApi=import.meta.env.VITE_API_URL || 'https://api.reklio.site';
+function ChannelAvatar({id,title,className='lp-catalog-avatar'}:{id:number;title:string;className?:string}){
+ const [failed,setFailed]=useState(false);
+ return <span className={className} aria-hidden="true">{!failed&&<img src={publicApi+'/api/public/channels/'+id+'/avatar'} alt="" loading="lazy" onError={()=>setFailed(true)}/>}<span style={{display:failed?'':'none'}}>{title.slice(0,1).toUpperCase()}</span></span>;
+}
 function PublicCatalog(){
  const [channels,setChannels]=useState<PublicChannel[]>([]);
  const [search,setSearch]=useState(()=>new URLSearchParams(window.location.search).get('q')||'');
@@ -33,7 +37,7 @@ function PublicCatalog(){
   <div className="lp-catalog-status"><span aria-live="polite">{loading?'Загружаем площадки…':error?'Ошибка загрузки': 'Найдено каналов: '+visible.length}</span>{hasFilters&&<button type="button" onClick={reset}>Сбросить фильтры ×</button>}</div>
   {error&&<div className="lp-catalog-message" role="alert"><h3>Каталог временно недоступен</h3><p>{error}. Попробуйте обновить страницу.</p><button type="button" onClick={()=>window.location.reload()}>Обновить</button></div>}
   {!loading&&!error&&visible.length===0&&<div className="lp-catalog-message"><h3>Площадки не найдены</h3><p>Попробуйте изменить категорию, стоимость или поисковый запрос.</p><button type="button" onClick={reset}>Показать все каналы</button></div>}
-  <div className="lp-catalog-grid">{visible.map(c=><article key={c.id} className={c.promotedUntil?"lp-catalog-card lp-catalog-sponsored":"lp-catalog-card"}>{c.promotedUntil&&<div className="lp-sponsored-label">✦ Продвигается</div>}<div className="lp-catalog-heading"><span className="lp-catalog-avatar" aria-hidden="true">{c.title.slice(0,1).toUpperCase()}</span><div><strong>{c.title}</strong><small>{c.category||'Telegram-канал'}</small></div></div><p>{c.description||'Рекламная площадка в Telegram'}</p><div className="lp-catalog-metrics"><span>Подписчики <b>{c.subscribers?.toLocaleString('ru-RU')??'Нет данных'}</b></span><span>Средние просмотры <b>{c.avgViews?.toLocaleString('ru-RU')??'Нет данных'}</b></span><span>CPM <b>{c.avgViews&&c.avgViews>0?rub(c.price*1000/c.avgViews):'Нет данных'}</b></span></div><div className="lp-catalog-bottom"><div><small>Реклама от</small><strong>{rub(c.price)}</strong></div><a className="lp-card-link" href={'/channels/'+c.id}>Открыть канал ↗</a></div></article>)}</div>
+  <div className="lp-catalog-grid">{visible.map(c=><article key={c.id} className={c.promotedUntil?"lp-catalog-card lp-catalog-sponsored":"lp-catalog-card"}>{c.promotedUntil&&<div className="lp-sponsored-label">✦ Продвигается</div>}<div className="lp-catalog-heading"><ChannelAvatar id={c.id} title={c.title}/><div><strong>{c.title}</strong><small>{c.category||'Telegram-канал'}</small></div></div><p>{c.description||'Рекламная площадка в Telegram'}</p><div className="lp-catalog-metrics"><span>Подписчики <b>{c.subscribers?.toLocaleString('ru-RU')??'Нет данных'}</b></span><span>Средние просмотры <b>{c.avgViews?.toLocaleString('ru-RU')??'Нет данных'}</b></span><span>CPM <b>{c.avgViews&&c.avgViews>0?rub(c.price*1000/c.avgViews):'Нет данных'}</b></span></div><div className="lp-catalog-bottom"><div><small>Реклама от</small><strong>{rub(c.price)}</strong></div><a className="lp-card-link" href={'/channels/'+c.id}>Открыть канал ↗</a></div></article>)}</div>
  </section>;
 }
 function GettingStarted(){
@@ -73,7 +77,7 @@ function HomeFeatured(){
   {error&&<p className="lp-catalog-hint">Не удалось загрузить площадки. <a href="/catalog">Откройте каталог ↗</a></p>}
   {!loading&&!error&&channels.length===0&&<div className="lp-home-empty"><p>Площадки скоро появятся. Добавить свой канал можно через ReklioBot.</p><a href="https://t.me/ReklioBot">Подключить канал ↗</a></div>}
   <div className="lp-home-channel-grid">{channels.map(c=><a className={c.promotedUntil?"lp-home-channel lp-catalog-sponsored":"lp-home-channel"} href={'/channels/'+c.id} key={c.id}>
-   {c.promotedUntil&&<div className="lp-sponsored-label">✦ Продвигается</div>}<div className="lp-catalog-heading"><span className="lp-catalog-avatar">{c.title.slice(0,1).toUpperCase()}</span><div><strong>{c.title}</strong><small>{c.category||'Telegram-канал'}</small></div></div>
+   {c.promotedUntil&&<div className="lp-sponsored-label">✦ Продвигается</div>}<div className="lp-catalog-heading"><ChannelAvatar id={c.id} title={c.title}/><div><strong>{c.title}</strong><small>{c.category||'Telegram-канал'}</small></div></div>
    <p>{c.description||'Рекламная площадка в Telegram'}</p>
    <div className="lp-home-channel-meta"><span>{c.subscribers!==null?c.subscribers.toLocaleString('ru-RU')+' подписчиков':'Аудитория уточняется'}</span><span>От {rub(c.price)}</span></div>
    <span className="lp-home-channel-more">Подробнее о канале ↗</span>
@@ -119,7 +123,7 @@ function ChannelPage(){
   {loading&&!channel&&!error&&<div className="lp-detail-state" role="status">Загружаем информацию о площадке…</div>}
   {error&&<div className="lp-detail-state" role="alert"><h2>Не удалось открыть канал</h2><p>{error}</p><a href="/catalog">Вернуться в каталог →</a></div>}
   {channel&&<><div className="lp-channel-page-hero">
-   <span className="lp-catalog-avatar" aria-hidden="true">{channel.title.slice(0,1).toUpperCase()}</span>
+   <ChannelAvatar id={channel.id} title={channel.title}/>
    <div className="lp-channel-identity">{channel.promotedUntil&&<div className="lp-sponsored-label">✦ Продвигается</div>}<span className="lp-kicker">{channel.category||'TELEGRAM-КАНАЛ'}</span><h1>{channel.title}</h1>
     <p>{channel.description||'Рекламная площадка в Telegram. Уточняйте детали размещения перед оформлением заказа.'}</p>
     {channel.username&&<a className="lp-telegram-channel" href={'https://t.me/'+encodeURIComponent(channel.username.replace(/^@/,''))} target="_blank" rel="noopener noreferrer">Открыть канал в Telegram ↗</a>}
