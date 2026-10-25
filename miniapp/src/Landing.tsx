@@ -21,8 +21,8 @@ function PublicCatalog(){
  },[]);
  useEffect(()=>{
   const restore=()=>{
-   const match=window.location.pathname.match(/^\\/channels\\/(-?\\d+)\\/?$/);
-   setSelected(match?channels.find(c=>String(c.id)===match[1])||null:null);
+   const match=window.location.pathname.startsWith('/channels/') ? window.location.pathname.slice('/channels/'.length).replace(/\/$/,'') : '';
+   setSelected(match?channels.find(c=>String(c.id)===match)||null:null);
   };
   restore();
   window.addEventListener('popstate',restore);
