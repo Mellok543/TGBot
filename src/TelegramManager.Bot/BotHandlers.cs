@@ -590,7 +590,7 @@ public sealed class BotHandlers(Database database)
                     try { await bot.DeleteMessage(message.Chat.Id, cleanup.MessageId, cancellationToken: ct); }
                     catch (Telegram.Bot.Exceptions.ApiRequestException) { /* Older clients can retain the notice. */ }
                     await bot.SendMessage(message.Chat.Id,
-                        "🚀 Добро пожаловать в Reklio!\\n\\nПокупайте рекламу, подключайте свои каналы и управляйте размещениями в приложении.\\n\\nНажмите кнопку ниже, чтобы открыть Reklio.",
+                        "🚀 Добро пожаловать в Reklio!\n\nПокупайте рекламу, подключайте свои каналы и управляйте размещениями в приложении.\n\nНажмите кнопку ниже, чтобы открыть Reklio.",
                         replyMarkup: Home(), cancellationToken: ct);
                 }
             }
