@@ -64,7 +64,7 @@ catch(MySqlException ex)
 var likesAvailable=false;
 try
 {
-    await using var likesDb=app.Services.GetRequiredService<MySqlDataSource>();
+    var likesDb=app.Services.GetRequiredService<MySqlDataSource>();
     await using var createLikes=likesDb.CreateCommand("""
         CREATE TABLE IF NOT EXISTS reklio_channel_likes (
             user_id BIGINT NOT NULL,
