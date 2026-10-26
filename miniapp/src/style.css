@@ -174,3 +174,15 @@
 .channelAliasPreview{display:flex;flex-direction:column;gap:5px;overflow-wrap:anywhere;margin:10px 0;padding:10px 12px;border-radius:10px;background:rgba(125,170,215,.07)}
 .channelAliasPreview small{font-size:11px}.channelAliasPreview span{font-size:12px;opacity:.83}
 @media(max-width:380px){.channelAliasPrefix,.channelDirectLinks .channelAliasEditor input{font-size:11px}}
+
+/* Unified secondary buttons for Telegram's light and dark WebViews. */
+.app button.secondary,.app .bookingPanel button.secondary{
+  appearance:none;-webkit-appearance:none;
+  background:#20314b;color:#e3ecff;border:1px solid #42618a;
+  border-radius:12px;padding:12px 15px;font:inherit;font-size:14px;font-weight:650;
+  cursor:pointer;box-shadow:none;
+}
+.app button.secondary:active{background:#2c4162}
+.app button.secondary:disabled{opacity:.5;cursor:not-allowed}
+.app button.secondary.small{padding:8px 12px;font-size:12px}
+.channelDirectActions button{margin-top:8px}
