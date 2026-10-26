@@ -177,8 +177,23 @@ const legalPages={
  ]}
 } as const;
 function LegalPage({kind}:{kind:keyof typeof legalPages}){const page=legalPages[kind];return <section className="lp-section lp-legal" id={kind}><span className="lp-kicker">ДОКУМЕНТЫ REKLIO</span><h1>{page.title}</h1><p className="lp-legal-note">Предварительная редакция для ознакомления. Не является утверждённой публичной офертой.</p>{page.sections.map(([title,body])=><article key={title}><h2>{title}</h2><p>{body}</p></article>)}<a href="/" className="lp-legal-back">← На главную</a></section>}
-export default function Landing(){
+export default function ChannelAliasRedirect(){
+ const alias=window.location.pathname.match(/^\/ad\/([a-zA-Z0-9_]{4,32})\/?$/)?.[1];
+ const [message,setMessage]=useState('Ищем канал и открываем Reklio в Telegram…');
+ useEffect(()=>{
+  if(!alias){setMessage('Неверный адрес канала');return;}
+  const controller=new AbortController();
+  fetch(publicApi+'/api/public/channel-alias/'+encodeURIComponent(alias),{signal:controller.signal})
+   .then(async r=>{if(!r.ok)throw new Error(r.status===404?'Такой адрес не найден или канал скрыт.':'Не удалось получить канал.');return r.json() as Promise<{channelId:number}>;})
+   .then(v=>{if(!controller.signal.aborted)window.location.replace('https://t.me/ReklioBot?startapp=ad_'+v.channelId);})
+   .catch(e=>{if(!controller.signal.aborted)setMessage(e instanceof Error?e.message:'Ошибка открытия');});
+  return ()=>controller.abort();
+ },[alias]);
+ return <div className="lp"><main className="lp-section" style={{minHeight:'70vh',display:'grid',placeItems:'center',textAlign:'center',padding:'32px'}}><div><h1>Reklio</h1><p>{message}</p><a href="https://t.me/ReklioBot">Открыть Reklio в Telegram</a></div></main></div>;
+}
+function Landing(){
  const path=window.location.pathname;
+ if(/^\/ad\//.test(path))return <ChannelAliasRedirect/>;
  const legalKind=path==='/terms'?'terms':path==='/privacy'?'privacy':path==='/advertising-rules'?'advertising':null;
  const [mobileMenu,setMobileMenu]=useState(false);
  return <div className="lp">
