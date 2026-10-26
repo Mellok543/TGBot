@@ -159,3 +159,10 @@
 .fastOrderIntro{padding:16px;margin:16px 0;border:1px solid rgba(105,168,234,.32);background:rgba(68,117,170,.09);border-radius:14px}
 .fastOrderIntro strong{display:block;margin-bottom:7px}.fastOrderIntro p{margin:0 0 12px;font-size:13px;line-height:1.6}.fastOrderIntro .primary{width:100%}
 #reklio-order-steps{scroll-margin-top:20px}
+
+.purchaseStepper{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px;margin:24px 0 12px;scroll-margin-top:16px}
+.purchaseStepper span{border:1px solid rgba(140,157,187,.26);border-radius:9px;padding:9px 4px;text-align:center;font-size:12px;color:var(--muted,#aab8d0)}
+.purchaseStepper span.active{border-color:rgba(91,165,230,.8);background:rgba(91,165,230,.12);color:inherit;font-weight:700}
+.purchaseNavigation{display:flex;align-items:center;gap:10px;margin:18px 0}.purchaseNavigation button{flex:1;min-width:0}
+.purchaseNext{width:100%;margin:16px 0}.ownerChecklist{padding:14px;border:1px solid rgba(120,154,191,.3);border-radius:12px;margin:14px 0;background:rgba(98,138,183,.07)}
+.ownerChecklist strong{display:block;margin-bottom:10px}.ownerChecklist div{padding:5px 0;font-size:13px}.ownerChecklist div span{font-weight:800;margin-right:9px}
