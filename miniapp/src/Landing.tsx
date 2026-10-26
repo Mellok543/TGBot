@@ -181,7 +181,7 @@ function ChannelAliasRedirect(){
  const alias=window.location.pathname.match(/^\/ad\/([a-zA-Z0-9_]{4,32})\/?$/)?.[1];
  const [message,setMessage]=useState('Ищем канал и открываем Reklio в Telegram…');
  useEffect(()=>{
-  if(!alias){setMessage('Неверный адрес канала');return;}
+  if(!alias){window.location.replace('/');return;}
   const controller=new AbortController();
   fetch(publicApi+'/api/public/channel-alias/'+encodeURIComponent(alias),{signal:controller.signal})
    .then(async r=>{if(!r.ok)throw new Error(r.status===404?'Такой адрес не найден или канал скрыт.':'Не удалось получить канал.');return r.json() as Promise<{channelId:number}>;})
@@ -193,7 +193,7 @@ function ChannelAliasRedirect(){
 }
 export default function Landing(){
  const path=window.location.pathname;
- const aliasRoute=/^\/ad\/[a-zA-Z0-9_]{4,32}\/?$/.test(path);
+ const aliasRoute=window.location.hostname.replace(/^www\./,'')==='reklio.site' && /^\/ad\/[a-zA-Z0-9_]{4,32}\/?$/.test(path);
  const legalKind=path==='/terms'?'terms':path==='/privacy'?'privacy':path==='/advertising-rules'?'advertising':null;
  const [mobileMenu,setMobileMenu]=useState(false);
  if(aliasRoute)return <ChannelAliasRedirect/>;
