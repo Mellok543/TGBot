@@ -155,3 +155,7 @@
 .channelDirectLinks h3{margin:0 0 8px}.channelDirectLinks p,.channelDirectLinks small{font-size:13px;line-height:1.5;color:var(--muted,#aab8d0)}
 .channelDirectLinks input{box-sizing:border-box;display:block;width:100%;padding:12px;margin:12px 0;border:1px solid rgba(155,172,211,.3);border-radius:10px;background:rgba(10,15,28,.28);color:inherit;min-width:0}
 .channelDirectActions{display:flex;flex-wrap:wrap;gap:9px;margin-bottom:8px}.channelDirectActions button{flex:1;min-width:145px}
+
+.fastOrderIntro{padding:16px;margin:16px 0;border:1px solid rgba(105,168,234,.32);background:rgba(68,117,170,.09);border-radius:14px}
+.fastOrderIntro strong{display:block;margin-bottom:7px}.fastOrderIntro p{margin:0 0 12px;font-size:13px;line-height:1.6}.fastOrderIntro .primary{width:100%}
+#reklio-order-steps{scroll-margin-top:20px}
