@@ -232,7 +232,7 @@ async Task<List<CatalogChannel>> LoadCatalog(MySqlDataSource db,int max,Cancella
     if(rows.Count==0)return rows;
     var ids=string.Join(",",rows.Select(c=>c.Id.ToString(System.Globalization.CultureInfo.InvariantCulture)));
     var byId=rows.ToDictionary(c=>c.Id);
-    async Task Optional(string name,string sql,Action<MySqlDataReader,CatalogChannel> assign)
+    async Task Optional(string name,string sql,Action<System.Data.Common.DbDataReader,CatalogChannel> assign)
     {
         try
         {
