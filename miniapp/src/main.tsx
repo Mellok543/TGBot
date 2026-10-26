@@ -128,6 +128,7 @@ function App() {
   const [adminSearchBusy,setAdminSearchBusy]=useState(false);
   const [isDisputeAdmin, setIsDisputeAdmin] = useState(false);
   const [selected, setSelected] = useState<Channel | null>(null);
+  const [purchaseStep,setPurchaseStep]=useState<1|2|3>(1);
   const [rates, setRates] = useState<Rate[]>([]);
   const [reservedSlots, setReservedSlots] = useState<string[]>([]);
   const [availabilityKnown, setAvailabilityKnown] = useState(false);
@@ -182,7 +183,7 @@ function App() {
   const [busy, setBusy] = useState(false);
   const [bookingMessage, setBookingMessage] = useState('');
   async function openChannel(c: Channel) {
-    setSelected(c); setBookingMessage(''); setRates([]); setHistory([]); setChannelReviews([]); setRateId(''); setReservedSlots([]); setAvailabilityKnown(false); setDetailsLoading(true);
+    setSelected(c);setPurchaseStep(1); setBookingMessage(''); setRates([]); setHistory([]); setChannelReviews([]); setRateId(''); setReservedSlots([]); setAvailabilityKnown(false); setDetailsLoading(true);
     const [ratesResult, historyResult, slotsResult] = await Promise.allSettled([
       get<Rate[]>('/api/channels/' + c.id + '/rates'),
       get<HistoryPoint[]>('/api/channels/' + c.id + '/history'),
@@ -566,7 +567,7 @@ function App() {
         <button className="back" onClick={()=>setSelected(null)}>← Назад в каталог</button>
         <div className="detailHeading"><ChannelAvatar id={selected.id} title={selected.title}/><div><h2>{selected.title}</h2><span className="detailCategory">{selected.category}</span></div></div>
         {selected.username && <button className="link" onClick={()=>tg?.openTelegramLink('https://t.me/'+selected.username!.replace(/^@/,''))}>Перейти в канал <ArrowUpRight size={15}/></button>}
-        <p className="description">{selected.description || 'Рекламное размещение в Telegram-канале'}</p><div className="fastOrderIntro"><strong>Покупка рекламы в 3 шага</strong><p>1. Выберите длительность · 2. Укажите текст, дату и время · 3. Отправьте заявку владельцу.</p><button type="button" className="primary" onClick={()=>document.getElementById('reklio-order-steps')?.scrollIntoView({behavior:'smooth',block:'start'})}>Перейти к покупке ↓</button></div>
+        <p className="description">{selected.description || 'Рекламное размещение в Telegram-канале'}</p><div className="fastOrderIntro"><strong>Оформление · шаг {purchaseStep} из 3</strong><p>1. Выберите длительность · 2. Укажите текст, дату и время · 3. Отправьте заявку владельцу.</p><button type="button" className="primary" onClick={()=>document.getElementById('reklio-order-steps')?.scrollIntoView({behavior:'smooth',block:'start'})}>Перейти к покупке ↓</button></div>
         <h3 className="detailSubtitle">Статистика канала</h3>
         <div className="detailStats">
           <div><small>Подписчики</small><strong>{selected.subscribers === null ? 'Нет данных' : selected.subscribers.toLocaleString('ru-RU')}</strong></div>
@@ -590,16 +591,19 @@ function App() {
           const coordinates=points.map((p,i)=>`${(i/(points.length-1)*100).toFixed(2)},${(95-p.avgViews/max*85).toFixed(2)}`).join(' ');
           return <div className="historyCard"><svg viewBox="0 0 100 100" preserveAspectRatio="none" role="img" aria-label="График средних просмотров публикаций"><polyline points={coordinates} fill="none" stroke="#63dec9" strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" vectorEffect="non-scaling-stroke"/></svg><div className="historyLabels"><span>{points[0].day}</span><span>{points[points.length-1].day}</span></div><small>Последнее измерение: {points[points.length-1].avgViews.toLocaleString('ru-RU')} просмотров · {points.length} дней с данными</small></div>;
         })()}
-        <h3 className="detailSubtitle" id="reklio-order-steps">Шаг 1 · Выберите срок размещения</h3>
+        <div className="purchaseStepper" id="reklio-order-steps"><span className={purchaseStep===1?'active':''}>1 · Тариф</span><span className={purchaseStep===2?'active':''}>2 · Публикация</span><span className={purchaseStep===3?'active':''}>3 · Проверка</span></div>
+        {purchaseStep===1&&<><h3 className="detailSubtitle">Шаг 1 · Выберите срок размещения</h3>
         <div className="rateCards">{rates.map(rate=><button type="button" key={rate.id} aria-pressed={rateId===String(rate.id)} className={rateId===String(rate.id)?'rateCard picked':'rateCard'} onClick={()=>setRateId(String(rate.id))}><span>{rate.hours===0?'Навсегда':rate.hours+' ч размещения'}</span><strong>{money(rate.price)}</strong><small>{rateId===String(rate.id)?'✓ Выбрано':'Выбрать тариф'}</small></button>)}</div>
         {!rates.length && <p className="description">Владелец пока не добавил тарифы.</p>}
-        <h3 className="detailSubtitle">Шаг 2 · Рекламный материал и время</h3><label className="field">Текст рекламного поста<textarea value={adText} maxLength={4096} rows={5} onChange={e=>setAdText(e.target.value)} placeholder="Введите рекламный текст"/></label>
+        <button type="button" className="primary purchaseNext" disabled={!chosenRate} onClick={()=>setPurchaseStep(2)}>Далее →</button></>}
+        {purchaseStep===2&&<><h3 className="detailSubtitle">Шаг 2 · Рекламный материал и время</h3><label className="field">Текст рекламного поста<textarea value={adText} maxLength={4096} rows={5} onChange={e=>setAdText(e.target.value)} placeholder="Введите рекламный текст"/></label>
         <div className="field"><span>Дата публикации (ваш часовой пояс)</span><div className="dayScroller">{days.map(d=><button type="button" key={d.value} disabled={!Array.from({length:24},(_,i)=>String(i).padStart(2,'0')).some(h=>Array.from({length:12},(_,i)=>String(i*5).padStart(2,'0')).some(m=>isAvailableSlot(d.value,h,m)))} className={day===d.value?'dayTile chosen':'dayTile'} onClick={()=>setDay(d.value)}>{new Date(d.value+'T12:00:00').toLocaleDateString('ru-RU',{weekday:'short'})}<strong>{new Date(d.value+'T12:00:00').getDate()}</strong><small>{new Date(d.value+'T12:00:00').toLocaleDateString('ru-RU',{month:'short'})}</small></button>)}</div></div>
         <div className="field"><span>Время публикации</span><div className="timeGrid"><select aria-label="Часы" value={activeHour} onChange={e=>setHour(e.target.value)}>{hoursList.map(h=><option key={h} value={h}>{h} ч</option>)}</select><select aria-label="Минуты" value={activeMinute} onChange={e=>setMinute(e.target.value)}>{minutesList.map(m=><option key={m} value={m}>{m} мин</option>)}</select></div><small className="hint">Только свободное время от 1 часа до 90 дней вперёд, по часам вашего телефона. {availabilityKnown ? 'Занятые слоты проверяются.' : 'Доступность будет проверена при оформлении.'}</small>{availabilityKnown && conflicts(selectedDateTime) && <span className="slotWarning">Выбранное время уже занято.</span>}</div>
-        <div className="orderPreview"><h3>Шаг 3 · Проверьте заказ</h3><div><span>Канал</span><b>{selected.title}</b></div><div><span>Тариф</span><b>{chosenRate ? chosenRate.hours+' ч' : 'Не выбран'}</b></div><div><span>Размещение</span><b>{day ? new Date(day+'T12:00:00').toLocaleDateString('ru-RU')+' · '+(activeHour||'--')+':'+(activeMinute||'--') : 'Дата не выбрана'}</b></div><div className="previewTotal"><span>Цена размещения</span><strong>{chosenRate ? money(chosenRate.price) : '—'}</strong></div><div><span>Сервисный сбор Reklio</span><b>{chosenRate ? money(Math.round(chosenRate.price*5)/100) : '—'}</b></div><div className="previewTotal"><span>Итого к оплате</span><strong>{chosenRate ? money(chosenRate.price+Math.round(chosenRate.price*5)/100) : '—'}</strong></div></div>
+        <div className="purchaseNavigation"><button type="button" className="secondary" onClick={()=>setPurchaseStep(1)}>← К тарифам</button><button type="button" className="primary" disabled={!adText.trim()||!day||!chosenRate||!isAvailableSlot(day,activeHour,activeMinute)||conflicts(selectedDateTime)} onClick={()=>setPurchaseStep(3)}>Проверить заявку →</button></div></>}
+        {purchaseStep===3&&<><div className="orderPreview"><h3>Шаг 3 · Проверьте заказ</h3><div><span>Канал</span><b>{selected.title}</b></div><div><span>Тариф</span><b>{chosenRate ? chosenRate.hours+' ч' : 'Не выбран'}</b></div><div><span>Размещение</span><b>{day ? new Date(day+'T12:00:00').toLocaleDateString('ru-RU')+' · '+(activeHour||'--')+':'+(activeMinute||'--') : 'Дата не выбрана'}</b></div><div className="previewTotal"><span>Цена размещения</span><strong>{chosenRate ? money(chosenRate.price) : '—'}</strong></div><div><span>Сервисный сбор Reklio</span><b>{chosenRate ? money(Math.round(chosenRate.price*5)/100) : '—'}</b></div><div className="previewTotal"><span>Итого к оплате</span><strong>{chosenRate ? money(chosenRate.price+Math.round(chosenRate.price*5)/100) : '—'}</strong></div></div>
         <p className="description">После отправки владелец должен согласовать заявку. Оплата станет доступна после согласования.</p>
         {bookingMessage && <div className="notice">{bookingMessage}</div>}
-        <button className="primary" disabled={busy || !chosenRate || conflicts(selectedDateTime)} onClick={submitOrder}>{busy?'Отправка...':'Отправить заявку'}</button>
+        <div className="purchaseNavigation"><button type="button" className="secondary" onClick={()=>setPurchaseStep(2)}>← Изменить</button><button className="primary" disabled={busy || !chosenRate || conflicts(selectedDateTime)} onClick={submitOrder}>{busy?'Отправка...':'Отправить заявку'}</button></div></>
       </div></div>}
       {error && <div className="notice">{error}<button onClick={()=>setRetry(n=>n+1)}>Повторить</button></div>}
       {loading && <div className="muted loading"><RefreshCw size={16}/> Загрузка...</div>}
