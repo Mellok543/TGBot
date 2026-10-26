@@ -291,6 +291,9 @@ async Task<List<CatalogChannel>> LoadCatalog(MySqlDataSource db,int max,Cancella
             app.Logger.LogWarning("Catalog {Field} unavailable: MySQL {ErrorCode}",name,ex.Number);
         }
     }
+    // Catalog prices must reflect the cheapest active rate, not the legacy channel base price.
+    await Optional("rates","SELECT channel_id,MIN(price_rub) FROM channel_duration_rates WHERE channel_id IN (@ids) AND is_active=TRUE GROUP BY channel_id",
+        (r,c)=>c.Price=r.GetDecimal(1));
     await Optional("likes","SELECT channel_id,COUNT(*) FROM reklio_channel_votes WHERE channel_id IN (@ids) AND voted_at>=DATE_FORMAT(UTC_TIMESTAMP(),'%Y-%m-01') GROUP BY channel_id",
         (r,c)=>c.Likes=r.GetInt64(1));
     await Optional("promotion","SELECT channel_id,active_until FROM channel_promotions WHERE channel_id IN (@ids) AND active_until>UTC_TIMESTAMP()",
@@ -1756,7 +1759,7 @@ sealed class CatalogChannel(long id,string title,string category,decimal price,s
     public long Id {get;}=id;
     public string Title {get;}=title;
     public string Category {get;}=category;
-    public decimal Price {get;}=price;
+    public decimal Price {get;set;}=price;
     public string Description {get;}=description;
     public string? Username {get;}=username;
     public int? Subscribers {get;set;}
