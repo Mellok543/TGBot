@@ -121,7 +121,7 @@ function ChannelPage(){
  },[id]);
  const rates=detail?.rates??[];
  const lowest=rates.length?Math.min(...rates.map(r=>r.price)):channel?.price??0;
- const link=channel?'https://t.me/ReklioBot?start=ad_'+channel.id:'https://t.me/ReklioBot';
+ const link=channel?'https://t.me/ReklioBot?startapp=ad_'+channel.id:'https://t.me/ReklioBot?startapp';
  return <section className="lp-channel-page">
   <div className="lp-channel-breadcrumb"><a href="/catalog">Каталог каналов</a><span aria-hidden="true">/</span><span>{channel?.title||'Площадка'}</span></div>
   {loading&&!channel&&!error&&<div className="lp-detail-state" role="status">Загружаем информацию о площадке…</div>}
@@ -147,8 +147,8 @@ function ChannelPage(){
   <aside className="lp-detail-panel lp-detail-aside"><span className="lp-kicker">РАЗМЕЩЕНИЕ РЕКЛАМЫ</span><h2>Выберите формат</h2>
    {detailsError?<p className="lp-detail-note">Тарифы временно недоступны. Актуальные условия можно проверить в Telegram.</p>:!detail?<p className="lp-detail-note">Загружаем тарифы…</p>:rates.length?rates.map((rate,i)=><div className="lp-rate-row" key={i}><span>{rate.hours===0?'Без автоматического удаления':rate.hours%24===0?rate.hours/24+' сут.':rate.hours+' ч.'}</span><strong>{rub(rate.price)}</strong></div>):<p className="lp-detail-note">Дополнительные тарифы пока не заданы. Уточните условия в Telegram.</p>}
    <div className="lp-price-start"><small>Стоимость размещения от</small><strong>{rub(lowest)}</strong></div>
-   <a className="lp-buy-link" href={link}>Купить рекламу в Telegram ↗</a>
-   <p className="lp-detail-note">Перейдите в @ReklioBot: он откроет предложение этого канала. Дата, материалы и заказ согласовываются в Telegram.</p>
+   <a className="lp-buy-link" href={link}>Перейти к оформлению рекламы ↗</a>
+   <p className="lp-detail-note">Откроется Reklio с выбранным каналом. Укажите срок, дату публикации и рекламный материал — искать площадку повторно не нужно.</p>
    <div className="lp-promo-entry"><strong>Владелец канала?</strong><p>Выделите площадку цветом и поднимите её выше остальных в каталоге.</p><div><span>7 дней · 199 ₽</span><span>30 дней · 499 ₽</span></div><span>Покупка продвижения скоро появится в Mini App.</span></div>
   </aside></div></>}
  </section>;
