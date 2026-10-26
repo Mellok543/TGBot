@@ -25,7 +25,7 @@ type FinanceData = {pending:number;readyForReview:number;readyNet:number;paid:nu
 type OrderSummary = { incomingPending:number; completedSales:number; completedPurchases:number; salesVolume:number; purchaseVolume:number; upcomingSales:number };
 type Order = { id: number; channel: string; price: number; status: string; createdAt: string; isOwner: boolean; text: string; scheduledAt: string | null; durationHours: number | null; paymentStatus:string; payoutStatus:string; isTest:boolean;disputeReason:string|null;publicationIssue:string|null };
 type ChannelAnalytics={days:number;points:HistoryPoint[];orders:number;published:number;revenue:number;pending:number};
-type Mine = { id: number; title: string; listed: boolean; price: number; category: string };
+type Mine = { id: number; title: string; listed: boolean; price: number; category: string; alias?:string|null };
 type SellerRate = Rate & { active: boolean };
 type Subscription={plan:'FREE'|'PRO';isPro:boolean;expiresAt:string|null;channelLimit:number;commissionPercent:number;fullAnalytics:boolean;proPriceRub:number|null;checkoutAvailable:boolean;checkoutMessage:string};
 type Tab = 'catalog' | 'orders' | 'channels' | 'profile';
@@ -351,6 +351,7 @@ function App() {
   const [mine, setMine] = useState<Mine[]>([]);
   const [editingChannel, setEditingChannel] = useState<Mine | null>(null);
   const [sellerRates, setSellerRates] = useState<SellerRate[]>([]);
+  const [aliasDraft,setAliasDraft]=useState('');
   const [analyticsPeriod,setAnalyticsPeriod] = useState<7|30|90>(7);
   const [analytics,setAnalytics] = useState<ChannelAnalytics|null>(null);
   const [analyticsLoading,setAnalyticsLoading] = useState(false);
@@ -386,9 +387,22 @@ function App() {
   const [sellerBusy, setSellerBusy] = useState(false);
   const [sellerMessage, setSellerMessage] = useState('');
   async function loadSellerRates(channel: Mine) {
-    setEditingChannel(channel); setSellerMessage(''); setSellerRates([]);setAnalyticsPeriod(subscription?.isPro?30:7);void loadChannelAnalytics(channel.id,subscription?.isPro?30:7);
+    setEditingChannel(channel);setAliasDraft(channel.alias||''); setSellerMessage(''); setSellerRates([]);setAnalyticsPeriod(subscription?.isPro?30:7);void loadChannelAnalytics(channel.id,subscription?.isPro?30:7);
     try { setSellerRates(await get<SellerRate[]>('/api/my-channels/'+channel.id+'/rates')); }
     catch(e) { setSellerMessage(e instanceof Error ? e.message : 'Ошибка загрузки тарифов'); }
+  }
+  async function saveChannelAlias(){
+    if(!editingChannel||sellerBusy)return;
+    const alias=aliasDraft.trim().toLowerCase();
+    if(!/^[a-z0-9_]{4,32}$/.test(alias)){setSellerMessage('Укажите от 4 до 32 латинских букв, цифр или _');return;}
+    setSellerBusy(true);setSellerMessage('');
+    try{
+      const response=await post<{alias:string;url:string}>('/api/my-channels/'+editingChannel.id+'/alias',{alias});
+      setEditingChannel({...editingChannel,alias:response.alias});
+      setMine(prev=>prev.map(c=>c.id===editingChannel.id?{...c,alias:response.alias}:c));
+      setSellerMessage('Адрес сохранён: '+response.url);
+    }catch(e){setSellerMessage(e instanceof Error?e.message:'Не удалось сохранить адрес');}
+    finally{setSellerBusy(false);}
   }
   async function saveSellerRate() {
     if (!editingChannel || sellerBusy) return;
@@ -626,7 +640,12 @@ function App() {
         <button className="back" onClick={()=>setEditingChannel(null)}>← К моим каналам</button>
         <h2>{editingChannel.title}</h2><div className="ownerChecklist"><strong>Подготовка к продажам</strong><div><span>✓</span> 1. Канал подключён</div><div><span>{editingChannel.category && editingChannel.category!=='Другое'?'✓':'○'}</span> 2. Выберите категорию</div><div><span>{sellerRates.some(r=>r.active)?'✓':'○'}</span> 3. Добавьте рекламный тариф</div><div><span>{editingChannel.listed?'✓':'○'}</span> 4. Опубликуйте канал и поделитесь ссылкой</div></div>
         <p className="description">{editingChannel.listed?'Канал виден покупателям':'Канал скрыт из каталога'}</p><label className="field">Категория канала<select value={CHANNEL_CATEGORIES.includes(editingChannel.category)?editingChannel.category:''} disabled={sellerBusy} onChange={e=>void saveChannelCategory(e.target.value)}><option value="" disabled>Выберите категорию</option>{CHANNEL_CATEGORIES.map(item=><option key={item} value={item}>{item}</option>)}</select><small className="hint">Категория отображается в каталоге и используется при фильтрации.</small></label>{sellerMessage&&<div className="notice">{sellerMessage}</div>}
-        {sellerRates.some(r=>r.active)&&editingChannel.listed&&<section className="channelDirectLinks"><h3>🔗 Ссылка для заказа рекламы</h3><p>Отправьте эту ссылку рекламодателю. Она открывает Mini App Reklio сразу с выбранным каналом, ценами и оформлением заказа.</p><input readOnly aria-label="Индивидуальная ссылка канала" value={'https://t.me/ReklioBot?startapp=ad_'+editingChannel.id} onFocus={e=>e.currentTarget.select()}/><div className="channelDirectActions"><button className="primary" type="button" onClick={()=>{void navigator.clipboard.writeText('https://t.me/ReklioBot?startapp=ad_'+editingChannel.id).then(()=>setSellerMessage('Ссылка скопирована')).catch(()=>setSellerMessage('Выделите ссылку в поле и скопируйте её'));}}>Скопировать ссылку</button><button className="secondary" type="button" onClick={()=>tg?.openTelegramLink('https://t.me/ReklioBot?startapp=ad_'+editingChannel.id)}>Проверить через бота</button></div><small>Ссылка постоянная и принадлежит только этому каналу. Заказы других каналов по ней не показываются.</small></section>}{(!sellerRates.some(r=>r.active)||!editingChannel.listed)&&<p className="notice">Ссылка для покупателей появится после добавления активного тарифа и публикации канала.</p>}<section className="channelPromotionPanel"><h3>🚀 Продвижение канала</h3><p>Выделение карточки и приоритет в каталоге Reklio. Доступно на тарифах FREE и PRO.</p><div className="promotionPrices"><div><strong>7 дней</strong><span>199 ₽</span></div><div><strong>30 дней</strong><span>499 ₽</span></div></div><button className="primary" type="button" disabled>Оплата продвижения скоро появится</button><small className="hint">Платежи будут доступны после подключения кассы.</small></section>
+        {sellerRates.some(r=>r.active)&&editingChannel.listed&&<section className="channelDirectLinks"><h3>🔗 Персональный адрес канала</h3>
+        <p>Придумайте короткую ссылку: например, reklio.site/ad/gaming. Она откроет Mini App с покупкой рекламы именно в этом канале.</p>
+        <label className="field">Ваш адрес<input type="text" autoComplete="off" inputMode="url" maxLength={32} value={aliasDraft} placeholder="gaming" onChange={e=>setAliasDraft(e.target.value.toLowerCase())}/></label>
+        <button className="secondary" disabled={sellerBusy||aliasDraft===editingChannel.alias} type="button" onClick={()=>void saveChannelAlias()}>Сохранить адрес</button>
+        <small>4–32 символа: a–z, 0–9 и _. Имя должно быть свободным. После смены старый адрес отключится.</small>
+        <h3>🔗 Ссылка для заказа рекламы</h3><p>Отправьте эту ссылку рекламодателю. Она открывает Mini App Reklio сразу с выбранным каналом, ценами и оформлением заказа.</p><input readOnly aria-label="Индивидуальная ссылка канала" value={(editingChannel.alias?'https://reklio.site/ad/'+editingChannel.alias:'https://t.me/ReklioBot?startapp=ad_'+editingChannel.id)} onFocus={e=>e.currentTarget.select()}/><div className="channelDirectActions"><button className="primary" type="button" onClick={()=>{void navigator.clipboard.writeText((editingChannel.alias?'https://reklio.site/ad/'+editingChannel.alias:'https://t.me/ReklioBot?startapp=ad_'+editingChannel.id)).then(()=>setSellerMessage('Ссылка скопирована')).catch(()=>setSellerMessage('Выделите ссылку в поле и скопируйте её'));}}>Скопировать ссылку</button><button className="secondary" type="button" onClick={()=>tg?.openTelegramLink((editingChannel.alias?'https://reklio.site/ad/'+editingChannel.alias:'https://t.me/ReklioBot?startapp=ad_'+editingChannel.id))}>Проверить через бота</button></div><small>Ссылка постоянная и принадлежит только этому каналу. Заказы других каналов по ней не показываются.</small></section>}{(!sellerRates.some(r=>r.active)||!editingChannel.listed)&&<p className="notice">Ссылка для покупателей появится после добавления активного тарифа и публикации канала.</p>}<section className="channelPromotionPanel"><h3>🚀 Продвижение канала</h3><p>Выделение карточки и приоритет в каталоге Reklio. Доступно на тарифах FREE и PRO.</p><div className="promotionPrices"><div><strong>7 дней</strong><span>199 ₽</span></div><div><strong>30 дней</strong><span>499 ₽</span></div></div><button className="primary" type="button" disabled>Оплата продвижения скоро появится</button><small className="hint">Платежи будут доступны после подключения кассы.</small></section>
         <div className="analyticsPanel"><h3>Аналитика канала</h3>{!subscription?.isPro&&<p className="hint">FREE: базовая статистика за 7 дней. Расширенные периоды и аналитика доступны в PRO.</p>}<div className="analyticsPeriods">{(subscription?.isPro?[7,30,90] as const:[7] as const).map(d=><button key={d} className={analyticsPeriod===d?'active':''} onClick={()=>{setAnalyticsPeriod(d);void loadChannelAnalytics(editingChannel.id,d);}}>{d} дней</button>)}</div>
         {analyticsLoading&&<p className="description">Загрузка аналитики…</p>}
         {analyticsError&&<p className="notice">{analyticsError}</p>}
