@@ -1090,19 +1090,67 @@ app.MapGet("/api/subscription", async (HttpRequest req,MySqlDataSource db,Cancel
     return Results.Ok(new {plan=isPro?"PRO":"FREE",isPro,expiresAt=isPro?expiry:null,channelLimit=isPro?10:1,commissionPercent=isPro?2.5m:5m,fullAnalytics=isPro,
         proPriceRub=price,checkoutAvailable=false,checkoutMessage="Ожидается подключение кассы"});
 });
+// Custom, unique channel links are stored separately from Telegram channel IDs.
+await using (var aliasDb=app.Services.GetRequiredService<MySqlDataSource>().CreateCommand("""
+CREATE TABLE IF NOT EXISTS reklio_channel_aliases (
+ channel_id BIGINT NOT NULL PRIMARY KEY,
+ alias VARCHAR(32) CHARACTER SET ascii COLLATE ascii_general_ci NOT NULL,
+ updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+ UNIQUE KEY uq_reklio_channel_alias (alias)
+) ENGINE=InnoDB
+""")) await aliasDb.ExecuteNonQueryAsync();
+
+app.MapGet("/api/public/channel-alias/{alias}",async (string alias,MySqlDataSource db,CancellationToken ct)=>{
+ if(!System.Text.RegularExpressions.Regex.IsMatch(alias,@"^[a-zA-Z0-9_]{4,32}$"))return Results.NotFound();
+ await using var cmd=db.CreateCommand("""
+ SELECT c.telegram_id FROM reklio_channel_aliases a JOIN channels c ON c.telegram_id=a.channel_id
+ WHERE a.alias=@alias AND c.is_listed=TRUE LIMIT 1
+ """);
+ cmd.Parameters.Add(new MySqlParameter("@alias",alias));
+ var id=await cmd.ExecuteScalarAsync(ct);
+ return id is null?Results.NotFound():Results.Ok(new {channelId=Convert.ToInt64(id)});
+});
+app.MapPut("/api/my-channels/{channelId:long}/alias",async (long channelId,ChannelAliasInput input,HttpRequest req,MySqlDataSource db,CancellationToken ct)=>{
+ if(Authorized(req) is not long owner)return Results.Unauthorized();
+ var alias=(input.Alias??"").Trim().ToLowerInvariant();
+ if(!System.Text.RegularExpressions.Regex.IsMatch(alias,@"^[a-z0-9_]{4,32}$"))
+  return Results.BadRequest(new {error="Используйте 4–32 латинских символа, цифры или _"});
+ if(alias is "admin" or "api" or "app" or "help" or "catalog" or "login" or "support" or "reklio")
+  return Results.BadRequest(new {error="Этот адрес зарезервирован"});
+ await using var conn=await db.OpenConnectionAsync(ct);
+ await using var tx=await conn.BeginTransactionAsync(ct);
+ await using(var verify=new MySqlCommand("SELECT telegram_id FROM channels WHERE telegram_id=@id AND connected_by=@owner FOR UPDATE",conn,tx)){
+  verify.Parameters.AddWithValue("@id",channelId);verify.Parameters.AddWithValue("@owner",owner);
+  if(await verify.ExecuteScalarAsync(ct) is null){await tx.RollbackAsync(ct);return Results.NotFound();}
+ }
+ try{
+  await using var cmd=new MySqlCommand("""
+  INSERT INTO reklio_channel_aliases(channel_id,alias) VALUES(@id,@alias)
+  ON DUPLICATE KEY UPDATE alias=VALUES(alias)
+  """,conn,tx);
+  cmd.Parameters.AddWithValue("@id",channelId);cmd.Parameters.AddWithValue("@alias",alias);
+  await cmd.ExecuteNonQueryAsync(ct);
+  await tx.CommitAsync(ct);
+  return Results.Ok(new {alias,url="https://reklio.site/ad/"+alias});
+ }catch(MySqlException ex) when(ex.Number==1062){
+  await tx.RollbackAsync(ct);
+  return Results.Conflict(new {error="Этот адрес уже занят. Выберите другой."});
+ }
+});
 app.MapGet("/api/my-channels", async (HttpRequest req, MySqlDataSource db, CancellationToken ct) =>
 {
     if (Authorized(req) is not long userId) return Results.Unauthorized();
     await using var cmd = db.CreateCommand("""
-        SELECT telegram_id,title,is_listed,ad_price_rub,category FROM channels
-        WHERE connected_by=@user ORDER BY connected_at DESC LIMIT 50
+        SELECT c.telegram_id,c.title,c.is_listed,c.ad_price_rub,c.category,a.alias FROM channels c
+        LEFT JOIN reklio_channel_aliases a ON a.channel_id=c.telegram_id
+        WHERE c.connected_by=@user ORDER BY c.connected_at DESC LIMIT 50
         """);
     cmd.Parameters.Add(new MySqlParameter("@user", userId));
     var channels = new List<object>();
     await using var reader = await cmd.ExecuteReaderAsync(ct);
     while (await reader.ReadAsync(ct))
         channels.Add(new { id = reader.GetInt64(0), title = reader.GetString(1),
-            listed = reader.GetBoolean(2), price = reader.GetDecimal(3), category = reader.IsDBNull(4) ? "" : reader.GetString(4) });
+            listed = reader.GetBoolean(2), price = reader.GetDecimal(3), category = reader.IsDBNull(4) ? "" : reader.GetString(4), alias=reader.IsDBNull(5)?null:reader.GetString(5) });
     return Results.Ok(channels);
 });
 
@@ -1696,6 +1744,7 @@ record ScheduleOrderInput(long RateId, DateTimeOffset ScheduledAt);
 record UpdateRateInput(int Hours, decimal Price);
 record UpdateListingInput(bool Listed);
 record UpdateCategoryInput(string Category);
+record ChannelAliasInput(string Alias);
 
 record ConnectChannelRequest(string Username);
 
