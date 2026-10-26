@@ -210,37 +210,75 @@ app.MapDelete("/api/channel-likes/{channelId:long}",async(long channelId,HttpReq
     await cmd.ExecuteNonQueryAsync(ct);
     return Results.Ok(new {liked=false});
 });
+// Catalog base query deliberately uses only the channels table. Optional metrics and likes
+// are enriched separately so a missing auxiliary table never takes the catalog offline.
+async Task<List<CatalogChannel>> LoadCatalog(MySqlDataSource db,int max,CancellationToken ct)
+{
+    var rows=new List<CatalogChannel>();
+    await using(var cmd=db.CreateCommand("""
+        SELECT telegram_id,title,category,ad_price_rub,ad_description,username
+        FROM channels WHERE is_listed=TRUE ORDER BY connected_at DESC LIMIT @limit
+        """))
+    {
+        cmd.Parameters.Add(new MySqlParameter("@limit",max));
+        await using var reader=await cmd.ExecuteReaderAsync(ct);
+        while(await reader.ReadAsync(ct))
+            rows.Add(new CatalogChannel(reader.GetInt64(0),reader.GetString(1),
+                reader.IsDBNull(2)?"Другое":reader.GetString(2),
+                reader.IsDBNull(3)?0m:reader.GetDecimal(3),
+                reader.IsDBNull(4)?"":reader.GetString(4),
+                reader.IsDBNull(5)?null:reader.GetString(5)));
+    }
+    if(rows.Count==0)return rows;
+    var ids=string.Join(",",rows.Select(c=>c.Id.ToString(System.Globalization.CultureInfo.InvariantCulture)));
+    var byId=rows.ToDictionary(c=>c.Id);
+    async Task Optional(string name,string sql,Action<MySqlDataReader,CatalogChannel> assign)
+    {
+        try
+        {
+            await using var cmd=db.CreateCommand(sql.Replace("@ids",ids,StringComparison.Ordinal));
+            await using var reader=await cmd.ExecuteReaderAsync(ct);
+            while(await reader.ReadAsync(ct))
+                if(byId.TryGetValue(reader.GetInt64(0),out var channel))assign(reader,channel);
+        }
+        catch(MySqlException ex)
+        {
+            app.Logger.LogWarning("Catalog {Field} unavailable: MySQL {ErrorCode}",name,ex.Number);
+        }
+    }
+    await Optional("likes","SELECT channel_id,COUNT(*) FROM reklio_channel_likes WHERE channel_id IN (@ids) GROUP BY channel_id",
+        (r,c)=>c.Likes=r.GetInt64(1));
+    await Optional("promotion","SELECT channel_id,active_until FROM channel_promotions WHERE channel_id IN (@ids) AND active_until>UTC_TIMESTAMP()",
+        (r,c)=>c.PromotedUntil=r.GetDateTime(1));
+    await Optional("subscribers", """
+        SELECT m.channel_id,m.subscribers FROM channel_daily_metrics m
+        JOIN (SELECT channel_id,MAX(day) AS last_day FROM channel_daily_metrics
+            WHERE channel_id IN (@ids) AND subscribers IS NOT NULL GROUP BY channel_id) newest
+        ON newest.channel_id=m.channel_id AND newest.last_day=m.day
+        """,(r,c)=>c.Subscribers=r.IsDBNull(1)?null:r.GetInt32(1));
+    await Optional("posts","SELECT channel_id,COALESCE(SUM(posts),0) FROM channel_daily_metrics WHERE channel_id IN (@ids) AND day>=UTC_DATE()-INTERVAL 29 DAY GROUP BY channel_id",
+        (r,c)=>c.Posts30d=r.GetInt64(1));
+    await Optional("views", """
+        SELECT op.channel_id,CAST(ROUND(AVG(v.views)) AS SIGNED),COUNT(*)
+        FROM reklio_post_views v
+        JOIN channel_observed_posts op ON op.channel_id=v.channel_id AND op.message_id=v.message_id
+        WHERE op.channel_id IN (@ids) AND op.posted_at>=UTC_TIMESTAMP()-INTERVAL 30 DAY
+        GROUP BY op.channel_id
+        """,(r,c)=>{c.AvgViews=r.IsDBNull(1)?null:r.GetInt64(1);c.ViewsSamples=r.GetInt64(2);});
+    return rows.OrderByDescending(c=>c.PromotedUntil.HasValue).ThenByDescending(c=>c.Likes).ToList();
+}
 app.MapGet("/api/public/channels", async (HttpRequest req,MySqlDataSource db,CancellationToken ct) =>
 {
     var limit=int.TryParse(req.Query["limit"],out var requested)?Math.Clamp(requested,1,60):40;
     try
     {
-    await using var cmd=db.CreateCommand("""
-        SELECT telegram_id,title,category,ad_price_rub,ad_description,username
-        FROM channels WHERE is_listed=TRUE ORDER BY connected_at DESC LIMIT @limit
-        """);
-    cmd.Parameters.Add(new MySqlParameter("@limit",limit));
-    var rows=new List<object>();
-    await using var rd=await cmd.ExecuteReaderAsync(ct);
-    while(await rd.ReadAsync(ct))rows.Add(new {
-      id=rd.GetInt64(0),title=rd.GetString(1),
-      category=rd.IsDBNull(2)?"Другое":rd.GetString(2),
-      price=rd.IsDBNull(3)?0m:rd.GetDecimal(3),
-      description=rd.IsDBNull(4)?"":rd.GetString(4),
-      username=rd.IsDBNull(5)?null:rd.GetString(5),
-      subscribers=(int?)null,avgViews=(long?)null,promotedUntil=(DateTime?)null,likes=0
-    });
-    return Results.Ok(rows);
-    }
-    catch(MySqlException ex)
-    {
-        app.Logger.LogError(ex,"Public catalog database query failed");
-        return Results.Json(new {error="CATALOG_DATABASE",mysqlCode=ex.Number},statusCode:503);
+        var channels=await LoadCatalog(db,Math.Max(500,limit),ct);
+        return Results.Ok(channels.Take(limit));
     }
     catch(Exception ex)
     {
         app.Logger.LogError(ex,"Public catalog request failed");
-        return Results.Json(new {error="CATALOG_INTERNAL",type=ex.GetType().Name},statusCode:503);
+        return Results.Problem("Каталог временно недоступен",statusCode:503);
     }
 });
 // Proxy channel photos without exposing the Telegram bot token or file URLs to browsers.
@@ -284,19 +322,9 @@ app.MapGet("/api/public/channels/{id:long}/avatar", async (long id, MySqlDataSou
 });
 app.MapGet("/api/public/channels/{id:long}", async (long id,MySqlDataSource db,CancellationToken ct) =>
 {
-    await using var cmd=db.CreateCommand("""
-        SELECT telegram_id,title,category,ad_price_rub,ad_description,username
-        FROM channels WHERE telegram_id=@id AND is_listed=TRUE LIMIT 1
-        """);
-    cmd.Parameters.Add(new MySqlParameter("@id",id));
-    await using var rd=await cmd.ExecuteReaderAsync(ct);
-    if(!await rd.ReadAsync(ct))return Results.NotFound();
-    return Results.Ok(new {id=rd.GetInt64(0),title=rd.GetString(1),
-      category=rd.IsDBNull(2)?"Другое":rd.GetString(2),
-      price=rd.IsDBNull(3)?0m:rd.GetDecimal(3),
-      description=rd.IsDBNull(4)?"":rd.GetString(4),
-      username=rd.IsDBNull(5)?null:rd.GetString(5),
-      subscribers=(int?)null,avgViews=(long?)null,promotedUntil=(DateTime?)null,likes=0});
+    var channels=await LoadCatalog(db,10000,ct);
+    var channel=channels.FirstOrDefault(c=>c.Id==id);
+    return channel is null?Results.NotFound():Results.Ok(channel);
 });
 app.MapGet("/api/public/channels/{id:long}/details", async (long id,MySqlDataSource db,CancellationToken ct) =>
 {
@@ -321,57 +349,16 @@ app.MapGet("/api/public/channels/{id:long}/details", async (long id,MySqlDataSou
        while(await reader.ReadAsync(ct))reviews.Add(new {stars=reader.GetInt32(0),comment=reader.IsDBNull(1)?null:reader.GetString(1),createdAt=reader.GetDateTime(2)});
     return Results.Ok(new {rates,reviews});
 });
-app.MapGet("/api/channels", async (HttpRequest req, MySqlDataSource db, CancellationToken ct) =>
+app.MapGet("/api/channels", async (HttpRequest req,MySqlDataSource db,CancellationToken ct) =>
 {
-    if (Authorized(req) is null) return Results.Unauthorized();
-    var search = req.Query["search"].ToString().Trim();
-    if (search.Length > 80) return Results.BadRequest();
-    var category = req.Query["category"].ToString();
-    if (category.Length > 32) return Results.BadRequest();
-    var limit = int.TryParse(req.Query["limit"], out var n) ? Math.Clamp(n, 1, 100) : 100;
-    await using (var init = db.CreateCommand("""
-        CREATE TABLE IF NOT EXISTS reklio_post_views (
-            channel_id BIGINT NOT NULL, message_id INT NOT NULL, views INT NOT NULL,
-            observed_at DATETIME NOT NULL,
-            PRIMARY KEY(channel_id,message_id), INDEX idx_channel_views(channel_id,observed_at)
-        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
-        """))
-        await init.ExecuteNonQueryAsync(ct);
-    await using var cmd = db.CreateCommand("""
-        SELECT c.telegram_id,c.title,c.category,c.ad_price_rub,c.ad_description,c.username,
-               (SELECT m.subscribers FROM channel_daily_metrics m
-                WHERE m.channel_id=c.telegram_id AND m.subscribers IS NOT NULL
-                ORDER BY m.day DESC LIMIT 1) AS subscribers,
-               (SELECT CAST(COALESCE(SUM(m.posts),0) AS SIGNED) FROM channel_daily_metrics m
-                WHERE m.channel_id=c.telegram_id AND m.day>=UTC_DATE()-INTERVAL 29 DAY) AS posts30d,
-               (SELECT CAST(ROUND(AVG(v.views)) AS SIGNED) FROM reklio_post_views v
-                JOIN channel_observed_posts p ON p.channel_id=v.channel_id AND p.message_id=v.message_id
-                WHERE v.channel_id=c.telegram_id AND p.posted_at>=UTC_TIMESTAMP()-INTERVAL 30 DAY) AS avgViews,
-               (SELECT COUNT(*) FROM reklio_post_views v JOIN channel_observed_posts p
-                ON p.channel_id=v.channel_id AND p.message_id=v.message_id
-                WHERE v.channel_id=c.telegram_id AND p.posted_at>=UTC_TIMESTAMP()-INTERVAL 30 DAY) AS viewsSamples
-        FROM channels c WHERE c.is_listed=TRUE
-          AND (@category='' OR c.category=@category)
-          AND (@search='' OR c.title LIKE @pattern)
-        ORDER BY (promotedUntil IS NOT NULL) DESC,c.connected_at DESC LIMIT @limit
-        """);
-    cmd.Parameters.Add(new MySqlParameter("@category", category));
-    cmd.Parameters.Add(new MySqlParameter("@search", search));
-    cmd.Parameters.Add(new MySqlParameter("@pattern", "%" + search + "%"));
-    cmd.Parameters.Add(new MySqlParameter("@limit", limit));
-    var channels = new List<object>();
-    await using var reader = await cmd.ExecuteReaderAsync(ct);
-    while (await reader.ReadAsync(ct))
-        channels.Add(new {
-            id = reader.GetInt64(0), title = reader.GetString(1), category = reader.GetString(2),
-            price = reader.GetDecimal(3), description = reader.IsDBNull(4) ? "" : reader.GetString(4),
-            username = reader.IsDBNull(5) ? null : reader.GetString(5),
-            subscribers = reader.IsDBNull(6) ? (int?)null : reader.GetInt32(6),
-            posts30d = reader.IsDBNull(7) ? 0L : reader.GetInt64(7),
-            avgViews = reader.IsDBNull(8) ? (long?)null : reader.GetInt64(8),
-            viewsSamples = reader.GetInt64(9), promotedUntil=reader.IsDBNull(10)?(DateTime?)null:reader.GetDateTime(10)
-        });
-    return Results.Ok(channels);
+    if(Authorized(req) is null)return Results.Unauthorized();
+    var search=req.Query["search"].ToString().Trim();
+    var category=req.Query["category"].ToString().Trim();
+    if(search.Length>80||category.Length>32)return Results.BadRequest();
+    var limit=int.TryParse(req.Query["limit"],out var requested)?Math.Clamp(requested,1,100):100;
+    var channels=await LoadCatalog(db,10000,ct);
+    return Results.Ok(channels.Where(c=>(category.Length==0||c.Category==category)
+        &&(search.Length==0||c.Title.Contains(search,StringComparison.OrdinalIgnoreCase))).Take(limit));
 });
 app.MapGet("/api/channels/{channelId:long}/history", async (long channelId, HttpRequest req, MySqlDataSource db, CancellationToken ct) =>
 {
@@ -1666,3 +1653,19 @@ record UpdateListingInput(bool Listed);
 record UpdateCategoryInput(string Category);
 
 record ConnectChannelRequest(string Username);
+
+sealed class CatalogChannel(long id,string title,string category,decimal price,string description,string? username)
+{
+    public long Id {get;}=id;
+    public string Title {get;}=title;
+    public string Category {get;}=category;
+    public decimal Price {get;}=price;
+    public string Description {get;}=description;
+    public string? Username {get;}=username;
+    public int? Subscribers {get;set;}
+    public long Posts30d {get;set;}
+    public long? AvgViews {get;set;}
+    public long ViewsSamples {get;set;}
+    public long Likes {get;set;}
+    public DateTime? PromotedUntil {get;set;}
+}
