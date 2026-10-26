@@ -81,6 +81,17 @@ catch(MySqlException ex)
 {
     app.Logger.LogWarning(ex,"Could not initialize channel likes table");
 }
+try {
+    var voteDb=app.Services.GetRequiredService<MySqlDataSource>();
+    await using var initVotes=voteDb.CreateCommand("""
+    CREATE TABLE IF NOT EXISTS reklio_channel_votes (
+      user_id BIGINT NOT NULL,channel_id BIGINT NOT NULL,
+      voted_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY(user_id,channel_id,voted_at),INDEX idx_vote_channel(channel_id,voted_at)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+    """);
+    await initVotes.ExecuteNonQueryAsync();
+} catch(MySqlException ex) {app.Logger.LogWarning(ex,"Votes table setup failed");}
 app.UseCors("miniapp");
 
 static long? VerifyTelegram(string? initData, string token)
@@ -183,7 +194,7 @@ app.MapGet("/api/channels/{channelId:long}/reviews", async (long channelId,HttpR
 app.MapGet("/api/channel-likes",async(HttpRequest req,MySqlDataSource db,CancellationToken ct)=>
 {
     if(Authorized(req) is not long user)return Results.Unauthorized();
-    await using var cmd=db.CreateCommand("SELECT channel_id FROM reklio_channel_likes WHERE user_id=@user");
+    await using var cmd=db.CreateCommand("SELECT DISTINCT channel_id FROM reklio_channel_votes WHERE user_id=@user AND voted_at>UTC_TIMESTAMP()-INTERVAL 24 HOUR");
     cmd.Parameters.Add(new MySqlParameter("@user",user));
     var ids=new List<long>();
     await using var rd=await cmd.ExecuteReaderAsync(ct);
@@ -193,22 +204,56 @@ app.MapGet("/api/channel-likes",async(HttpRequest req,MySqlDataSource db,Cancell
 app.MapPost("/api/channel-likes/{channelId:long}",async(long channelId,HttpRequest req,MySqlDataSource db,CancellationToken ct)=>
 {
     if(Authorized(req) is not long user)return Results.Unauthorized();
-    await using var cmd=db.CreateCommand("""
-        INSERT IGNORE INTO reklio_channel_likes(user_id,channel_id)
-        SELECT @user,telegram_id FROM channels WHERE telegram_id=@channel AND is_listed=TRUE AND connected_by<>@user
-        """);
-    cmd.Parameters.Add(new MySqlParameter("@user",user));
-    cmd.Parameters.Add(new MySqlParameter("@channel",channelId));
-    return await cmd.ExecuteNonQueryAsync(ct)>0?Results.Ok(new {liked=true}):Results.Conflict(new {error="Нельзя оценивать собственный канал или канал недоступен"});
+    await using var conn=await db.OpenConnectionAsync(ct);
+    await using var tx=await conn.BeginTransactionAsync(ct);
+    await using(var guard=new MySqlCommand("SELECT telegram_id FROM users WHERE telegram_id=@user FOR UPDATE",conn,tx))
+    {
+        guard.Parameters.AddWithValue("@user",user);
+        if(await guard.ExecuteScalarAsync(ct) is null)return Results.Unauthorized();
+    }
+    await using(var allowed=new MySqlCommand("SELECT COUNT(*) FROM channels WHERE telegram_id=@channel AND is_listed=TRUE AND connected_by<>@user",conn,tx))
+    {
+        allowed.Parameters.AddWithValue("@user",user);
+        allowed.Parameters.AddWithValue("@channel",channelId);
+        if(Convert.ToInt32(await allowed.ExecuteScalarAsync(ct))==0)return Results.Conflict(new {error="Канал недоступен или принадлежит вам"});
+    }
+    await using(var recent=new MySqlCommand("SELECT COUNT(*) FROM reklio_channel_votes WHERE user_id=@user AND channel_id=@channel AND voted_at>UTC_TIMESTAMP()-INTERVAL 24 HOUR",conn,tx))
+    {
+        recent.Parameters.AddWithValue("@user",user);
+        recent.Parameters.AddWithValue("@channel",channelId);
+        if(Convert.ToInt64(await recent.ExecuteScalarAsync(ct))>0)return Results.Conflict(new {error="Вы уже голосовали за этот канал за последние 24 часа"});
+    }
+    await using(var insert=new MySqlCommand("INSERT INTO reklio_channel_votes(user_id,channel_id,voted_at) VALUES(@user,@channel,UTC_TIMESTAMP())",conn,tx))
+    {
+        insert.Parameters.AddWithValue("@user",user);
+        insert.Parameters.AddWithValue("@channel",channelId);
+        await insert.ExecuteNonQueryAsync(ct);
+    }
+    await tx.CommitAsync(ct);
+    return Results.Ok(new {voted=true});
 });
-app.MapDelete("/api/channel-likes/{channelId:long}",async(long channelId,HttpRequest req,MySqlDataSource db,CancellationToken ct)=>
+app.MapGet("/api/rankings/monthly",async(MySqlDataSource db,CancellationToken ct)=>
 {
-    if(Authorized(req) is not long user)return Results.Unauthorized();
-    await using var cmd=db.CreateCommand("DELETE FROM reklio_channel_likes WHERE user_id=@user AND channel_id=@channel");
-    cmd.Parameters.Add(new MySqlParameter("@user",user));
-    cmd.Parameters.Add(new MySqlParameter("@channel",channelId));
-    await cmd.ExecuteNonQueryAsync(ct);
-    return Results.Ok(new {liked=false});
+    var month=DateTime.UtcNow.ToString("yyyy-MM");
+    var items=new List<object>();
+    try
+    {
+        await using var cmd=db.CreateCommand("""
+        SELECT c.telegram_id,c.title,c.category,COUNT(*) AS votes
+        FROM reklio_channel_votes v JOIN channels c ON c.telegram_id=v.channel_id AND c.is_listed=TRUE
+        WHERE v.voted_at>=DATE_FORMAT(UTC_TIMESTAMP(),'%Y-%m-01')
+        GROUP BY c.telegram_id,c.title,c.category
+        ORDER BY votes DESC,c.title ASC LIMIT 30
+        """);
+        await using var reader=await cmd.ExecuteReaderAsync(ct);
+        var place=0;
+        while(await reader.ReadAsync(ct))items.Add(new {
+            place=++place,id=reader.GetInt64(0),title=reader.GetString(1),
+            category=reader.IsDBNull(2)?"Другое":reader.GetString(2),votes=reader.GetInt64(3)
+        });
+    }
+    catch(MySqlException ex){app.Logger.LogWarning("Monthly ranking unavailable: MySQL {Code}",ex.Number);}
+    return Results.Ok(new {month,channels=items});
 });
 // Catalog base query deliberately uses only the channels table. Optional metrics and likes
 // are enriched separately so a missing auxiliary table never takes the catalog offline.
@@ -246,7 +291,7 @@ async Task<List<CatalogChannel>> LoadCatalog(MySqlDataSource db,int max,Cancella
             app.Logger.LogWarning("Catalog {Field} unavailable: MySQL {ErrorCode}",name,ex.Number);
         }
     }
-    await Optional("likes","SELECT channel_id,COUNT(*) FROM reklio_channel_likes WHERE channel_id IN (@ids) GROUP BY channel_id",
+    await Optional("likes","SELECT channel_id,COUNT(*) FROM reklio_channel_votes WHERE channel_id IN (@ids) AND voted_at>=DATE_FORMAT(UTC_TIMESTAMP(),'%Y-%m-01') GROUP BY channel_id",
         (r,c)=>c.Likes=r.GetInt64(1));
     await Optional("promotion","SELECT channel_id,active_until FROM channel_promotions WHERE channel_id IN (@ids) AND active_until>UTC_TIMESTAMP()",
         (r,c)=>c.PromotedUntil=r.GetDateTime(1));
