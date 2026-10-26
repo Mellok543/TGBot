@@ -94,6 +94,16 @@ function ChannelAvatar({id,title,extraClass=''}:{id:number;title:string;extraCla
 }
 function App() {
   const [tab, setTab] = useState<Tab>('catalog');
+  const [directChannelId]=useState<number|null>(()=>{
+    const raw=(tg as typeof tg & {initDataUnsafe?:{start_param?:string}})?.initDataUnsafe?.start_param
+      || new URLSearchParams(window.location.search).get('tgWebAppStartParam')
+      || new URLSearchParams(window.location.search).get('startapp')
+      || '';
+    const match=/^ad_(-?\\d+)$/.exec(raw);
+    return match?Number(match[1]):null;
+  });
+  const [directLoading,setDirectLoading]=useState(false);
+  const [directError,setDirectError]=useState('');
   const [showAbout, setShowAbout] = useState(false);
   const [adminDisputes, setAdminDisputes] = useState<AdminDispute[] | null>(null);
   const [adminBusy, setAdminBusy] = useState<number | null>(null);
@@ -220,6 +230,16 @@ function App() {
   }
   const [search, setSearch] = useState('');
   const [channels, setChannels] = useState<Channel[]>([]);
+  useEffect(()=>{
+    if(directChannelId===null)return;
+    let active=true;setTab('catalog');setDirectLoading(true);setDirectError('');
+    fetch(API+'/api/public/channels/'+directChannelId,{signal:AbortSignal.timeout(12000)})
+      .then(async response=>{if(!response.ok)throw new Error('Не удалось найти канал по ссылке');return response.json() as Promise<Channel>;})
+      .then(c=>{if(active)void openChannel({...c,posts30d:c.posts30d??0,viewsSamples:c.viewsSamples??0,likes:c.likes??0});})
+      .catch(e=>{if(active)setDirectError(e instanceof Error?e.message:'Не удалось открыть канал');})
+      .finally(()=>{if(active)setDirectLoading(false);});
+    return ()=>{active=false;};
+  },[directChannelId]);
   const [categoryFilter, setCategoryFilter] = useState('');
   const [maxCatalogPrice,setMaxCatalogPrice] = useState('');
   const [minCatalogSubscribers,setMinCatalogSubscribers] = useState('');
@@ -514,6 +534,8 @@ function App() {
   return <div className="app">
     <header><div className="brandLine"><img src="/reklio-mark.svg" alt="Логотип Reklio" className="brandMark"/><div><div className="brandName">Rekli<span>o</span></div><div className="eyebrow">БИРЖА РЕКЛАМЫ</div></div></div><h1>{tab === 'catalog' ? 'Найти рекламу' : tab === 'orders' ? 'Мои заказы' : tab === 'channels' ? 'Мои каналы' : 'Профиль'}</h1><p>{tab === 'catalog' ? 'Подберите канал для вашего объявления' : tab === 'orders' ? 'Контролируйте размещения' : tab === 'channels' ? 'Управляйте рекламными площадками' : 'Настройки аккаунта'}</p><button className="aboutTrigger" onClick={()=>setShowAbout(true)}>ⓘ Как работает Reklio <span>→</span></button></header>
     <main>
+      {directLoading&&<div className="notice">Открываем выбранный канал…</div>}
+      {directError&&<div className="notice">{directError}. Можно выбрать канал в каталоге.</div>}
       {showAbout && <div className="bookingOverlay" role="dialog" aria-modal="true" aria-label="Как работает Reklio"><div className="bookingPanel aboutPanel"><button className="back" onClick={()=>setShowAbout(false)}>← Вернуться</button><div className="aboutHero"><div className="eyebrow">REKLIO</div><h2>Реклама в Telegram — в одном месте</h2><p>Reklio помогает рекламодателям находить каналы для размещения, а авторам каналов — получать рекламные заказы и управлять публикациями.</p></div><h3>Рекламодателям</h3><ol><li>Найдите канал в каталоге и изучите его статистику и тарифы.</li><li>Выберите дату, подготовьте рекламный текст и отправьте заявку.</li><li>После согласования оплатите заказ и следите за публикацией в разделе «Заказы».</li></ol><h3>Владельцам каналов</h3><ol><li>Подключите свой канал через Telegram-бота Reklio.</li><li>Укажите стоимость размещения и доступные тарифы.</li><li>Проверяйте заявки, подтверждайте подходящие объявления и контролируйте публикации.</li></ol><h3>Оплата и стоимость</h3><p>Владелец канала сам устанавливает цену рекламы и получает всю указанную стоимость. Покупатель дополнительно оплачивает сервисный сбор Reklio. Полная сумма и состав платежа показываются до отправки заявки и перед оплатой.</p><h3>Как защищается сделка?</h3><p>Система отслеживает статусы оплаты, публикации и завершения размещения. Безопасные сделки с выплатой после выполнения условий готовятся на базе YooKassa. Пока доступна тестовая оплата: реальные безопасные выплаты ещё не запущены.</p><div className="aboutNote">Reklio — платформа для поиска рекламных площадок и управления размещениями. Статистика каналов зависит от доступных данных Telegram и не гарантирует результат рекламной кампании.</div><button className="primary" onClick={()=>setShowAbout(false)}>Понятно</button></div></div>}
       {tab === 'catalog' && <label className="search"><Search size={19}/><input placeholder="Название канала" value={search} maxLength={80} onChange={e=>setSearch(e.target.value)}/></label>}
       {tab === 'catalog' && <div className="catalogIntro"><span className="catalogEyebrow">ПЛОЩАДКИ ДЛЯ РЕКЛАМЫ</span><h2>Найдите канал для своего бренда</h2><p>Сравнивайте стоимость, тематику и аудиторию. Выберите подходящую площадку и запланируйте размещение.</p><div className="catalogPills"><span>✦ {channels.length} площадок</span><span>◷ Удобное бронирование</span></div></div>}
