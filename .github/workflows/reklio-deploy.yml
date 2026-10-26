@@ -148,6 +148,22 @@ jobs:
           journalctl -u reklio-api.service -n 120 --no-pager --output=cat 2>/dev/null | grep -E -A 5 'Exception|MySql|Unknown column|doesn.t exist|Failed' | tail -n 35
           REMOTE
 
+      - name: Diagnose iOS network compatibility
+        continue-on-error: true
+        run: |
+          echo '=== DNS A / AAAA ==='
+          for host in reklio.site api.reklio.site; do
+            echo "Host: $host"
+            getent ahostsv4 "$host" | head -n 3 || true
+            getent ahostsv6 "$host" | head -n 3 || true
+            echo '=== TLS / HTTP over IPv4 ==='
+            curl -4 -sSL -o /dev/null --connect-timeout 8 --max-time 15 -w 'IPv4 HTTP %{http_code}, remote %{remote_ip}, TLS %{ssl_verify_result}\n' "https://$host/" || true
+            echo '=== TLS / HTTP over IPv6 ==='
+            curl -6 -sSL -o /dev/null --connect-timeout 8 --max-time 15 -w 'IPv6 HTTP %{http_code}, remote %{remote_ip}, TLS %{ssl_verify_result}\n' "https://$host/" || true
+          done
+          echo '=== Telegram SDK reachable ==='
+          curl -4 -sSL -o /dev/null --connect-timeout 8 --max-time 15 -w 'Telegram SDK HTTP %{http_code}\n' https://telegram.org/js/telegram-web-app.js || true
+
       - name: Verify public API
         run: |
           set -euo pipefail
