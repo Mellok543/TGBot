@@ -219,7 +219,7 @@ public sealed class BotHandlers(Database database)
         }
         var listed = await database.IsChannelListedAsync(channelId, userId, ct);
         var me = await bot.GetMe(ct);
-        var directLink = $"https://t.me/{me.Username}?start=ad_{channelId}";
+        var directLink = $"https://t.me/{me.Username}?startapp=ad_{channelId}";
         var text = $"⚙️ {settings.Value.Title}\n\n💰 Цена рекламы: {settings.Value.Price:0.##} ₽\n📝 Описание: {(string.IsNullOrWhiteSpace(settings.Value.Description) ? "Не задано" : settings.Value.Description)}\n📦 Форматы: {settings.Value.Formats}\n🌐 Каталог: {(listed ? "Включён" : "Выключен")}\n\n🔗 Ссылка для заказа рекламы:\n{directLink}";
         if (messageId is int id)
             await bot.EditMessageText(chatId, id, text, replyMarkup: SettingsKeyboard(channelId), cancellationToken: ct);
