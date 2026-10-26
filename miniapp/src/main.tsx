@@ -521,7 +521,7 @@ function App() {
           <option value="">Все категории</option>{categories.map(category=><option key={category} value={category}>{category}</option>)}
         </select></label>
         <label>Сортировка<select aria-label="Сортировка" value={sortBy} onChange={e=>setSortBy(e.target.value as typeof sortBy)}>
-          <option value="default">По умолчанию</option><option value="priceAsc">Сначала дешёвые</option>
+          <option value="default">Популярные · лайки</option><option value="priceAsc">Сначала дешёвые</option>
           <option value="priceDesc">Сначала дорогие</option><option value="subscribers">Больше подписчиков</option><option value="posts">Активность за 30 дней</option><option value="cpm">По CPM (дешевле)</option><option value="title">По названию</option>
         </select></label>
         <label>Бюджет<select aria-label="Максимальная цена" value={maxCatalogPrice} onChange={e=>setMaxCatalogPrice(e.target.value)}><option value="">Любая цена</option><option value="1000">До 1 000 ₽</option><option value="3000">До 3 000 ₽</option><option value="5000">До 5 000 ₽</option><option value="10000">До 10 000 ₽</option></select></label>
