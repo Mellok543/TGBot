@@ -9,12 +9,16 @@ function ChannelAvatar({id,title,className='lp-catalog-avatar'}:{id:number;title
 }
 function PublicCatalog(){
  const [channels,setChannels]=useState<PublicChannel[]>([]);
+ const [monthlyTop,setMonthlyTop]=useState<{month:string;channels:{id:number;title:string;category:string;votes:number;place:number}[]}|null>(null);
  const [search,setSearch]=useState(()=>new URLSearchParams(window.location.search).get('q')||'');
  const [category,setCategory]=useState('');
  const [sort,setSort]=useState('default');
  const [maxPrice,setMaxPrice]=useState('');
  const [loading,setLoading]=useState(true);
  const [error,setError]=useState('');
+ useEffect(()=>{
+  fetch(publicApi+'/api/rankings/monthly').then(r=>r.ok?r.json():null).then(data=>{if(data)setMonthlyTop(data)}).catch(()=>{});
+ },[]);
  useEffect(()=>{
   const controller=new AbortController();
   fetch(publicApi+'/api/public/channels?limit=60',{signal:controller.signal})
@@ -29,7 +33,7 @@ function PublicCatalog(){
  const reset=()=>{setSearch('');setCategory('');setSort('default');setMaxPrice('');window.history.replaceState(null,'','/catalog');};
  const hasFilters=Boolean(search||category||maxPrice||sort!=='default');
  return <section id="catalog" className="lp-section lp-catalog lp-catalog-modern">
-  <div className="lp-catalog-title"><div><span className="lp-kicker">КАТАЛОГ REKLIO</span><h2>Рекламные площадки</h2><p>Сравнивайте предложения и переходите к оформлению заказа через Telegram.</p></div><a href="https://t.me/ReklioBot">Добавить свой канал ↗</a></div>
+  {monthlyTop&&<div className="lp-monthly-ranking"><h3>🏆 ТОП месяца · {monthlyTop.month}</h3><div className="lp-top-entries">{monthlyTop.channels.length?monthlyTop.channels.slice(0,5).map(c=><a key={c.id} href={'/channels/'+c.id}><strong>#{c.place}</strong><span>{c.title}</span><b>♥ {c.votes}</b></a>):<p>Рейтинг формируется. Проголосуйте за канал в Mini App!</p>}</div><small>Голосовать можно раз в 24 часа.</small></div>}<div className="lp-catalog-title"><div><span className="lp-kicker">КАТАЛОГ REKLIO</span><h2>Рекламные площадки</h2><p>Сравнивайте предложения и переходите к оформлению заказа через Telegram.</p></div><a href="https://t.me/ReklioBot">Добавить свой канал ↗</a></div>
   <div className="lp-catalog-toolbar"><label className="lp-filter-search"><span>Поиск</span><input type="search" aria-label="Поиск каналов" placeholder="Название, тематика или @username" value={search} onChange={e=>setSearch(e.target.value)}/></label>
   <label><span>Категория</span><select aria-label="Категория" value={category} onChange={e=>setCategory(e.target.value)}><option value="">Все категории</option>{categories.map(c=><option key={c} value={c}>{c}</option>)}</select></label>
   <label><span>Стоимость до</span><select aria-label="Максимальная цена" value={maxPrice} onChange={e=>setMaxPrice(e.target.value)}><option value="">Любая цена</option><option value="500">500 ₽</option><option value="1000">1 000 ₽</option><option value="3000">3 000 ₽</option><option value="5000">5 000 ₽</option><option value="10000">10 000 ₽</option></select></label>
@@ -37,7 +41,7 @@ function PublicCatalog(){
   <div className="lp-catalog-status"><span aria-live="polite">{loading?'Загружаем площадки…':error?'Ошибка загрузки': 'Найдено каналов: '+visible.length}</span>{hasFilters&&<button type="button" onClick={reset}>Сбросить фильтры ×</button>}</div>
   {error&&<div className="lp-catalog-message" role="alert"><h3>Каталог временно недоступен</h3><p>{error}. Попробуйте обновить страницу.</p><button type="button" onClick={()=>window.location.reload()}>Обновить</button></div>}
   {!loading&&!error&&visible.length===0&&<div className="lp-catalog-message"><h3>Площадки не найдены</h3><p>Попробуйте изменить категорию, стоимость или поисковый запрос.</p><button type="button" onClick={reset}>Показать все каналы</button></div>}
-  <div className="lp-catalog-grid">{visible.map(c=><article key={c.id} className={c.promotedUntil?"lp-catalog-card lp-catalog-sponsored":"lp-catalog-card"}>{c.promotedUntil&&<div className="lp-sponsored-label">✦ Продвигается</div>}<div className="lp-catalog-heading"><ChannelAvatar id={c.id} title={c.title}/><div><strong>{c.title}</strong><small>{c.category||'Telegram-канал'} · ♥ {c.likes??0}</small></div></div><p>{c.description||'Рекламная площадка в Telegram'}</p><div className="lp-catalog-metrics"><span>Подписчики <b>{c.subscribers?.toLocaleString('ru-RU')??'Нет данных'}</b></span><span>Средние просмотры <b>{c.avgViews?.toLocaleString('ru-RU')??'Нет данных'}</b></span><span>CPM <b>{c.avgViews&&c.avgViews>0?rub(c.price*1000/c.avgViews):'Нет данных'}</b></span></div><div className="lp-catalog-bottom"><div><small>Реклама от</small><strong>{rub(c.price)}</strong></div><a className="lp-card-link" href={'/channels/'+c.id}>Открыть канал ↗</a></div></article>)}</div>
+  <div className="lp-catalog-grid">{visible.map(c=><article key={c.id} className={c.promotedUntil?"lp-catalog-card lp-catalog-sponsored":"lp-catalog-card"}>{c.promotedUntil&&<div className="lp-sponsored-label">✦ Продвигается</div>}<div className="lp-catalog-heading"><ChannelAvatar id={c.id} title={c.title}/><div><strong>{c.title}</strong><small>{c.category||'Telegram-канал'} · ♥ {c.likes??0} голосов</small></div></div><p>{c.description||'Рекламная площадка в Telegram'}</p><div className="lp-catalog-metrics"><span>Подписчики <b>{c.subscribers?.toLocaleString('ru-RU')??'Нет данных'}</b></span><span>Средние просмотры <b>{c.avgViews?.toLocaleString('ru-RU')??'Нет данных'}</b></span><span>CPM <b>{c.avgViews&&c.avgViews>0?rub(c.price*1000/c.avgViews):'Нет данных'}</b></span></div><div className="lp-catalog-bottom"><div><small>Реклама от</small><strong>{rub(c.price)}</strong></div><a className="lp-card-link" href={'/channels/'+c.id}>Открыть канал ↗</a></div></article>)}</div>
  </section>;
 }
 function GettingStarted(){
