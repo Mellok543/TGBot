@@ -166,3 +166,11 @@
 .purchaseNavigation{display:flex;align-items:center;gap:10px;margin:18px 0}.purchaseNavigation button{flex:1;min-width:0}
 .purchaseNext{width:100%;margin:16px 0}.ownerChecklist{padding:14px;border:1px solid rgba(120,154,191,.3);border-radius:12px;margin:14px 0;background:rgba(98,138,183,.07)}
 .ownerChecklist strong{display:block;margin-bottom:10px}.ownerChecklist div{padding:5px 0;font-size:13px}.ownerChecklist div span{font-weight:800;margin-right:9px}
+
+.channelAliasEditor{display:flex;align-items:center;min-width:0;max-width:100%;border:1px solid rgba(125,170,215,.48);border-radius:12px;background:rgba(10,15,28,.28);padding:0 10px;margin:12px 0;overflow:hidden}
+.channelAliasPrefix{flex:none;white-space:nowrap;font-size:13px;opacity:.65}
+.channelDirectLinks .channelAliasEditor input{width:100%;flex:1;min-width:0;border:0;outline:0;box-shadow:none;background:transparent;padding:13px 3px;margin:0;font-size:13px;font-weight:650}
+.channelAliasEditor input:focus{outline:0}
+.channelAliasPreview{display:flex;flex-direction:column;gap:5px;overflow-wrap:anywhere;margin:10px 0;padding:10px 12px;border-radius:10px;background:rgba(125,170,215,.07)}
+.channelAliasPreview small{font-size:11px}.channelAliasPreview span{font-size:12px;opacity:.83}
+@media(max-width:380px){.channelAliasPrefix,.channelDirectLinks .channelAliasEditor input{font-size:11px}}
