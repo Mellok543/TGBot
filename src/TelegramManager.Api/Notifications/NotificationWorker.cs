@@ -102,8 +102,8 @@ public sealed class NotificationWorker(MySqlDataSource database, IHttpClientFact
                     {
                         inline_keyboard = new[]
                         {
-                            new[] { new { text = "✅ Одобрить", callback_data = $"confirm:0:{orderId}" } },
-                            new[] { new { text = "❌ Отклонить", callback_data = $"decision:Rejected:{orderId}" } }
+                            new[] { new { text = "✅ Принять заявку", callback_data = $"confirm:0:{orderId}" } },
+                            new[] { new { text = "❌ Отклонить заявку", callback_data = $"decision:Rejected:{orderId}" } }
                         }
                     }
                 }
