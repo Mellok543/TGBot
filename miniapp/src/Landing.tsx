@@ -177,7 +177,7 @@ const legalPages={
  ]}
 } as const;
 function LegalPage({kind}:{kind:keyof typeof legalPages}){const page=legalPages[kind];return <section className="lp-section lp-legal" id={kind}><span className="lp-kicker">ДОКУМЕНТЫ REKLIO</span><h1>{page.title}</h1><p className="lp-legal-note">Предварительная редакция для ознакомления. Не является утверждённой публичной офертой.</p>{page.sections.map(([title,body])=><article key={title}><h2>{title}</h2><p>{body}</p></article>)}<a href="/" className="lp-legal-back">← На главную</a></section>}
-export default function ChannelAliasRedirect(){
+function ChannelAliasRedirect(){
  const alias=window.location.pathname.match(/^\/ad\/([a-zA-Z0-9_]{4,32})\/?$/)?.[1];
  const [message,setMessage]=useState('Ищем канал и открываем Reklio в Telegram…');
  useEffect(()=>{
@@ -191,7 +191,7 @@ export default function ChannelAliasRedirect(){
  },[alias]);
  return <div className="lp"><main className="lp-section" style={{minHeight:'70vh',display:'grid',placeItems:'center',textAlign:'center',padding:'32px'}}><div><h1>Reklio</h1><p>{message}</p><a href="https://t.me/ReklioBot">Открыть Reklio в Telegram</a></div></main></div>;
 }
-function Landing(){
+export default function Landing(){
  const path=window.location.pathname;
  const aliasRoute=/^\/ad\/[a-zA-Z0-9_]{4,32}\/?$/.test(path);
  const legalKind=path==='/terms'?'terms':path==='/privacy'?'privacy':path==='/advertising-rules'?'advertising':null;
