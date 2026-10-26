@@ -1124,9 +1124,12 @@ app.MapPut("/api/my-channels/{channelId:long}/alias",async (long channelId,Chann
   if(await verify.ExecuteScalarAsync(ct) is null){await tx.RollbackAsync(ct);return Results.NotFound();}
  }
  try{
+  await using(var remove=new MySqlCommand("DELETE FROM reklio_channel_aliases WHERE channel_id=@id",conn,tx)){
+   remove.Parameters.AddWithValue("@id",channelId);
+   await remove.ExecuteNonQueryAsync(ct);
+  }
   await using var cmd=new MySqlCommand("""
   INSERT INTO reklio_channel_aliases(channel_id,alias) VALUES(@id,@alias)
-  ON DUPLICATE KEY UPDATE alias=VALUES(alias)
   """,conn,tx);
   cmd.Parameters.AddWithValue("@id",channelId);cmd.Parameters.AddWithValue("@alias",alias);
   await cmd.ExecuteNonQueryAsync(ct);
