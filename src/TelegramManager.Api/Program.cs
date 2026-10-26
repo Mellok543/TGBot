@@ -1110,7 +1110,7 @@ app.MapGet("/api/public/channel-alias/{alias}",async (string alias,MySqlDataSour
  var id=await cmd.ExecuteScalarAsync(ct);
  return id is null?Results.NotFound():Results.Ok(new {channelId=Convert.ToInt64(id)});
 });
-app.MapPut("/api/my-channels/{channelId:long}/alias",async (long channelId,ChannelAliasInput input,HttpRequest req,MySqlDataSource db,CancellationToken ct)=>{
+app.MapPost("/api/my-channels/{channelId:long}/alias",async (long channelId,ChannelAliasInput input,HttpRequest req,MySqlDataSource db,CancellationToken ct)=>{
  if(Authorized(req) is not long owner)return Results.Unauthorized();
  var alias=(input.Alias??"").Trim().ToLowerInvariant();
  if(!System.Text.RegularExpressions.Regex.IsMatch(alias,@"^[a-z0-9_]{4,32}$"))
