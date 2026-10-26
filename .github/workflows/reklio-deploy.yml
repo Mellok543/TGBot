@@ -129,6 +129,25 @@ jobs:
           grep -qi '^access-control-allow-origin: https://reklio.site' /tmp/reklio-preflight.headers
           grep -qi '^access-control-allow-headers:.*x-telegram-init-data' /tmp/reklio-preflight.headers
 
+      - name: Diagnose catalog SQL on failure
+        if: failure()
+        continue-on-error: true
+        env:
+          DEPLOY_HOST: ${{ secrets.REKLIO_DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.REKLIO_DEPLOY_USER }}
+          DEPLOY_PORT: ${{ secrets.REKLIO_DEPLOY_PORT }}
+        run: |
+          ssh -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=15 \
+            -p "${DEPLOY_PORT:-22}" "$DEPLOY_USER@$DEPLOY_HOST" 'bash -s' <<'REMOTE'
+          set +e
+          echo '=== Catalog query diagnostics ==='
+          mariadb --defaults-extra-file="$HOME/.my.cnf" --batch -e "SELECT DATABASE(); SELECT telegram_id,title,category,ad_price_rub,ad_description,username FROM s2_telegram_manager.channels WHERE is_listed=TRUE ORDER BY connected_at DESC LIMIT 1;"
+          echo '=== Likes table ==='
+          mariadb --defaults-extra-file="$HOME/.my.cnf" --batch -e "SHOW TABLES FROM s2_telegram_manager LIKE 'reklio_channel_likes';"
+          echo '=== API error signatures ==='
+          journalctl -u reklio-api.service -n 120 --no-pager --output=cat 2>/dev/null | grep -E -A 5 'Exception|MySql|Unknown column|doesn.t exist|Failed' | tail -n 35
+          REMOTE
+
       - name: Verify public API
         run: |
           set -euo pipefail
