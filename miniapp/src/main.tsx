@@ -99,7 +99,7 @@ function App() {
       || new URLSearchParams(window.location.search).get('tgWebAppStartParam')
       || new URLSearchParams(window.location.search).get('startapp')
       || '';
-    const match=/^ad_(-?\\d+)$/.exec(raw);
+    const match=/^ad_(-?\d+)$/.exec(raw);
     return match?Number(match[1]):null;
   });
   const [directLoading,setDirectLoading]=useState(false);
