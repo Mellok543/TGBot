@@ -29,7 +29,20 @@
   <script type="application/ld+json">
   {"@context":"https://schema.org","@type":"WebSite","name":"Reklio","alternateName":"Reklio — биржа рекламы в Telegram","url":"https://reklio.site/","inLanguage":"ru","description":"Платформа для поиска Telegram-каналов и размещения рекламы.","potentialAction":{"@type":"SearchAction","target":"https://reklio.site/catalog?q={search_term_string}","query-input":"required name=search_term_string"}}
   </script>
-  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <script>
+    // Never hold the public website's first paint hostage to an external SDK.
+    window.reklioTelegramSdkReady = false;
+    window.reklioTelegramSdkFailed = false;
+    function reklioTelegramSdkLoaded() {
+      window.reklioTelegramSdkReady = true;
+      window.dispatchEvent(new Event('reklio-telegram-ready'));
+    }
+    function reklioTelegramSdkFailed() {
+      window.reklioTelegramSdkFailed = true;
+      window.dispatchEvent(new Event('reklio-telegram-ready'));
+    }
+  </script>
+  <script async src="https://telegram.org/js/telegram-web-app.js" onload="reklioTelegramSdkLoaded()" onerror="reklioTelegramSdkFailed()"></script>
 </head>
 <body><div id="root"></div><script type="module" src="/src/main.tsx"></script></body>
 </html>
