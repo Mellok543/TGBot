@@ -61,6 +61,7 @@ catch(MySqlException ex)
     app.Logger.LogWarning(ex,"Reklio staff schema could not be initialized; verify DB CREATE permission");
 }
 
+var likesAvailable=false;
 try
 {
     await using var likesDb=app.Services.GetRequiredService<MySqlDataSource>();
@@ -74,6 +75,7 @@ try
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
         """);
     await createLikes.ExecuteNonQueryAsync();
+    likesAvailable=true;
 }
 catch(MySqlException ex)
 {
@@ -211,18 +213,18 @@ app.MapDelete("/api/channel-likes/{channelId:long}",async(long channelId,HttpReq
 app.MapGet("/api/public/channels", async (HttpRequest req,MySqlDataSource db,CancellationToken ct) =>
 {
     var limit=int.TryParse(req.Query["limit"],out var requested)?Math.Clamp(requested,1,60):40;
-    await using var cmd=db.CreateCommand("""
+    await using var cmd=db.CreateCommand($"""
         SELECT c.telegram_id,c.title,c.category,c.ad_price_rub,c.ad_description,c.username,
           (SELECT m.subscribers FROM channel_daily_metrics m WHERE m.channel_id=c.telegram_id AND m.subscribers IS NOT NULL ORDER BY m.day DESC LIMIT 1),
           (SELECT CAST(ROUND(AVG(v.views)) AS SIGNED) FROM reklio_post_views v
            JOIN channel_observed_posts op ON op.channel_id=v.channel_id AND op.message_id=v.message_id
            WHERE v.channel_id=c.telegram_id AND op.posted_at>=UTC_TIMESTAMP()-INTERVAL 30 DAY),
           (SELECT p.active_until FROM channel_promotions p WHERE p.channel_id=c.telegram_id AND p.active_until>UTC_TIMESTAMP() LIMIT 1),
-          (SELECT COUNT(*) FROM reklio_channel_likes l WHERE l.channel_id=c.telegram_id)
+          ({(likesAvailable ? "SELECT COUNT(*) FROM reklio_channel_likes l WHERE l.channel_id=c.telegram_id" : "SELECT 0")})
         FROM channels c
         LEFT JOIN channel_promotions promotion ON promotion.channel_id=c.telegram_id
         WHERE c.is_listed=TRUE
-        ORDER BY (promotion.active_until>UTC_TIMESTAMP()) DESC, (SELECT COUNT(*) FROM reklio_channel_likes l WHERE l.channel_id=c.telegram_id) DESC,c.connected_at DESC LIMIT @limit
+        ORDER BY (promotion.active_until>UTC_TIMESTAMP()) DESC, ({(likesAvailable ? "SELECT COUNT(*) FROM reklio_channel_likes l WHERE l.channel_id=c.telegram_id" : "SELECT 0")}) DESC,c.connected_at DESC LIMIT @limit
         """);
     cmd.Parameters.Add(new MySqlParameter("@limit",limit));
     var rows=new List<object>();
@@ -277,14 +279,14 @@ app.MapGet("/api/public/channels/{id:long}/avatar", async (long id, MySqlDataSou
 });
 app.MapGet("/api/public/channels/{id:long}", async (long id,MySqlDataSource db,CancellationToken ct) =>
 {
-    await using var cmd=db.CreateCommand("""
+    await using var cmd=db.CreateCommand($"""
         SELECT c.telegram_id,c.title,c.category,c.ad_price_rub,c.ad_description,c.username,
           (SELECT m.subscribers FROM channel_daily_metrics m WHERE m.channel_id=c.telegram_id AND m.subscribers IS NOT NULL ORDER BY m.day DESC LIMIT 1),
           (SELECT CAST(ROUND(AVG(v.views)) AS SIGNED) FROM reklio_post_views v
            JOIN channel_observed_posts op ON op.channel_id=v.channel_id AND op.message_id=v.message_id
            WHERE v.channel_id=c.telegram_id AND op.posted_at>=UTC_TIMESTAMP()-INTERVAL 30 DAY),
           (SELECT p.active_until FROM channel_promotions p WHERE p.channel_id=c.telegram_id AND p.active_until>UTC_TIMESTAMP() LIMIT 1),
-          (SELECT COUNT(*) FROM reklio_channel_likes l WHERE l.channel_id=c.telegram_id)
+          ({(likesAvailable ? "SELECT COUNT(*) FROM reklio_channel_likes l WHERE l.channel_id=c.telegram_id" : "SELECT 0")})
         FROM channels c WHERE c.telegram_id=@id AND c.is_listed=TRUE LIMIT 1
         """);
     cmd.Parameters.Add(new MySqlParameter("@id",id));
@@ -335,7 +337,7 @@ app.MapGet("/api/channels", async (HttpRequest req, MySqlDataSource db, Cancella
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
         """))
         await init.ExecuteNonQueryAsync(ct);
-    await using var cmd = db.CreateCommand("""
+    await using var cmd = db.CreateCommand($"""
         SELECT c.telegram_id,c.title,c.category,c.ad_price_rub,c.ad_description,c.username,
                (SELECT m.subscribers FROM channel_daily_metrics m
                 WHERE m.channel_id=c.telegram_id AND m.subscribers IS NOT NULL
@@ -348,7 +350,7 @@ app.MapGet("/api/channels", async (HttpRequest req, MySqlDataSource db, Cancella
                (SELECT COUNT(*) FROM reklio_post_views v JOIN channel_observed_posts p
                 ON p.channel_id=v.channel_id AND p.message_id=v.message_id
                 WHERE v.channel_id=c.telegram_id AND p.posted_at>=UTC_TIMESTAMP()-INTERVAL 30 DAY) AS viewsSamples,
-               (SELECT COUNT(*) FROM reklio_channel_likes l WHERE l.channel_id=c.telegram_id) AS likes,
+               ({(likesAvailable ? "SELECT COUNT(*) FROM reklio_channel_likes l WHERE l.channel_id=c.telegram_id" : "SELECT 0")}) AS likes,
                (SELECT cp.active_until FROM channel_promotions cp WHERE cp.channel_id=c.telegram_id AND cp.active_until>UTC_TIMESTAMP() LIMIT 1) AS promotedUntil
         FROM channels c WHERE c.is_listed=TRUE
           AND (@category='' OR c.category=@category)
