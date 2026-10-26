@@ -31,7 +31,7 @@ type Subscription={plan:'FREE'|'PRO';isPro:boolean;expiresAt:string|null;channel
 type Tab = 'catalog' | 'orders' | 'channels' | 'profile';
 const CHANNEL_CATEGORIES=['Технологии','Игры','Новости','Бизнес','Финансы','Образование','Развлечения','Юмор','Спорт','Путешествия','Авто','Красота и стиль','Здоровье','Кулинария','Музыка','Кино','Другое'];
 const API = import.meta.env.VITE_API_URL || '';
-const tg = window.Telegram?.WebApp;
+let tg = window.Telegram?.WebApp;
 const REQUEST_TIMEOUT_MS = 12000;
 async function post<T>(path: string, data: unknown): Promise<T> {
   const response = await fetch(API + path, { signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS), method: 'POST',
@@ -676,16 +676,28 @@ function App() {
     <nav>{tabs.map(({id,label,icon:Icon})=><button key={id} className={tab===id?'active':''} onClick={()=>setTab(id)}><Icon size={21}/><span>{label}</span></button>)}</nav>
   </div>;
 }
-// Keep the existing Telegram Mini App on its current URL; show the public landing
-// only to ordinary browsers. /app/ is a direct entry for standalone testing.
-const telegramContext=Boolean(window.Telegram?.WebApp?.initData)
-  || new URLSearchParams(window.location.search).has('tgWebAppData');
-const appEntry=telegramContext || window.location.pathname.startsWith('/app');
+// Telegram loads its SDK asynchronously so external CDN latency cannot freeze the public site.
+// Capture SDK only after it is ready, before first rendering the Telegram UI.
 const root=createRoot(document.getElementById('root')!);
-if(appEntry){
-  root.render(<React.StrictMode><App/></React.StrictMode>);
-}else{
-  import('./Landing').then(({default:Landing})=>{
-    root.render(<React.StrictMode><Landing/></React.StrictMode>);
-  });
+const telegramLaunch=window.location.pathname.startsWith('/app')
+  || /tgWebApp(Data|Platform|StartParam)/.test(window.location.search+window.location.hash)
+  || Boolean((window as Window & {TelegramWebviewProxy?:unknown}).TelegramWebviewProxy)
+  || Boolean(window.Telegram?.WebApp?.initData);
+let booted=false;
+function boot(){
+  if(booted)return;
+  booted=true;
+  tg=window.Telegram?.WebApp;
+  if(telegramLaunch){
+    root.render(<React.StrictMode><App/></React.StrictMode>);
+  }else{
+    import('./Landing').then(({default:Landing})=>root.render(<React.StrictMode><Landing/></React.StrictMode>))
+      .catch(()=>{const el=document.getElementById('root');if(el)el.textContent='Не удалось загрузить сайт. Обновите страницу.';});
+  }
+}
+if(!telegramLaunch || window.Telegram?.WebApp)boot();
+else{
+  window.addEventListener('reklio-telegram-ready',boot,{once:true});
+  // Broken Telegram SDK should fail visibly, not leave a perpetual blank page.
+  window.setTimeout(boot,4500);
 }
