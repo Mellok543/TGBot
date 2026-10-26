@@ -302,3 +302,8 @@ html{scroll-behavior:smooth;scroll-padding-top:90px}
 
 .lp .lp-catalog-avatar{position:relative;overflow:hidden;flex-shrink:0;display:grid;place-items:center}
 .lp .lp-catalog-avatar img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;border-radius:inherit}
+
+.lp-monthly-ranking{margin:0 0 26px;padding:20px;border:1px solid rgba(145,155,193,.25);border-radius:18px;background:rgba(104,83,197,.07)}
+.lp-monthly-ranking h3{margin:0 0 13px}.lp-top-entries{display:grid;gap:7px}
+.lp-top-entries a{display:flex;align-items:center;gap:12px;text-decoration:none;color:inherit;padding:10px 12px;border-radius:10px;background:rgba(125,125,170,.09)}
+.lp-top-entries a span{flex:1}.lp-monthly-ranking small{display:block;margin-top:10px}
