@@ -193,9 +193,10 @@ export default function ChannelAliasRedirect(){
 }
 function Landing(){
  const path=window.location.pathname;
- if(/^\/ad\//.test(path))return <ChannelAliasRedirect/>;
+ const aliasRoute=/^\/ad\/[a-zA-Z0-9_]{4,32}\/?$/.test(path);
  const legalKind=path==='/terms'?'terms':path==='/privacy'?'privacy':path==='/advertising-rules'?'advertising':null;
  const [mobileMenu,setMobileMenu]=useState(false);
+ if(aliasRoute)return <ChannelAliasRedirect/>;
  return <div className="lp">
  <header className="lp-nav"><a className="lp-brand" href="/"><img src="/reklio-mark.svg" alt=""/>Rekli<span>o</span></a><nav className={mobileMenu?"lp-nav-links open":"lp-nav-links"}><a href="/" onClick={()=>setMobileMenu(false)}>Главная</a><a href="/catalog" onClick={()=>setMobileMenu(false)}>Каталог</a><a href="/help" onClick={()=>setMobileMenu(false)}>Как работает</a><a href="/pricing" onClick={()=>setMobileMenu(false)}>Тарифы</a><a className="lp-mobile-legal" href="/terms" onClick={()=>setMobileMenu(false)}>Документы и правила</a><a className="lp-mobile-legal" href="mailto:support@reklio.site">Связаться с нами</a></nav><a className="lp-nav-action" href="https://t.me/ReklioBot">Личный кабинет ↗</a><button type="button" className="lp-mobile-menu" aria-expanded={mobileMenu} aria-label="Открыть меню" onClick={()=>setMobileMenu(!mobileMenu)}>{mobileMenu?"✕":"☰"}</button></header>
  {mobileMenu&&<div className="lp-mobile-drawer-wrap"><button type="button" className="lp-mobile-scrim" aria-label="Закрыть меню" onClick={()=>setMobileMenu(false)}></button><aside className="lp-mobile-drawer" aria-label="Навигация Reklio"><div className="lp-drawer-title"><b>Навигация</b><button onClick={()=>setMobileMenu(false)} aria-label="Закрыть">✕</button></div><a href="/" onClick={()=>setMobileMenu(false)}>⌂　Главная</a><a href="/catalog" onClick={()=>setMobileMenu(false)}>▦　Каталог каналов</a><a href="/pricing" onClick={()=>setMobileMenu(false)}>✦　Тарифы</a><a href="/help" onClick={()=>setMobileMenu(false)}>ⓘ　Как это работает</a><div className="lp-drawer-divider"/><a href="/terms">Условия использования</a><a href="/privacy">Конфиденциальность</a><a href="/advertising-rules">Правила рекламы</a><a href="mailto:support@reklio.site">Связаться с нами</a><a className="lp-drawer-cta" href="https://t.me/ReklioBot">Открыть Reklio ↗</a></aside></div>}
