@@ -213,6 +213,8 @@ app.MapDelete("/api/channel-likes/{channelId:long}",async(long channelId,HttpReq
 app.MapGet("/api/public/channels", async (HttpRequest req,MySqlDataSource db,CancellationToken ct) =>
 {
     var limit=int.TryParse(req.Query["limit"],out var requested)?Math.Clamp(requested,1,60):40;
+    try
+    {
     await using var cmd=db.CreateCommand("""
         SELECT telegram_id,title,category,ad_price_rub,ad_description,username
         FROM channels WHERE is_listed=TRUE ORDER BY connected_at DESC LIMIT @limit
@@ -229,6 +231,17 @@ app.MapGet("/api/public/channels", async (HttpRequest req,MySqlDataSource db,Can
       subscribers=(int?)null,avgViews=(long?)null,promotedUntil=(DateTime?)null,likes=0
     });
     return Results.Ok(rows);
+    }
+    catch(MySqlException ex)
+    {
+        app.Logger.LogError(ex,"Public catalog database query failed");
+        return Results.Json(new {error="CATALOG_DATABASE",mysqlCode=ex.Number},statusCode:503);
+    }
+    catch(Exception ex)
+    {
+        app.Logger.LogError(ex,"Public catalog request failed");
+        return Results.Json(new {error="CATALOG_INTERNAL",type=ex.GetType().Name},statusCode:503);
+    }
 });
 // Proxy channel photos without exposing the Telegram bot token or file URLs to browsers.
 app.MapGet("/api/public/channels/{id:long}/avatar", async (long id, MySqlDataSource db, IHttpClientFactory clients, IMemoryCache cache, CancellationToken ct) =>
