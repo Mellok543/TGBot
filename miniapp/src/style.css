@@ -150,3 +150,8 @@
 .monthlyTopPanel{padding:16px;margin:0 0 16px;border:1px solid rgba(150,120,230,.28);border-radius:16px;background:rgba(102,70,195,.08)}
 .monthlyTopPanel h3{margin:0 0 12px}.monthlyTopRow{display:flex;align-items:center;gap:12px;padding:9px 4px;border-bottom:1px solid rgba(150,150,190,.15);font-size:13px}
 .monthlyTopRow span{flex:1}.monthlyTopPanel small{display:block;margin-top:10px;opacity:.7}
+
+.channelDirectLinks{margin:16px 0;padding:17px;border:1px solid rgba(125,170,215,.35);border-radius:15px;background:rgba(75,125,175,.07)}
+.channelDirectLinks h3{margin:0 0 8px}.channelDirectLinks p,.channelDirectLinks small{font-size:13px;line-height:1.5;color:var(--muted,#aab8d0)}
+.channelDirectLinks input{box-sizing:border-box;display:block;width:100%;padding:12px;margin:12px 0;border:1px solid rgba(155,172,211,.3);border-radius:10px;background:rgba(10,15,28,.28);color:inherit;min-width:0}
+.channelDirectActions{display:flex;flex-wrap:wrap;gap:9px;margin-bottom:8px}.channelDirectActions button{flex:1;min-width:145px}
