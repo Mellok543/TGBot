@@ -214,26 +214,19 @@ app.MapGet("/api/public/channels", async (HttpRequest req,MySqlDataSource db,Can
 {
     var limit=int.TryParse(req.Query["limit"],out var requested)?Math.Clamp(requested,1,60):40;
     await using var cmd=db.CreateCommand("""
-        SELECT c.telegram_id,c.title,c.category,c.ad_price_rub,c.ad_description,c.username,
-          (SELECT m.subscribers FROM channel_daily_metrics m WHERE m.channel_id=c.telegram_id AND m.subscribers IS NOT NULL ORDER BY m.day DESC LIMIT 1),
-          (SELECT CAST(ROUND(AVG(v.views)) AS SIGNED) FROM reklio_post_views v
-           JOIN channel_observed_posts op ON op.channel_id=v.channel_id AND op.message_id=v.message_id
-           WHERE v.channel_id=c.telegram_id AND op.posted_at>=UTC_TIMESTAMP()-INTERVAL 30 DAY),
-          (SELECT p.active_until FROM channel_promotions p WHERE p.channel_id=c.telegram_id AND p.active_until>UTC_TIMESTAMP() LIMIT 1)
-        FROM channels c
-        LEFT JOIN channel_promotions promotion ON promotion.channel_id=c.telegram_id
-        WHERE c.is_listed=TRUE
-        ORDER BY (promotion.active_until>UTC_TIMESTAMP()) DESC, c.connected_at DESC LIMIT @limit
+        SELECT telegram_id,title,category,ad_price_rub,ad_description,username
+        FROM channels WHERE is_listed=TRUE ORDER BY connected_at DESC LIMIT @limit
         """);
     cmd.Parameters.Add(new MySqlParameter("@limit",limit));
     var rows=new List<object>();
     await using var rd=await cmd.ExecuteReaderAsync(ct);
-    while(await rd.ReadAsync(ct)) rows.Add(new {
-      id=rd.GetInt64(0),title=rd.GetString(1),category=rd.GetString(2),
-      price=rd.GetDecimal(3),description=rd.IsDBNull(4)?"":rd.GetString(4),
+    while(await rd.ReadAsync(ct))rows.Add(new {
+      id=rd.GetInt64(0),title=rd.GetString(1),
+      category=rd.IsDBNull(2)?"Другое":rd.GetString(2),
+      price=rd.IsDBNull(3)?0m:rd.GetDecimal(3),
+      description=rd.IsDBNull(4)?"":rd.GetString(4),
       username=rd.IsDBNull(5)?null:rd.GetString(5),
-      subscribers=rd.IsDBNull(6)?(int?)null:rd.GetInt32(6),
-      avgViews=rd.IsDBNull(7)?(long?)null:rd.GetInt64(7),promotedUntil=rd.IsDBNull(8)?(DateTime?)null:rd.GetDateTime(8)
+      subscribers=(int?)null,avgViews=(long?)null,promotedUntil=(DateTime?)null,likes=0
     });
     return Results.Ok(rows);
 });
@@ -279,22 +272,18 @@ app.MapGet("/api/public/channels/{id:long}/avatar", async (long id, MySqlDataSou
 app.MapGet("/api/public/channels/{id:long}", async (long id,MySqlDataSource db,CancellationToken ct) =>
 {
     await using var cmd=db.CreateCommand("""
-        SELECT c.telegram_id,c.title,c.category,c.ad_price_rub,c.ad_description,c.username,
-          (SELECT m.subscribers FROM channel_daily_metrics m WHERE m.channel_id=c.telegram_id AND m.subscribers IS NOT NULL ORDER BY m.day DESC LIMIT 1),
-          (SELECT CAST(ROUND(AVG(v.views)) AS SIGNED) FROM reklio_post_views v
-           JOIN channel_observed_posts op ON op.channel_id=v.channel_id AND op.message_id=v.message_id
-           WHERE v.channel_id=c.telegram_id AND op.posted_at>=UTC_TIMESTAMP()-INTERVAL 30 DAY),
-          (SELECT p.active_until FROM channel_promotions p WHERE p.channel_id=c.telegram_id AND p.active_until>UTC_TIMESTAMP() LIMIT 1)
-        FROM channels c WHERE c.telegram_id=@id AND c.is_listed=TRUE LIMIT 1
+        SELECT telegram_id,title,category,ad_price_rub,ad_description,username
+        FROM channels WHERE telegram_id=@id AND is_listed=TRUE LIMIT 1
         """);
     cmd.Parameters.Add(new MySqlParameter("@id",id));
     await using var rd=await cmd.ExecuteReaderAsync(ct);
     if(!await rd.ReadAsync(ct))return Results.NotFound();
-    return Results.Ok(new {id=rd.GetInt64(0),title=rd.GetString(1),category=rd.GetString(2),
-      price=rd.GetDecimal(3),description=rd.IsDBNull(4)?"":rd.GetString(4),
+    return Results.Ok(new {id=rd.GetInt64(0),title=rd.GetString(1),
+      category=rd.IsDBNull(2)?"Другое":rd.GetString(2),
+      price=rd.IsDBNull(3)?0m:rd.GetDecimal(3),
+      description=rd.IsDBNull(4)?"":rd.GetString(4),
       username=rd.IsDBNull(5)?null:rd.GetString(5),
-      subscribers=rd.IsDBNull(6)?(int?)null:rd.GetInt32(6),
-      avgViews=rd.IsDBNull(7)?(long?)null:rd.GetInt64(7),promotedUntil=rd.IsDBNull(8)?(DateTime?)null:rd.GetDateTime(8)});
+      subscribers=(int?)null,avgViews=(long?)null,promotedUntil=(DateTime?)null,likes=0});
 });
 app.MapGet("/api/public/channels/{id:long}/details", async (long id,MySqlDataSource db,CancellationToken ct) =>
 {
