@@ -344,10 +344,3 @@ html{scroll-behavior:smooth;scroll-padding-top:90px}
 .lp-login-user button{border:1px solid #53719566;border-radius:10px;background:#244977;color:#eaf4ff;padding:9px 12px;font-size:12px}
 .lp-theme-light .lp-login-user button{background:#e9f2ff;color:#1a5294;border-color:#c7d9ef}
 @media(max-width:750px){.lp-login-user{max-width:160px;overflow:hidden}.lp-login-user span{overflow:hidden;text-overflow:ellipsis}.lp-login-user button{padding:7px}}
-
-
-/* Browser Telegram login */
-.lp-login-user{display:flex;align-items:center;gap:10px;color:var(--ink);font-size:13px;font-weight:650;white-space:nowrap}
-.lp-login-user button{border:1px solid #53719566;border-radius:10px;background:#244977;color:#eaf4ff;padding:9px 12px;font-size:12px}
-.lp-theme-light .lp-login-user button{background:#e9f2ff;color:#1a5294;border-color:#c7d9ef}
-@media(max-width:750px){.lp-login-user{max-width:160px;overflow:hidden}.lp-login-user span{overflow:hidden;text-overflow:ellipsis}.lp-login-user button{padding:7px}}
