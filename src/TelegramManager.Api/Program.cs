@@ -143,6 +143,38 @@ app.MapGet("/api/web/profile", async (HttpContext ctx,MySqlDataSource db,Cancell
        sales=reader.GetInt64(2),staffRole=role
     });
 });
+app.MapGet("/api/web/channels", async (HttpContext ctx, MySqlDataSource db, CancellationToken ct) =>
+{
+    if(ctx.User.Identity?.IsAuthenticated!=true ||
+       !long.TryParse(ctx.User.FindFirst("sub")?.Value,out var userId) || userId<=0)
+        return Results.Unauthorized();
+    await using var cmd=db.CreateCommand("""
+        SELECT c.telegram_id,c.title,c.is_listed,c.ad_price_rub,c.category,a.alias FROM channels c
+        LEFT JOIN reklio_channel_aliases a ON a.channel_id=c.telegram_id
+        WHERE c.connected_by=@user ORDER BY c.connected_at DESC LIMIT 50
+        """);
+    cmd.Parameters.Add(new MySqlParameter("@user",userId));
+    var channels=new List<object>();
+    await using var reader=await cmd.ExecuteReaderAsync(ct);
+    while(await reader.ReadAsync(ct))
+        channels.Add(new {id=reader.GetInt64(0),title=reader.GetString(1),listed=reader.GetBoolean(2),
+          price=reader.GetDecimal(3),category=reader.IsDBNull(4)?"":reader.GetString(4),
+          alias=reader.IsDBNull(5)?null:reader.GetString(5)});
+    return Results.Ok(channels);
+});
+app.MapPost("/api/web/channels/{channelId:long}/listing", async (long channelId,UpdateListingInput input,HttpContext ctx,MySqlDataSource db,CancellationToken ct) =>
+{
+    if(ctx.User.Identity?.IsAuthenticated!=true ||
+       !long.TryParse(ctx.User.FindFirst("sub")?.Value,out var userId) || userId<=0)
+        return Results.Unauthorized();
+    if(ctx.Request.Headers.Origin.ToString() is not ("https://reklio.site" or "https://www.reklio.site"))
+        return Results.StatusCode(403);
+    await using var cmd=db.CreateCommand("UPDATE channels SET is_listed=@listed WHERE telegram_id=@channel AND connected_by=@owner");
+    cmd.Parameters.Add(new MySqlParameter("@listed",input.Listed));
+    cmd.Parameters.Add(new MySqlParameter("@channel",channelId));
+    cmd.Parameters.Add(new MySqlParameter("@owner",userId));
+    return await cmd.ExecuteNonQueryAsync(ct)>0?Results.Ok(new{saved=true}):Results.NotFound();
+});
 app.MapPost("/api/auth/logout", async (HttpContext ctx) =>
 {
     var origin=ctx.Request.Headers.Origin.ToString();
