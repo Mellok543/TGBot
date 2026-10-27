@@ -385,7 +385,20 @@ static long? VerifyTelegram(string? initData, string token)
     return doc.RootElement.TryGetProperty("id", out var id) && id.TryGetInt64(out var value) ? value : null;
 }
 
-long? Authorized(HttpRequest req) => VerifyTelegram(req.Headers["X-Telegram-Init-Data"].ToString(), token);
+long? Authorized(HttpRequest req)
+{
+    var initData=req.Headers["X-Telegram-Init-Data"].ToString();
+    if(!string.IsNullOrEmpty(initData)) return VerifyTelegram(initData,token);
+    // Browser cookie access is narrowly limited to existing customer-order actions.
+    // Cross-origin requests must carry the exact trusted website Origin (CSRF defense).
+    var path=req.Path.Value??"";
+    if(!System.Text.RegularExpressions.Regex.IsMatch(path,
+        @"^/api/orders/[0-9]+/(reschedule|dispute|payment|payment/check|deal)$",
+        System.Text.RegularExpressions.RegexOptions.CultureInvariant)) return null;
+    if(req.Headers.Origin.ToString() is not ("https://reklio.site" or "https://www.reklio.site"))return null;
+    if(req.HttpContext.User.Identity?.IsAuthenticated!=true)return null;
+    return long.TryParse(req.HttpContext.User.FindFirst("id")?.Value,out var id)&&id>0?id:null;
+}
 app.MapGet("/api/health", () => Results.Ok(new { status = "ok" }));
 app.MapGet("/api/public/bot-link", async (IHttpClientFactory clients, CancellationToken ct) =>
 {
