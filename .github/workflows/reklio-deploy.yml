@@ -83,13 +83,16 @@ jobs:
           DEPLOY_HOST: ${{ secrets.REKLIO_DEPLOY_HOST }}
           DEPLOY_USER: ${{ secrets.REKLIO_DEPLOY_USER }}
           DEPLOY_PORT: ${{ secrets.REKLIO_DEPLOY_PORT }}
+          LOGIN_SECRET: ${{ secrets.TELEGRAM_LOGIN_CLIENT_SECRET }}
         run: |
           set -euo pipefail
-          test -n "$DEPLOY_HOST" && test -n "$DEPLOY_USER"
+          test -n "$DEPLOY_HOST" && test -n "$DEPLOY_USER" && test -n "$LOGIN_SECRET"
           PORT="${DEPLOY_PORT:-22}"
-          ssh -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=15 \
-            -p "$PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
-            'sudo -n /usr/local/sbin/reklio-deploy'
+          # Secret is sent on encrypted SSH stdin, never in arguments or logs.
+          printf '%s' "$LOGIN_SECRET" | base64 -w0 | \
+            ssh -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=15 \
+              -p "$PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
+              'sudo -n /usr/local/sbin/reklio-deploy'
       - name: Verify public Mini App assets
         run: |
           set -euo pipefail
