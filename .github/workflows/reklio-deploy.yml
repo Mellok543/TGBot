@@ -110,6 +110,25 @@ jobs:
               *) echo "Incorrect $ext content type: $content_type" >&2; exit 1 ;;
             esac
           done
+      - name: Diagnose login environment without disclosing credentials
+        env:
+          DEPLOY_HOST: ${{ secrets.REKLIO_DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.REKLIO_DEPLOY_USER }}
+          DEPLOY_PORT: ${{ secrets.REKLIO_DEPLOY_PORT }}
+        run: |
+          set -euo pipefail
+          ssh -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=15 \
+            -p "${DEPLOY_PORT:-22}" "$DEPLOY_USER@$DEPLOY_HOST" 'bash -s' <<'REMOTE'
+          set -eu
+          echo "EnvironmentFiles:"
+          systemctl show reklio-api.service -p EnvironmentFiles --value | sed -E 's/\([^)]*\)//g'
+          echo "Authentication drop-in:"
+          if test -e /etc/systemd/system/reklio-api.service.d/telegram-login.conf; then echo exists; else echo missing; fi
+          echo "Auth config readable by deploy account:"
+          if test -r /etc/reklio/telegram-login.env; then echo yes; else echo no; fi
+          echo "API service status:"
+          systemctl is-active reklio-api.service
+          REMOTE
       - name: Check browser login readiness
         run: |
           set -euo pipefail
