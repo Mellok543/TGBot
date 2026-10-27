@@ -212,6 +212,23 @@ export default function Landing(){
    setThemePreference(next);
    try {if(next==='system')localStorage.removeItem('reklio-theme');else localStorage.setItem('reklio-theme',next);} catch {}
  };
+ const [loginState,setLoginState]=useState<{authenticated:boolean;name?:string;username?:string}|null>(null);
+ const [loginAvailable,setLoginAvailable]=useState(false);
+ useEffect(()=>{
+   const controller=new AbortController();
+   fetch(publicApi+'/api/auth/config',{signal:controller.signal})
+     .then(r=>r.ok?r.json():null).then(v=>{if(v)setLoginAvailable(Boolean(v.telegramLoginAvailable));}).catch(()=>{});
+   fetch(publicApi+'/api/auth/me',{credentials:'include',signal:controller.signal})
+     .then(r=>r.ok?r.json():null).then(v=>{if(v)setLoginState(v);}).catch(()=>{});
+   return ()=>controller.abort();
+ },[]);
+ const loginAction=loginState?.authenticated
+   ? <div className="lp-login-user"><span>👤 {loginState.name||loginState.username||'Мой аккаунт'}</span><button type="button" onClick={async()=>{
+       try{const response=await fetch(publicApi+'/api/auth/logout',{method:'POST',credentials:'include'});
+       if(response.ok)setLoginState({authenticated:false});}catch{}
+     }}>Выйти</button></div>
+   : loginAvailable?<a className="lp-nav-action" href={publicApi+'/api/auth/login'}>Войти через Telegram ↗</a>
+     :<a className="lp-nav-action" href="https://t.me/ReklioBot">Личный кабинет ↗</a>;
  const themeToggle=<div className="lp-theme-control" role="group" aria-label="Тема оформления">
    <button type="button" className={themePreference==='light'?'selected':''} aria-label="Светлая тема" aria-pressed={themePreference==='light'} title="Светлая" onClick={()=>chooseTheme('light')}>☀</button>
    <button type="button" className={themePreference==='dark'?'selected':''} aria-label="Тёмная тема" aria-pressed={themePreference==='dark'} title="Тёмная" onClick={()=>chooseTheme('dark')}>☾</button>
@@ -219,7 +236,7 @@ export default function Landing(){
  </div>;
  if(aliasRoute)return <ChannelAliasRedirect/>;
  return <div className={"lp lp-theme-"+effectiveTheme}>
- <header className="lp-nav"><a className="lp-brand" href="/"><img src="/reklio-mark.svg" alt=""/>Rekli<span>o</span></a><nav className={mobileMenu?"lp-nav-links open":"lp-nav-links"}><a href="/" onClick={()=>setMobileMenu(false)}>Главная</a><a href="/catalog" onClick={()=>setMobileMenu(false)}>Каталог</a><a href="/help" onClick={()=>setMobileMenu(false)}>Как работает</a><a href="/pricing" onClick={()=>setMobileMenu(false)}>Тарифы</a><a className="lp-mobile-legal" href="/terms" onClick={()=>setMobileMenu(false)}>Документы и правила</a><a className="lp-mobile-legal" href="mailto:support@reklio.site">Связаться с нами</a></nav>{themeToggle}<a className="lp-nav-action" href="https://t.me/ReklioBot">Личный кабинет ↗</a><button type="button" className="lp-mobile-menu" aria-expanded={mobileMenu} aria-label="Открыть меню" onClick={()=>setMobileMenu(!mobileMenu)}>{mobileMenu?"✕":"☰"}</button></header>
+ <header className="lp-nav"><a className="lp-brand" href="/"><img src="/reklio-mark.svg" alt=""/>Rekli<span>o</span></a><nav className={mobileMenu?"lp-nav-links open":"lp-nav-links"}><a href="/" onClick={()=>setMobileMenu(false)}>Главная</a><a href="/catalog" onClick={()=>setMobileMenu(false)}>Каталог</a><a href="/help" onClick={()=>setMobileMenu(false)}>Как работает</a><a href="/pricing" onClick={()=>setMobileMenu(false)}>Тарифы</a><a className="lp-mobile-legal" href="/terms" onClick={()=>setMobileMenu(false)}>Документы и правила</a><a className="lp-mobile-legal" href="mailto:support@reklio.site">Связаться с нами</a></nav>{themeToggle}{loginAction}<button type="button" className="lp-mobile-menu" aria-expanded={mobileMenu} aria-label="Открыть меню" onClick={()=>setMobileMenu(!mobileMenu)}>{mobileMenu?"✕":"☰"}</button></header>
  {mobileMenu&&<div className="lp-mobile-drawer-wrap"><button type="button" className="lp-mobile-scrim" aria-label="Закрыть меню" onClick={()=>setMobileMenu(false)}></button><aside className="lp-mobile-drawer" aria-label="Навигация Reklio"><div className="lp-drawer-title"><b>Навигация</b><button onClick={()=>setMobileMenu(false)} aria-label="Закрыть">✕</button></div><a href="/" onClick={()=>setMobileMenu(false)}>⌂　Главная</a><a href="/catalog" onClick={()=>setMobileMenu(false)}>▦　Каталог каналов</a><a href="/pricing" onClick={()=>setMobileMenu(false)}>✦　Тарифы</a><a href="/help" onClick={()=>setMobileMenu(false)}>ⓘ　Как это работает</a><div className="lp-drawer-divider"/>{themeToggle}<a href="/terms">Условия использования</a><a href="/privacy">Конфиденциальность</a><a href="/advertising-rules">Правила рекламы</a><a href="mailto:support@reklio.site">Связаться с нами</a><a className="lp-drawer-cta" href="https://t.me/ReklioBot">Открыть Reklio ↗</a></aside></div>}
  <main>{legalKind ? <LegalPage kind={legalKind}/> : <>{path!=="/"&&!path.startsWith("/channels/")&&<div className="lp-route-heading"><span>REKLIO / {path==="/catalog"?"ПЛОЩАДКИ":path==="/pricing"?"ПОДПИСКА":"ПОДДЕРЖКА"}</span><h1>{path==="/catalog"?"Каталог каналов":path==="/pricing"?"Тарифы FREE и PRO":"Справочный центр"}</h1><p>{path==="/catalog"?"Подберите Telegram-канал для рекламы и сравните реальные показатели.":path==="/pricing"?"Выберите возможности для своего канала.":"Узнайте, как устроены размещения и контроль рекламы."}</p></div>}
  {path==="/" && <><section className="lp-market-hero">
