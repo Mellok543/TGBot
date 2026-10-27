@@ -183,7 +183,6 @@ try {
     """);
     await initVotes.ExecuteNonQueryAsync();
 } catch(MySqlException ex) {app.Logger.LogWarning(ex,"Votes table setup failed");}
-app.UseCors("miniapp");
 
 static long? VerifyTelegram(string? initData, string token)
 {
