@@ -99,13 +99,19 @@ def record(db, order_id, status):
                 INSERT INTO ad_order_events(order_id,actor_id,event_type,details)
                 VALUES(%s,NULL,'EarlyDeletionDetected','MTProto: две проверки MISSING')
             """, (order_id,))
+            # Every confirmed deletion is a separate incident. The outbox has a
+            # unique key over the first 160 characters of (order, recipient, body),
+            # so an identical notification would be silently ignored after reposting.
+            # Use the durable event ID to distinguish incidents, not monitor runs.
+            incident_id = cur.lastrowid
             cur.execute("""
                 INSERT IGNORE INTO notification_outbox(recipient_id,order_id,body)
-                SELECT owner_id,id,CONCAT('⚠️ Досрочное удаление · заказ #',id,CHAR(10),
+                SELECT owner_id,id,CONCAT('⚠️ Досрочное удаление · заказ #',id,
+                    ' · случай #',%s,CHAR(10),
                     'Рекламный пост отсутствует до завершения оплаченного срока.',CHAR(10),
                     'Выберите: опубликовать заново или открыть спор.')
                 FROM ad_requests WHERE id=%s
-            """, (order_id,))
+            """, (incident_id, order_id))
             LOG.warning("Early deletion confirmed for order %s", order_id)
     db.commit()
 
