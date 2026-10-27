@@ -443,3 +443,20 @@ html{scroll-behavior:smooth;scroll-padding-top:90px}
 .lp-account-action-form button{justify-self:start;border:0;background:#288ad5;color:#fff;padding:11px 16px;border-radius:9px;cursor:pointer}
 .lp-account-order-actions{margin-top:10px}.lp-account-order-actions span{font-size:12px;opacity:.8}
 .lp-theme-light .lp-account-action-form input,.lp-theme-light .lp-account-action-form textarea{background:#fff;color:#172a45}
+
+
+.lp-account-order-badge{display:inline-block;padding:5px 10px;border:1px solid #6785a2;border-radius:8px;font-size:12px;font-weight:700}
+.lp-account-order-badge-success{background:#1a775544;color:#85e9ba;border-color:#339d75}
+.lp-account-order-badge-alert{background:#a34d3544;color:#ffb6a6;border-color:#b56b58}
+.lp-account-progress{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:6px;margin:16px 0;padding:0;list-style:none}
+.lp-account-progress li{font-size:10px;color:#9aabc2;border-top:4px solid #52657c;padding:8px 2px;overflow-wrap:anywhere}
+.lp-account-progress li.done{border-color:#36b6eb;color:#81d9ff}
+.lp-account-history-trigger{cursor:pointer;color:#6cd3ff;background:transparent;border:1px solid #527b9c;padding:9px 12px;border-radius:9px;margin:12px 0}
+.lp-account-history{padding:10px 15px;border-left:3px solid #3a9bd0;background:#2983a51a;border-radius:0 10px 10px 0}
+.lp-account-history p{margin:7px 0;overflow-wrap:anywhere}
+.lp-theme-light .lp-account-order-badge-success{color:#126e4a;background:#dff7e8}
+.lp-theme-light .lp-account-order-badge-alert{color:#9b382a;background:#fff0eb}
+.lp-theme-light .lp-account-progress li{color:#7e8998}
+.lp-theme-light .lp-account-progress li.done{color:#136bae}
+.lp-theme-light .lp-account-history-trigger{color:#166ca7}
+@media(max-width:760px){.lp-account-progress{gap:3px}.lp-account-progress li{font-size:9px}}
