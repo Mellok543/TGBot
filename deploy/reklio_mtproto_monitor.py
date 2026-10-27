@@ -89,22 +89,43 @@ def record(db, order_id, status):
         if cur.fetchone() is None:
             db.commit()
             return
+        # Count confirmed incidents, not MTProto's repeated MISSING checks.
+        # A second deletion of this order after a repost must open a dispute.
         cur.execute("""
-            UPDATE ad_requests SET status='EarlyDeletionPending',payout_status=IF(is_test_order=TRUE,'NotEligible','Blocked'),
-              last_error='MTProto: пост отсутствует; ожидается решение владельца'
-            WHERE id=%s AND status='Published' AND payout_status NOT IN ('Paid','Refunded')
+            SELECT COUNT(*) FROM ad_order_events
+            WHERE order_id=%s AND event_type='EarlyDeletionDetected'
         """, (order_id,))
+        repeated = cur.fetchone()[0] > 0
+        if repeated:
+            cur.execute("""
+                UPDATE ad_requests
+                SET status='Disputed',
+                    dispute_reason='Повторное досрочное удаление рекламной публикации',
+                    disputed_at=UTC_TIMESTAMP(),
+                    payout_status=IF(is_test_order=TRUE,'NotEligible','Blocked'),
+                    last_error='MTProto: повторное досрочное удаление; открыт спор'
+                WHERE id=%s AND status='Published' AND payout_status NOT IN ('Paid','Refunded')
+            """, (order_id,))
+        else:
+            cur.execute("""
+                UPDATE ad_requests SET status='EarlyDeletionPending',
+                    payout_status=IF(is_test_order=TRUE,'NotEligible','Blocked'),
+                    last_error='MTProto: пост отсутствует; ожидается решение владельца'
+                WHERE id=%s AND status='Published' AND payout_status NOT IN ('Paid','Refunded')
+            """, (order_id,))
         if cur.rowcount:
             cur.execute("""
                 INSERT INTO ad_order_events(order_id,actor_id,event_type,details)
-                VALUES(%s,NULL,'EarlyDeletionDetected','MTProto: две проверки MISSING')
-            """, (order_id,))
+                VALUES(%s,NULL,'EarlyDeletionDetected',%s)
+            """, (order_id, 'Повторное удаление: спор открыт автоматически' if repeated
+                    else 'MTProto: две проверки MISSING'))
             # Every confirmed deletion is a separate incident. The outbox has a
             # unique key over the first 160 characters of (order, recipient, body),
             # so an identical notification would be silently ignored after reposting.
             # Use the durable event ID to distinguish incidents, not monitor runs.
             incident_id = cur.lastrowid
-            cur.execute("""
+            if not repeated:
+                cur.execute("""
                 INSERT IGNORE INTO notification_outbox(recipient_id,order_id,body)
                 SELECT owner_id,id,CONCAT('⚠️ Досрочное удаление · заказ #',id,
                     ' · случай #',%s,CHAR(10),
@@ -112,7 +133,23 @@ def record(db, order_id, status):
                     'Выберите: опубликовать заново или открыть спор.')
                 FROM ad_requests WHERE id=%s
             """, (incident_id, order_id))
-            LOG.warning("Early deletion confirmed for order %s", order_id)
+            if repeated:
+                # Notification is informational: no restoration button.
+                cur.execute("""
+                    INSERT IGNORE INTO notification_outbox(recipient_id,order_id,body)
+                    SELECT owner_id,id,CONCAT('⚖️ Повторное удаление · заказ #',id,
+                        ' · случай #',%s,CHAR(10),
+                        'Реклама удалена повторно. Спор открыт автоматически. Повторная публикация недоступна.')
+                    FROM ad_requests WHERE id=%s
+                """, (incident_id, order_id))
+                cur.execute("""
+                    INSERT IGNORE INTO notification_outbox(recipient_id,order_id,body)
+                    SELECT advertiser_id,id,CONCAT('⚖️ Повторное удаление · заказ #',id,
+                        ' · случай #',%s,CHAR(10),
+                        'Публикация повторно удалена до окончания срока. Спор открыт автоматически.')
+                    FROM ad_requests WHERE id=%s
+                """, (incident_id, order_id))
+            LOG.warning("Early deletion confirmed for order %s (repeated=%s)", order_id, repeated)
     db.commit()
 
 
