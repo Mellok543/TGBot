@@ -115,6 +115,34 @@ app.MapGet("/api/auth/me", (HttpContext ctx) =>
         name=ctx.User.FindFirst("name")?.Value,
         username=ctx.User.FindFirst("preferred_username")?.Value});
 });
+app.MapGet("/api/web/profile", async (HttpContext ctx,MySqlDataSource db,CancellationToken ct) =>
+{
+    if(ctx.User.Identity?.IsAuthenticated!=true ||
+       !long.TryParse(ctx.User.FindFirst("sub")?.Value,out var telegramId) || telegramId<=0)
+        return Results.Unauthorized();
+    var role=await StaffRole(db,telegramId,ct);
+    await using var cmd=db.CreateCommand("""
+        SELECT
+          (SELECT COUNT(*) FROM channels WHERE connected_by=@uid),
+          (SELECT COUNT(*) FROM ad_requests WHERE advertiser_id=@uid),
+          (SELECT COUNT(*) FROM ad_requests WHERE owner_id=@uid),
+          (SELECT COALESCE(GREATEST(subscription_until,pro_granted_until),subscription_until,pro_granted_until)
+             FROM users WHERE telegram_id=@uid)
+        """);
+    cmd.Parameters.Add(new MySqlParameter("@uid",telegramId));
+    await using var reader=await cmd.ExecuteReaderAsync(ct);
+    await reader.ReadAsync(ct);
+    var until=reader.IsDBNull(3)?(DateTime?)null:reader.GetDateTime(3);
+    var pro=until.HasValue&&until.Value>DateTime.UtcNow;
+    return Results.Ok(new {
+       telegramId,name=ctx.User.FindFirst("name")?.Value,
+       username=ctx.User.FindFirst("preferred_username")?.Value,
+       plan=pro?"PRO":"FREE",proUntil=pro?until:null,
+       channelLimit=pro?10:1,commissionPercent=pro?2.5m:5m,
+       channels=reader.GetInt64(0),purchases=reader.GetInt64(1),
+       sales=reader.GetInt64(2),staffRole=role
+    });
+});
 app.MapPost("/api/auth/logout", async (HttpContext ctx) =>
 {
     var origin=ctx.Request.Headers.Origin.ToString();
