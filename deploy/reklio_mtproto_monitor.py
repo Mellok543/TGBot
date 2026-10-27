@@ -126,13 +126,13 @@ def record(db, order_id, status):
             incident_id = cur.lastrowid
             if not repeated:
                 cur.execute("""
-                INSERT IGNORE INTO notification_outbox(recipient_id,order_id,body)
-                SELECT owner_id,id,CONCAT('⚠️ Досрочное удаление · заказ #',id,
-                    ' · случай #',%s,CHAR(10),
-                    'Рекламный пост отсутствует до завершения оплаченного срока.',CHAR(10),
-                    'Выберите: опубликовать заново или открыть спор.')
-                FROM ad_requests WHERE id=%s
-            """, (incident_id, order_id))
+                    INSERT IGNORE INTO notification_outbox(recipient_id,order_id,body)
+                    SELECT owner_id,id,CONCAT('⚠️ Досрочное удаление · заказ #',id,
+                        ' · случай #',%s,CHAR(10),
+                        'Рекламный пост отсутствует до завершения оплаченного срока.',CHAR(10),
+                        'Выберите: опубликовать заново или открыть спор.')
+                    FROM ad_requests WHERE id=%s
+                """, (incident_id, order_id))
             if repeated:
                 # Notification is informational: no restoration button.
                 cur.execute("""
