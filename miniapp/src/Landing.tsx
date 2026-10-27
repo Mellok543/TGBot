@@ -227,8 +227,7 @@ export default function Landing(){
        try{const response=await fetch(publicApi+'/api/auth/logout',{method:'POST',credentials:'include'});
        if(response.ok)setLoginState({authenticated:false});}catch{}
      }}>Выйти</button></div>
-   : loginAvailable?<a className="lp-nav-action" href={publicApi+'/api/auth/login'}>Войти через Telegram ↗</a>
-     :<a className="lp-nav-action" href="https://t.me/ReklioBot">Личный кабинет ↗</a>;
+   : <a className="lp-nav-action" href={loginAvailable?publicApi+'/api/auth/login':'https://t.me/ReklioBot'}>{loginAvailable?'Войти через Telegram ↗':'Открыть через Telegram ↗'}</a>;
  const themeToggle=<div className="lp-theme-control" role="group" aria-label="Тема оформления">
    <button type="button" className={themePreference==='light'?'selected':''} aria-label="Светлая тема" aria-pressed={themePreference==='light'} title="Светлая" onClick={()=>chooseTheme('light')}>☀</button>
    <button type="button" className={themePreference==='dark'?'selected':''} aria-label="Тёмная тема" aria-pressed={themePreference==='dark'} title="Тёмная" onClick={()=>chooseTheme('dark')}>☾</button>
