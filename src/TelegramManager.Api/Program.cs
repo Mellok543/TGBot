@@ -51,6 +51,7 @@ builder.Services.AddAuthentication(options =>
 });
 if(loginEnabled)
 {
+    var oidcStateStore=new MemoryCache(new MemoryCacheOptions {SizeLimit=10000});
     builder.Services.AddAuthentication().AddOpenIdConnect(options =>
     {
         options.Authority="https://oauth.telegram.org";
@@ -58,6 +59,9 @@ if(loginEnabled)
         options.ClientId=loginClientId!;
         options.ClientSecret=loginSecret!;
         options.ResponseType="code";
+        // Telegram rejects ASP.NET Core's long protected state parameter.
+        // Keep the full state server-side, send only a single-use opaque token.
+        options.StateDataFormat=new ShortOidcStateFormat(oidcStateStore);
         options.UsePkce=true;
         options.CallbackPath="/signin-telegram";
         options.SignInScheme=CookieAuthenticationDefaults.AuthenticationScheme;
@@ -1859,4 +1863,25 @@ sealed class CatalogChannel(long id,string title,string category,decimal price,s
     public long ViewsSamples {get;set;}
     public long Likes {get;set;}
     public DateTime? PromotedUntil {get;set;}
+}
+
+sealed class ShortOidcStateFormat(IMemoryCache cache) : ISecureDataFormat<AuthenticationProperties>
+{
+    public string Protect(AuthenticationProperties data) => Protect(data, null);
+    public string Protect(AuthenticationProperties data, string? purpose)
+    {
+        var key=Convert.ToHexString(RandomNumberGenerator.GetBytes(24));
+        cache.Set(key, (Data:data, Purpose:purpose),
+            new MemoryCacheEntryOptions().SetAbsoluteExpiration(TimeSpan.FromMinutes(10)).SetSize(1));
+        return key;
+    }
+
+    public AuthenticationProperties? Unprotect(string? protectedText) => Unprotect(protectedText, null);
+    public AuthenticationProperties? Unprotect(string? protectedText, string? purpose)
+    {
+        if(string.IsNullOrEmpty(protectedText) || protectedText.Length!=48) return null;
+        if(!cache.TryGetValue(protectedText, out (AuthenticationProperties Data,string? Purpose) entry)) return null;
+        cache.Remove(protectedText); // One-time token; replayed callbacks are rejected.
+        return entry.Purpose==purpose ? entry.Data : null;
+    }
 }
