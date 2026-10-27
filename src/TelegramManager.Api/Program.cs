@@ -281,6 +281,24 @@ app.MapPost("/api/web/orders/{orderId:long}/decision", async (long orderId,WebOr
     await tx.CommitAsync(ct);
     return Results.Ok(new{saved=true});
 });
+app.MapGet("/api/web/orders/{orderId:long}/events", async (long orderId,HttpContext ctx,MySqlDataSource db,CancellationToken ct) =>
+{
+    if(ctx.User.Identity?.IsAuthenticated!=true || !long.TryParse(ctx.User.FindFirst("id")?.Value,out var userId)||userId<=0)
+        return Results.Unauthorized();
+    await using var cmd=db.CreateCommand("""
+        SELECT e.event_type,e.created_at FROM ad_order_events e
+        JOIN ad_requests a ON a.id=e.order_id
+        WHERE e.order_id=@order AND (a.owner_id=@user OR a.advertiser_id=@user)
+        ORDER BY e.created_at DESC LIMIT 40
+        """);
+    cmd.Parameters.Add(new MySqlParameter("@order",orderId));
+    cmd.Parameters.Add(new MySqlParameter("@user",userId));
+    var events=new List<object>();
+    await using var reader=await cmd.ExecuteReaderAsync(ct);
+    while(await reader.ReadAsync(ct))
+        events.Add(new{type=reader.GetString(0),createdAt=reader.GetDateTime(1)});
+    return Results.Ok(events);
+});
 app.MapPost("/api/auth/logout", async (HttpContext ctx) =>
 {
     var origin=ctx.Request.Headers.Origin.ToString();
