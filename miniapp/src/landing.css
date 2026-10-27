@@ -307,3 +307,33 @@ html{scroll-behavior:smooth;scroll-padding-top:90px}
 .lp-monthly-ranking h3{margin:0 0 13px}.lp-top-entries{display:grid;gap:7px}
 .lp-top-entries a{display:flex;align-items:center;gap:12px;text-decoration:none;color:inherit;padding:10px 12px;border-radius:10px;background:rgba(125,125,170,.09)}
 .lp-top-entries a span{flex:1}.lp-monthly-ranking small{display:block;margin-top:10px}
+
+
+/* Reklio website appearance. The switch is shared by all public routes. */
+.lp-theme-control{display:inline-flex;gap:3px;align-items:center;padding:4px;border:1px solid #53719566;border-radius:13px;background:#152642;flex-shrink:0}
+.lp-theme-control button{width:34px;height:32px;border:0;border-radius:9px;background:transparent;color:#b4cae5;font-size:19px;line-height:1;display:grid;place-items:center}
+.lp-theme-control button.selected{background:#3878db;color:#fff;box-shadow:0 2px 10px #0002}
+.lp-theme-control button:focus-visible{outline:2px solid #32a9fd;outline-offset:2px}
+.lp-mobile-drawer .lp-theme-control{margin:10px 0;justify-content:center;width:max-content}
+@media(max-width:750px){.lp-nav>.lp-theme-control{margin-left:auto}.lp-nav{gap:10px}.lp-nav>.lp-theme-control button{width:29px;height:29px}.lp-mobile-drawer .lp-theme-control{width:auto}}
+/* Daylight surfaces use the same typography, layout and accent colors. */
+.lp.lp-theme-light{--ink:#15243e;--muted:#546a83;--line:#d8e2ee;color:var(--ink);background:#f5f7fc}
+.lp-theme-light .lp-nav,.lp-theme-light .lp-footer{background:#fff;color:#16263e;border-color:#dce6f0}
+.lp-theme-light .lp-nav nav,.lp-theme-light .lp-nav-links,.lp-theme-light .lp-footer-links{color:#354a66}
+.lp-theme-light .lp-nav nav a:hover{color:#1769c8}
+.lp-theme-light .lp-theme-control{background:#e9eff8;border-color:#cad8e9}
+.lp-theme-light .lp-theme-control button{color:#49627c}
+.lp-theme-light .lp-theme-control button.selected{color:#fff;background:#397ce6}
+.lp-theme-light .lp-mobile-drawer{background:#fff;color:#213651;border-color:#d5e1ef}
+.lp-theme-light .lp-mobile-drawer a{color:#263c57}
+.lp-theme-light .lp-route-heading,.lp-theme-light .lp-market-hero,.lp-theme-light .lp-home-market,.lp-theme-light .lp-catalog,.lp-theme-light .lp-channel-page,.lp-theme-light .lp-section,.lp-theme-light .lp-legal{color:#162840}
+.lp-theme-light .lp-market-copy>p,.lp-theme-light .lp-route-heading p,.lp-theme-light .lp-catalog-title p,.lp-theme-light .lp-market-quick,.lp-theme-light .lp-home-channel-meta{color:#506782}
+.lp-theme-light .lp-market-side,.lp-theme-light .lp-home-channel,.lp-theme-light .lp-catalog-card,.lp-theme-light .lp-detail-panel,.lp-theme-light .lp-detail-aside,.lp-theme-light .lp-channel-page-hero,.lp-theme-light .lp-start,.lp-theme-light .lp-catalog-toolbar,.lp-theme-light .lp-market-search,.lp-theme-light .lp-catalog-message,.lp-theme-light .lp-detail-state,.lp-theme-light .lp-monthly-ranking,.lp-theme-light .lp-top-entries a{background:#fff;color:#162840;border-color:#d5e0ee;box-shadow:0 8px 25px #2639510b}
+.lp-theme-light .lp-market-side-note,.lp-theme-light .lp-detail-empty,.lp-theme-light .lp-home-empty,.lp-theme-light .lp-catalog-status{color:#526a83}
+.lp-theme-light .lp-catalog-sponsored{background:linear-gradient(150deg,#f4edff,#e9f3ff)!important;color:#202e50}
+.lp-theme-light input,.lp-theme-light select,.lp-theme-light textarea{color:#203653;background-color:#fff;border-color:#c7d7e8;color-scheme:light}
+.lp-theme-light input::placeholder{color:#71849a}
+.lp-theme-light .lp-start-tabs,.lp-theme-light .lp-market-search,.lp-theme-light .lp-catalog-toolbar{background:#f0f4fb}
+.lp-theme-light .lp-market-side-icon{background:#e9f2ff;color:#2765b8}
+.lp-theme-light .lp-market-hero h1,.lp-theme-light .lp-route-heading h1{color:#15233b}
+.lp-theme-light .lp-nav-action{background:#e6efff;color:#1258b0;border-color:#bbd2f4}
