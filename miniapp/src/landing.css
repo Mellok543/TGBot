@@ -406,3 +406,18 @@ html{scroll-behavior:smooth;scroll-padding-top:90px}
 .lp-theme-light .lp-account-status.listed{color:#18734c;background:#ddf8e9}
 .lp-theme-light .lp-account-status{color:#995522;background:#fff1e4}
 @media(max-width:760px){.lp-account-channel{align-items:stretch;flex-direction:column}.lp-account-channel-actions{gap:10px}}
+
+
+.lp-account-channel{flex-wrap:wrap}
+.lp-account-rates{width:100%;border-top:1px solid #375575;padding-top:16px;display:grid;gap:12px}
+.lp-account-rates h3{margin:0;font-size:17px}
+.lp-account-rate{display:flex;justify-content:space-between;align-items:center;gap:10px;border:1px solid #375575;border-radius:12px;padding:12px}
+.lp-account-rate button,.lp-account-rate-form button{border:1px solid #4d7db8;background:#275389;color:#fff;border-radius:9px;padding:10px 14px;cursor:pointer}
+.lp-account-rate button:disabled,.lp-account-rate-form button:disabled{opacity:.55}
+.lp-account-rate-form{display:flex;gap:12px;align-items:end;flex-wrap:wrap}
+.lp-account-rate-form label{display:grid;gap:5px;font-size:13px;flex:1;min-width:115px}
+.lp-account-rate-form input,.lp-account-rate-form select{width:100%;min-height:42px;border:1px solid #50729c;border-radius:9px;padding:8px 10px;color:var(--ink);background:var(--surface,#182a44)}
+.lp-account-rate-form button{min-height:42px}
+.lp-theme-light .lp-account-rate{border-color:#d5e0ee}
+.lp-theme-light .lp-account-rate-form input,.lp-theme-light .lp-account-rate-form select{background:#fff;color:#172a45;border-color:#c5d5e8}
+@media(max-width:760px){.lp-account-rate{align-items:stretch;flex-direction:column}.lp-account-rate-form button{width:100%}}
