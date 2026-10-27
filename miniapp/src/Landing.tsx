@@ -189,7 +189,7 @@ function ChannelAliasRedirect(){
    .catch(e=>{if(!controller.signal.aborted)setMessage(e instanceof Error?e.message:'Ошибка открытия');});
   return ()=>controller.abort();
  },[alias]);
- return <div className={"lp lp-theme-"+effectiveTheme}><main className="lp-section" style={{minHeight:'70vh',display:'grid',placeItems:'center',textAlign:'center',padding:'32px'}}><div><h1>Reklio</h1><p>{message}</p><a href="https://t.me/ReklioBot">Открыть Reklio в Telegram</a></div></main></div>;
+ return <div className="lp"><main className="lp-section" style={{minHeight:'70vh',display:'grid',placeItems:'center',textAlign:'center',padding:'32px'}}><div><h1>Reklio</h1><p>{message}</p><a href="https://t.me/ReklioBot">Открыть Reklio в Telegram</a></div></main></div>;
 }
 export default function Landing(){
  const path=window.location.pathname;
