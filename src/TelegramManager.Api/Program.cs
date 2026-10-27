@@ -64,6 +64,12 @@ if(loginEnabled)
         options.StateDataFormat=new ShortOidcStateFormat(oidcStateStore);
         options.UsePkce=true;
         options.CallbackPath="/signin-telegram";
+        options.Events.OnRedirectToIdentityProvider=context =>
+        {
+            // Explicit public HTTPS callback: nginx terminates TLS upstream.
+            context.ProtocolMessage.RedirectUri="https://api.reklio.site/signin-telegram";
+            return Task.CompletedTask;
+        };
         options.SignInScheme=CookieAuthenticationDefaults.AuthenticationScheme;
         options.RequireHttpsMetadata=true;
         options.GetClaimsFromUserInfoEndpoint=false;
