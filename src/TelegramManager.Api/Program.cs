@@ -175,6 +175,55 @@ app.MapPost("/api/web/channels/{channelId:long}/listing", async (long channelId,
     cmd.Parameters.Add(new MySqlParameter("@owner",userId));
     return await cmd.ExecuteNonQueryAsync(ct)>0?Results.Ok(new{saved=true}):Results.NotFound();
 });
+// Browser rate management uses the same channel_duration_rates rows as the Mini App.
+app.MapGet("/api/web/channels/{channelId:long}/rates", async (long channelId,HttpContext ctx,MySqlDataSource db,CancellationToken ct) =>
+{
+    if(ctx.User.Identity?.IsAuthenticated!=true || !long.TryParse(ctx.User.FindFirst("id")?.Value,out var userId) || userId<=0)
+        return Results.Unauthorized();
+    await using var cmd=db.CreateCommand("""
+        SELECT r.id,r.duration_hours,r.price_rub,r.is_active FROM channel_duration_rates r
+        JOIN channels c ON c.telegram_id=r.channel_id
+        WHERE c.telegram_id=@channel AND c.connected_by=@owner ORDER BY r.duration_hours
+        """);
+    cmd.Parameters.Add(new MySqlParameter("@channel",channelId));
+    cmd.Parameters.Add(new MySqlParameter("@owner",userId));
+    var rates=new List<object>();
+    await using var reader=await cmd.ExecuteReaderAsync(ct);
+    while(await reader.ReadAsync(ct))
+        rates.Add(new{id=reader.GetInt64(0),hours=reader.GetInt32(1),price=reader.GetDecimal(2),active=reader.GetBoolean(3)});
+    return Results.Ok(rates);
+});
+app.MapPost("/api/web/channels/{channelId:long}/rates", async (long channelId,UpdateRateInput input,HttpContext ctx,MySqlDataSource db,CancellationToken ct) =>
+{
+    if(ctx.User.Identity?.IsAuthenticated!=true || !long.TryParse(ctx.User.FindFirst("id")?.Value,out var userId) || userId<=0)
+        return Results.Unauthorized();
+    if(ctx.Request.Headers.Origin.ToString() is not ("https://reklio.site" or "https://www.reklio.site"))return Results.StatusCode(403);
+    if(input.Hours<0||input.Hours>720||input.Price<1||input.Price>1000000)
+        return Results.BadRequest(new{error="Длительность: 0 (навсегда) или 1–720 часов; цена 1–1000000 ₽"});
+    await using var cmd=db.CreateCommand("""
+        INSERT INTO channel_duration_rates(channel_id,duration_hours,price_rub,is_active)
+        SELECT telegram_id,@hours,@price,TRUE FROM channels
+        WHERE telegram_id=@channel AND connected_by=@owner
+        ON DUPLICATE KEY UPDATE price_rub=VALUES(price_rub),is_active=TRUE
+        """);
+    cmd.Parameters.Add(new MySqlParameter("@channel",channelId));cmd.Parameters.Add(new MySqlParameter("@owner",userId));
+    cmd.Parameters.Add(new MySqlParameter("@hours",input.Hours));cmd.Parameters.Add(new MySqlParameter("@price",input.Price));
+    return await cmd.ExecuteNonQueryAsync(ct)>0?Results.Ok(new{saved=true}):Results.NotFound();
+});
+app.MapPost("/api/web/channels/{channelId:long}/rates/{rateId:long}/toggle", async (long channelId,long rateId,HttpContext ctx,MySqlDataSource db,CancellationToken ct) =>
+{
+    if(ctx.User.Identity?.IsAuthenticated!=true || !long.TryParse(ctx.User.FindFirst("id")?.Value,out var userId) || userId<=0)
+        return Results.Unauthorized();
+    if(ctx.Request.Headers.Origin.ToString() is not ("https://reklio.site" or "https://www.reklio.site"))return Results.StatusCode(403);
+    await using var cmd=db.CreateCommand("""
+        UPDATE channel_duration_rates r JOIN channels c ON c.telegram_id=r.channel_id
+        SET r.is_active=NOT r.is_active
+        WHERE r.id=@rate AND c.telegram_id=@channel AND c.connected_by=@owner
+        """);
+    cmd.Parameters.Add(new MySqlParameter("@rate",rateId));cmd.Parameters.Add(new MySqlParameter("@channel",channelId));
+    cmd.Parameters.Add(new MySqlParameter("@owner",userId));
+    return await cmd.ExecuteNonQueryAsync(ct)>0?Results.Ok(new{saved=true}):Results.NotFound();
+});
 app.MapPost("/api/auth/logout", async (HttpContext ctx) =>
 {
     var origin=ctx.Request.Headers.Origin.ToString();
