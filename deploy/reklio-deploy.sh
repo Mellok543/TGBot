@@ -15,6 +15,32 @@ fi
 for tool in git dotnet npm curl systemctl cp mktemp find; do
   command -v "$tool" >/dev/null || { echo "Missing: $tool" >&2; exit 1; }
 done
+# Receive the OAuth credential over SSH stdin without recording it in logs.
+SECRET_ENCODED="$(cat)"
+if [[ -z "$SECRET_ENCODED" ]]; then
+  echo "OAuth credential was not supplied" >&2
+  exit 1
+fi
+install -d -m 750 /etc/reklio /etc/systemd/system/reklio-api.service.d
+SERVICE_USER="$(systemctl show reklio-api.service -p User --value)"
+SERVICE_GROUP="$(id -gn "${SERVICE_USER:-root}")"
+chown root:"$SERVICE_GROUP" /etc/reklio
+install -d -m 700 /opt/reklio/auth-keys
+chown "${SERVICE_USER:-root}:$SERVICE_GROUP" /opt/reklio/auth-keys
+SECRET_VALUE="$(printf '%s' "$SECRET_ENCODED" | base64 --decode)"
+if ! [[ "$SECRET_VALUE" =~ ^[a-zA-Z0-9_-]+$ ]]; then
+  echo "OAuth credential format is invalid" >&2
+  exit 1
+fi
+ENV_TEMP="$(mktemp /etc/reklio/.auth.XXXXXXXX)"
+chmod 640 "$ENV_TEMP"
+chown root:"$SERVICE_GROUP" "$ENV_TEMP"
+printf 'TELEGRAM_LOGIN_CLIENT_ID=8857548722\nTELEGRAM_LOGIN_CLIENT_SECRET=%s\nREKLIO_AUTH_KEY_DIRECTORY=/opt/reklio/auth-keys\n' "$SECRET_VALUE" > "$ENV_TEMP"
+mv "$ENV_TEMP" /etc/reklio/telegram-login.env
+printf '[Service]\nEnvironmentFile=/etc/reklio/telegram-login.env\n' > /etc/systemd/system/reklio-api.service.d/telegram-login.conf
+systemctl daemon-reload
+unset SECRET_VALUE SECRET_ENCODED
+
 if [[ -n "$(git -C "$SOURCE" status --porcelain)" ]]; then
   echo "Uncommitted changes in $SOURCE; deployment stopped to protect local work." >&2
   exit 1
