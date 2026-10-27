@@ -110,6 +110,12 @@ jobs:
               *) echo "Incorrect $ext content type: $content_type" >&2; exit 1 ;;
             esac
           done
+      - name: Check browser login readiness
+        run: |
+          set -euo pipefail
+          response="$(curl --fail --silent --show-error --max-time 15 https://api.reklio.site/api/auth/config)"
+          echo "Browser login configuration: $response"
+          echo "$response" | grep -Eq '"telegramLoginAvailable"[[:space:]]*:[[:space:]]*true'
       - name: Verify public catalog and Mini App CORS
         run: |
           set -euo pipefail
