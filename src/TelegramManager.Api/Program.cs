@@ -109,7 +109,7 @@ app.MapGet("/api/auth/login", (HttpContext ctx) =>
 app.MapGet("/api/auth/me", (HttpContext ctx) =>
 {
     if(ctx.User.Identity?.IsAuthenticated!=true)return Results.Ok(new {authenticated=false});
-    var id=ctx.User.FindFirst("sub")?.Value;
+    var id=ctx.User.FindFirst("id")?.Value;
     if(!long.TryParse(id,out var telegramId)||telegramId<=0)return Results.Unauthorized();
     return Results.Ok(new {authenticated=true,telegramId,
         name=ctx.User.FindFirst("name")?.Value,
@@ -118,7 +118,7 @@ app.MapGet("/api/auth/me", (HttpContext ctx) =>
 app.MapGet("/api/web/profile", async (HttpContext ctx,MySqlDataSource db,CancellationToken ct) =>
 {
     if(ctx.User.Identity?.IsAuthenticated!=true ||
-       !long.TryParse(ctx.User.FindFirst("sub")?.Value,out var telegramId) || telegramId<=0)
+       !long.TryParse(ctx.User.FindFirst("id")?.Value,out var telegramId) || telegramId<=0)
         return Results.Unauthorized();
     var role=await StaffRole(db,telegramId,ct);
     await using var cmd=db.CreateCommand("""
@@ -146,7 +146,7 @@ app.MapGet("/api/web/profile", async (HttpContext ctx,MySqlDataSource db,Cancell
 app.MapGet("/api/web/channels", async (HttpContext ctx, MySqlDataSource db, CancellationToken ct) =>
 {
     if(ctx.User.Identity?.IsAuthenticated!=true ||
-       !long.TryParse(ctx.User.FindFirst("sub")?.Value,out var userId) || userId<=0)
+       !long.TryParse(ctx.User.FindFirst("id")?.Value,out var userId) || userId<=0)
         return Results.Unauthorized();
     await using var cmd=db.CreateCommand("""
         SELECT c.telegram_id,c.title,c.is_listed,c.ad_price_rub,c.category,a.alias FROM channels c
@@ -165,7 +165,7 @@ app.MapGet("/api/web/channels", async (HttpContext ctx, MySqlDataSource db, Canc
 app.MapPost("/api/web/channels/{channelId:long}/listing", async (long channelId,UpdateListingInput input,HttpContext ctx,MySqlDataSource db,CancellationToken ct) =>
 {
     if(ctx.User.Identity?.IsAuthenticated!=true ||
-       !long.TryParse(ctx.User.FindFirst("sub")?.Value,out var userId) || userId<=0)
+       !long.TryParse(ctx.User.FindFirst("id")?.Value,out var userId) || userId<=0)
         return Results.Unauthorized();
     if(ctx.Request.Headers.Origin.ToString() is not ("https://reklio.site" or "https://www.reklio.site"))
         return Results.StatusCode(403);
