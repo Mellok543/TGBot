@@ -189,17 +189,38 @@ function ChannelAliasRedirect(){
    .catch(e=>{if(!controller.signal.aborted)setMessage(e instanceof Error?e.message:'Ошибка открытия');});
   return ()=>controller.abort();
  },[alias]);
- return <div className="lp"><main className="lp-section" style={{minHeight:'70vh',display:'grid',placeItems:'center',textAlign:'center',padding:'32px'}}><div><h1>Reklio</h1><p>{message}</p><a href="https://t.me/ReklioBot">Открыть Reklio в Telegram</a></div></main></div>;
+ return <div className={"lp lp-theme-"+effectiveTheme}><main className="lp-section" style={{minHeight:'70vh',display:'grid',placeItems:'center',textAlign:'center',padding:'32px'}}><div><h1>Reklio</h1><p>{message}</p><a href="https://t.me/ReklioBot">Открыть Reklio в Telegram</a></div></main></div>;
 }
 export default function Landing(){
  const path=window.location.pathname;
  const aliasRoute=window.location.hostname.replace(/^www\./,'')==='reklio.site' && /^\/ad\/[a-zA-Z0-9_]{4,32}\/?$/.test(path);
  const legalKind=path==='/terms'?'terms':path==='/privacy'?'privacy':path==='/advertising-rules'?'advertising':null;
  const [mobileMenu,setMobileMenu]=useState(false);
+ const [themePreference,setThemePreference]=useState<'light'|'dark'|'system'>(()=>{
+   try {const saved=localStorage.getItem('reklio-theme');return saved==='light'||saved==='dark'?saved:'system';} catch {return 'system';}
+ });
+ const [systemDark,setSystemDark]=useState(()=>window.matchMedia('(prefers-color-scheme: dark)').matches);
+ useEffect(()=>{
+   const media=window.matchMedia('(prefers-color-scheme: dark)');
+   const onChange=()=>setSystemDark(media.matches);
+   media.addEventListener('change',onChange);
+   return ()=>media.removeEventListener('change',onChange);
+ },[]);
+ const effectiveTheme=themePreference==='system'?(systemDark?'dark':'light'):themePreference;
+ useEffect(()=>{document.documentElement.style.colorScheme=effectiveTheme;return ()=>{document.documentElement.style.colorScheme='';};},[effectiveTheme]);
+ const chooseTheme=(next:'light'|'dark'|'system')=>{
+   setThemePreference(next);
+   try {if(next==='system')localStorage.removeItem('reklio-theme');else localStorage.setItem('reklio-theme',next);} catch {}
+ };
+ const themeToggle=<div className="lp-theme-control" role="group" aria-label="Тема оформления">
+   <button type="button" className={themePreference==='light'?'selected':''} aria-label="Светлая тема" aria-pressed={themePreference==='light'} title="Светлая" onClick={()=>chooseTheme('light')}>☀</button>
+   <button type="button" className={themePreference==='dark'?'selected':''} aria-label="Тёмная тема" aria-pressed={themePreference==='dark'} title="Тёмная" onClick={()=>chooseTheme('dark')}>☾</button>
+   <button type="button" className={themePreference==='system'?'selected':''} aria-label="Системная тема" aria-pressed={themePreference==='system'} title="Как на устройстве" onClick={()=>chooseTheme('system')}>◐</button>
+ </div>;
  if(aliasRoute)return <ChannelAliasRedirect/>;
  return <div className="lp">
- <header className="lp-nav"><a className="lp-brand" href="/"><img src="/reklio-mark.svg" alt=""/>Rekli<span>o</span></a><nav className={mobileMenu?"lp-nav-links open":"lp-nav-links"}><a href="/" onClick={()=>setMobileMenu(false)}>Главная</a><a href="/catalog" onClick={()=>setMobileMenu(false)}>Каталог</a><a href="/help" onClick={()=>setMobileMenu(false)}>Как работает</a><a href="/pricing" onClick={()=>setMobileMenu(false)}>Тарифы</a><a className="lp-mobile-legal" href="/terms" onClick={()=>setMobileMenu(false)}>Документы и правила</a><a className="lp-mobile-legal" href="mailto:support@reklio.site">Связаться с нами</a></nav><a className="lp-nav-action" href="https://t.me/ReklioBot">Личный кабинет ↗</a><button type="button" className="lp-mobile-menu" aria-expanded={mobileMenu} aria-label="Открыть меню" onClick={()=>setMobileMenu(!mobileMenu)}>{mobileMenu?"✕":"☰"}</button></header>
- {mobileMenu&&<div className="lp-mobile-drawer-wrap"><button type="button" className="lp-mobile-scrim" aria-label="Закрыть меню" onClick={()=>setMobileMenu(false)}></button><aside className="lp-mobile-drawer" aria-label="Навигация Reklio"><div className="lp-drawer-title"><b>Навигация</b><button onClick={()=>setMobileMenu(false)} aria-label="Закрыть">✕</button></div><a href="/" onClick={()=>setMobileMenu(false)}>⌂　Главная</a><a href="/catalog" onClick={()=>setMobileMenu(false)}>▦　Каталог каналов</a><a href="/pricing" onClick={()=>setMobileMenu(false)}>✦　Тарифы</a><a href="/help" onClick={()=>setMobileMenu(false)}>ⓘ　Как это работает</a><div className="lp-drawer-divider"/><a href="/terms">Условия использования</a><a href="/privacy">Конфиденциальность</a><a href="/advertising-rules">Правила рекламы</a><a href="mailto:support@reklio.site">Связаться с нами</a><a className="lp-drawer-cta" href="https://t.me/ReklioBot">Открыть Reklio ↗</a></aside></div>}
+ <header className="lp-nav"><a className="lp-brand" href="/"><img src="/reklio-mark.svg" alt=""/>Rekli<span>o</span></a><nav className={mobileMenu?"lp-nav-links open":"lp-nav-links"}><a href="/" onClick={()=>setMobileMenu(false)}>Главная</a><a href="/catalog" onClick={()=>setMobileMenu(false)}>Каталог</a><a href="/help" onClick={()=>setMobileMenu(false)}>Как работает</a><a href="/pricing" onClick={()=>setMobileMenu(false)}>Тарифы</a><a className="lp-mobile-legal" href="/terms" onClick={()=>setMobileMenu(false)}>Документы и правила</a><a className="lp-mobile-legal" href="mailto:support@reklio.site">Связаться с нами</a></nav>{themeToggle}<a className="lp-nav-action" href="https://t.me/ReklioBot">Личный кабинет ↗</a><button type="button" className="lp-mobile-menu" aria-expanded={mobileMenu} aria-label="Открыть меню" onClick={()=>setMobileMenu(!mobileMenu)}>{mobileMenu?"✕":"☰"}</button></header>
+ {mobileMenu&&<div className="lp-mobile-drawer-wrap"><button type="button" className="lp-mobile-scrim" aria-label="Закрыть меню" onClick={()=>setMobileMenu(false)}></button><aside className="lp-mobile-drawer" aria-label="Навигация Reklio"><div className="lp-drawer-title"><b>Навигация</b><button onClick={()=>setMobileMenu(false)} aria-label="Закрыть">✕</button></div><a href="/" onClick={()=>setMobileMenu(false)}>⌂　Главная</a><a href="/catalog" onClick={()=>setMobileMenu(false)}>▦　Каталог каналов</a><a href="/pricing" onClick={()=>setMobileMenu(false)}>✦　Тарифы</a><a href="/help" onClick={()=>setMobileMenu(false)}>ⓘ　Как это работает</a><div className="lp-drawer-divider"/>{themeToggle}<a href="/terms">Условия использования</a><a href="/privacy">Конфиденциальность</a><a href="/advertising-rules">Правила рекламы</a><a href="mailto:support@reklio.site">Связаться с нами</a><a className="lp-drawer-cta" href="https://t.me/ReklioBot">Открыть Reklio ↗</a></aside></div>}
  <main>{legalKind ? <LegalPage kind={legalKind}/> : <>{path!=="/"&&!path.startsWith("/channels/")&&<div className="lp-route-heading"><span>REKLIO / {path==="/catalog"?"ПЛОЩАДКИ":path==="/pricing"?"ПОДПИСКА":"ПОДДЕРЖКА"}</span><h1>{path==="/catalog"?"Каталог каналов":path==="/pricing"?"Тарифы FREE и PRO":"Справочный центр"}</h1><p>{path==="/catalog"?"Подберите Telegram-канал для рекламы и сравните реальные показатели.":path==="/pricing"?"Выберите возможности для своего канала.":"Узнайте, как устроены размещения и контроль рекламы."}</p></div>}
  {path==="/" && <><section className="lp-market-hero">
   <div className="lp-market-copy"><span className="lp-kicker">REKLIO · МАРКЕТПЛЕЙС РЕКЛАМЫ</span><h1>Найдите канал<br/><span>для вашей рекламы</span></h1>
