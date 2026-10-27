@@ -299,6 +299,50 @@ app.MapGet("/api/web/orders/{orderId:long}/events", async (long orderId,HttpCont
         events.Add(new{type=reader.GetString(0),createdAt=reader.GetDateTime(1)});
     return Results.Ok(events);
 });
+app.MapGet("/api/web/finance", async (HttpContext ctx,MySqlDataSource db,CancellationToken ct) =>
+{
+    if(ctx.User.Identity?.IsAuthenticated!=true || !long.TryParse(ctx.User.FindFirst("id")?.Value,out var userId)||userId<=0)
+        return Results.Unauthorized();
+    await using var summary=db.CreateCommand("""
+        SELECT
+          COALESCE(SUM(CASE WHEN owner_id=@user AND payment_status='Paid' AND is_test_order=FALSE THEN price_rub ELSE 0 END),0),
+          COALESCE(SUM(CASE WHEN advertiser_id=@user AND payment_status='Paid' AND is_test_order=FALSE THEN price_rub ELSE 0 END),0),
+          COALESCE(SUM(CASE WHEN advertiser_id=@user AND payment_status='TestPaid' THEN price_rub ELSE 0 END),0)
+        FROM ad_requests WHERE owner_id=@user OR advertiser_id=@user
+        """);
+    summary.Parameters.Add(new MySqlParameter("@user",userId));
+    decimal revenue,expenses,testPayments;
+    await using(var reader=await summary.ExecuteReaderAsync(ct))
+    {
+        await reader.ReadAsync(ct);
+        revenue=reader.GetDecimal(0);expenses=reader.GetDecimal(1);testPayments=reader.GetDecimal(2);
+    }
+    await using var cmd=db.CreateCommand("""
+        SELECT a.id,c.title,a.price_rub,a.status,a.payout_status,a.published_at,a.payout_eligible_at
+        FROM ad_requests a JOIN channels c ON c.telegram_id=a.channel_id
+        WHERE a.owner_id=@owner AND a.payment_status='Paid' AND a.is_test_order=FALSE
+        ORDER BY a.id DESC LIMIT 100
+        """);
+    cmd.Parameters.Add(new MySqlParameter("@owner",userId));
+    var operations=new List<object>();
+    decimal paid=0m,ready=0m,pending=0m,blocked=0m,refunded=0m;
+    await using(var reader=await cmd.ExecuteReaderAsync(ct))
+    while(await reader.ReadAsync(ct))
+    {
+        var amount=reader.GetDecimal(2);var payout=reader.GetString(4);
+        if(payout=="Paid")paid+=amount;
+        else if(payout=="ReadyForManualReview")ready+=amount;
+        else if(payout=="Blocked")blocked+=amount;
+        else if(payout=="Refunded")refunded+=amount;
+        else if(payout is "OnHold" or "AwaitingVerification")pending+=amount;
+        operations.Add(new{id=reader.GetInt64(0),channel=reader.GetString(1),amount,
+           status=reader.GetString(3),payoutStatus=payout,
+           publishedAt=reader.IsDBNull(5)?(DateTime?)null:reader.GetDateTime(5),
+           eligibleAt=reader.IsDBNull(6)?(DateTime?)null:reader.GetDateTime(6)});
+    }
+    return Results.Ok(new{revenue,expenses,testPayments,paid,readyForReview=ready,pending,blocked,refunded,
+      operations,note="Учитываются реальные оплаченные заказы; тестовые платежи показаны отдельно. Выплаты здесь не инициируются."});
+});
 app.MapPost("/api/auth/logout", async (HttpContext ctx) =>
 {
     var origin=ctx.Request.Headers.Origin.ToString();
