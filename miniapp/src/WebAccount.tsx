@@ -19,7 +19,7 @@ export default function WebAccount(){
  const [expandedOrder,setExpandedOrder]=useState<number|null>(null);
  const [orderEvents,setOrderEvents]=useState<Record<number,OrderEvent[]>>({});
  const [eventsLoading,setEventsLoading]=useState<number|null>(null);
- const showHistory=async(id:number)=>{if(expandedOrder===id){setExpandedOrder(null);return}setExpandedOrder(id);setEventsLoading(id);try{const r=await fetch(api+'/api/web/orders/'+id+'/events',{credentials:'include'});if(!r.ok)throw new Error();setOrderEvents(prev=>({...prev,[id]:await r.json()}))}catch{setOrderEvents(prev=>({...prev,[id]:[]}))}finally{setEventsLoading(null)}};
+ const showHistory=async(id:number)=>{if(expandedOrder===id){setExpandedOrder(null);return}setExpandedOrder(id);setEventsLoading(id);try{const r=await fetch(api+'/api/web/orders/'+id+'/events',{credentials:'include'});if(!r.ok)throw new Error();const events:OrderEvent[]=await r.json();setOrderEvents(prev=>({...prev,[id]:events}))}catch{setOrderEvents(prev=>({...prev,[id]:[]}))}finally{setEventsLoading(null)}};
  const [ordersStatus,setOrdersStatus]=useState<'idle'|'loading'|'ready'|'error'>('idle');
  const [ordersFilter,setOrdersFilter]=useState<'all'|'sales'|'purchases'>('all');
  const [pendingOrder,setPendingOrder]=useState<number|null>(null);
