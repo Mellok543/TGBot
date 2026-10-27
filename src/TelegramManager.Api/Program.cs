@@ -1,3 +1,8 @@
+using Microsoft.AspNetCore.Authentication;
+using Microsoft.AspNetCore.Authentication.Cookies;
+using Microsoft.AspNetCore.Authentication.OpenIdConnect;
+using Microsoft.IdentityModel.Tokens;
+using System.Security.Claims;
 using System.Net.Http.Json;
 using Microsoft.Extensions.Caching.Memory;
 using System.Security.Cryptography;
@@ -13,14 +18,100 @@ var connectionString = Environment.GetEnvironmentVariable("DATABASE_URL")
 builder.Services.AddSingleton(new MySqlDataSourceBuilder(connectionString).Build());
 builder.Services.AddHttpClient();
 builder.Services.AddMemoryCache();
+// OIDC credentials must be configured in VPS environment, never in Git.
+var loginClientId=Environment.GetEnvironmentVariable("TELEGRAM_LOGIN_CLIENT_ID");
+var loginSecret=Environment.GetEnvironmentVariable("TELEGRAM_LOGIN_CLIENT_SECRET");
+var loginEnabled=!string.IsNullOrWhiteSpace(loginClientId)&&!string.IsNullOrWhiteSpace(loginSecret);
+// Persist signing/encryption keys across app restarts and deployments.
+var keyFolder=Environment.GetEnvironmentVariable("REKLIO_AUTH_KEY_DIRECTORY") ?? "/opt/reklio/auth-keys";
+if(loginEnabled)
+{
+    System.IO.Directory.CreateDirectory(keyFolder);
+    builder.Services.AddDataProtection()
+        .PersistKeysToFileSystem(new DirectoryInfo(keyFolder))
+        .SetApplicationName("ReklioWebAuth");
+}
+builder.Services.AddAuthentication(options =>
+{
+    options.DefaultScheme=CookieAuthenticationDefaults.AuthenticationScheme;
+    options.DefaultChallengeScheme=OpenIdConnectDefaults.AuthenticationScheme;
+})
+.AddCookie(options =>
+{
+    options.Cookie.Name="__Host-reklio-session";
+    options.Cookie.HttpOnly=true;
+    options.Cookie.SecurePolicy=CookieSecurePolicy.Always;
+    options.Cookie.SameSite=SameSiteMode.Lax;
+    options.Cookie.Path="/";
+    options.ExpireTimeSpan=TimeSpan.FromDays(14);
+    options.SlidingExpiration=true;
+    options.Events.OnRedirectToLogin=context => {context.Response.StatusCode=401;return Task.CompletedTask;};
+    options.Events.OnRedirectToAccessDenied=context => {context.Response.StatusCode=403;return Task.CompletedTask;};
+});
+if(loginEnabled)
+{
+    builder.Services.AddAuthentication().AddOpenIdConnect(options =>
+    {
+        options.Authority="https://oauth.telegram.org";
+        options.MetadataAddress="https://oauth.telegram.org/.well-known/openid-configuration";
+        options.ClientId=loginClientId!;
+        options.ClientSecret=loginSecret!;
+        options.ResponseType="code";
+        options.UsePkce=true;
+        options.CallbackPath="/signin-telegram";
+        options.SignInScheme=CookieAuthenticationDefaults.AuthenticationScheme;
+        options.RequireHttpsMetadata=true;
+        options.GetClaimsFromUserInfoEndpoint=false;
+        options.SaveTokens=false;
+        options.MapInboundClaims=false;
+        options.Scope.Clear();
+        options.Scope.Add("openid");
+        options.Scope.Add("profile");
+        options.TokenValidationParameters=new TokenValidationParameters
+        {
+            ValidIssuer="https://oauth.telegram.org",
+            ValidateIssuer=true,
+            ValidateAudience=true,
+            ValidateLifetime=true,
+            NameClaimType="name"
+        };
+    });
+}
+builder.Services.AddAuthorization();
 builder.Services.AddHostedService<TelegramManager.Api.Publishing.PublicationWorker>();
 builder.Services.AddHostedService<TelegramManager.Api.Notifications.NotificationWorker>();
 var allowedOrigin = Environment.GetEnvironmentVariable("MINIAPP_ORIGIN");
 builder.Services.AddCors(o => o.AddPolicy("miniapp", p => p
     .WithOrigins(new[] { allowedOrigin, "https://reklio.site", "https://www.reklio.site" }
         .Where(origin => !string.IsNullOrWhiteSpace(origin)).Select(origin => origin!).Distinct().ToArray())
-    .AllowAnyHeader().AllowAnyMethod()));
+    .AllowAnyHeader().AllowAnyMethod().AllowCredentials()));
 var app = builder.Build();
+app.UseCors("miniapp");
+app.UseAuthentication();
+app.UseAuthorization();
+app.MapGet("/api/auth/config", () => Results.Ok(new {telegramLoginAvailable=loginEnabled}));
+app.MapGet("/api/auth/login", (HttpContext ctx) =>
+{
+    if(!loginEnabled)return Results.Problem("Telegram Login is not configured yet",statusCode:503);
+    return Results.Challenge(new AuthenticationProperties {RedirectUri="https://reklio.site/"}, new[] {OpenIdConnectDefaults.AuthenticationScheme});
+});
+app.MapGet("/api/auth/me", (HttpContext ctx) =>
+{
+    if(ctx.User.Identity?.IsAuthenticated!=true)return Results.Ok(new {authenticated=false});
+    var id=ctx.User.FindFirst("sub")?.Value;
+    if(!long.TryParse(id,out var telegramId)||telegramId<=0)return Results.Unauthorized();
+    return Results.Ok(new {authenticated=true,telegramId,
+        name=ctx.User.FindFirst("name")?.Value,
+        username=ctx.User.FindFirst("preferred_username")?.Value});
+});
+app.MapPost("/api/auth/logout", async (HttpContext ctx) =>
+{
+    var origin=ctx.Request.Headers.Origin.ToString();
+    if(origin!="https://reklio.site"&&origin!="https://www.reklio.site")
+        return Results.StatusCode(403);
+    await ctx.SignOutAsync(CookieAuthenticationDefaults.AuthenticationScheme);
+    return Results.Ok(new {authenticated=false});
+});
 // Bootstrap only the role/audit tables. Existing payment and Safe Deal migrations remain manual.
 try
 {
