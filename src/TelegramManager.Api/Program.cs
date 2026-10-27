@@ -224,6 +224,63 @@ app.MapPost("/api/web/channels/{channelId:long}/rates/{rateId:long}/toggle", asy
     cmd.Parameters.Add(new MySqlParameter("@owner",userId));
     return await cmd.ExecuteNonQueryAsync(ct)>0?Results.Ok(new{saved=true}):Results.NotFound();
 });
+app.MapGet("/api/web/orders", async (HttpContext ctx,MySqlDataSource db,CancellationToken ct) =>
+{
+    if(ctx.User.Identity?.IsAuthenticated!=true||!long.TryParse(ctx.User.FindFirst("id")?.Value,out var userId)||userId<=0)
+        return Results.Unauthorized();
+    await using var cmd=db.CreateCommand("""
+        SELECT a.id,c.title,a.price_rub,a.status,a.created_at,a.owner_id,
+               a.content_text,a.scheduled_at,r.duration_hours,a.payment_status,a.payout_status,a.is_test_order,a.dispute_reason,a.last_error
+        FROM ad_requests a JOIN channels c ON c.telegram_id=a.channel_id
+        LEFT JOIN channel_duration_rates r ON r.id=a.time_rate_id
+        WHERE a.advertiser_id=@user OR a.owner_id=@user
+        ORDER BY a.created_at DESC LIMIT 100
+        """);
+    cmd.Parameters.Add(new MySqlParameter("@user",userId));
+    var orders=new List<object>();
+    await using var reader=await cmd.ExecuteReaderAsync(ct);
+    while(await reader.ReadAsync(ct))
+        orders.Add(new{id=reader.GetInt64(0),channel=reader.GetString(1),price=reader.GetDecimal(2),
+          status=reader.GetString(3),createdAt=reader.GetDateTime(4),isOwner=reader.GetInt64(5)==userId,
+          text=reader.IsDBNull(6)?"":reader.GetString(6),
+          scheduledAt=reader.IsDBNull(7)?(DateTime?)null:reader.GetDateTime(7),
+          durationHours=reader.IsDBNull(8)?(int?)null:reader.GetInt32(8),
+          paymentStatus=reader.GetString(9),payoutStatus=reader.GetString(10),
+          isTest=reader.GetBoolean(11),disputeReason=reader.IsDBNull(12)?null:reader.GetString(12),
+          publicationIssue=reader.IsDBNull(13)?null:reader.GetString(13)});
+    return Results.Ok(orders);
+});
+app.MapPost("/api/web/orders/{orderId:long}/decision", async (long orderId,WebOrderDecision input,HttpContext ctx,MySqlDataSource db,CancellationToken ct) =>
+{
+    if(ctx.User.Identity?.IsAuthenticated!=true||!long.TryParse(ctx.User.FindFirst("id")?.Value,out var ownerId)||ownerId<=0)
+        return Results.Unauthorized();
+    if(ctx.Request.Headers.Origin.ToString() is not ("https://reklio.site" or "https://www.reklio.site"))return Results.StatusCode(403);
+    if(input.Action is not ("approve" or "reject"))return Results.BadRequest(new{error="Некорректное действие"});
+    await using var conn=await db.OpenConnectionAsync(ct);
+    await using var tx=await conn.BeginTransactionAsync(ct);
+    var approve=input.Action=="approve";
+    await using var cmd=new MySqlCommand(approve?"""
+        UPDATE ad_requests SET status=IF(status='PendingPaid','Scheduled','AwaitingPayment')
+        WHERE id=@order AND owner_id=@owner AND status IN ('Pending','PendingPaid')
+        AND ((status='Pending' AND scheduled_at>DATE_ADD(UTC_TIMESTAMP(),INTERVAL 1 HOUR))
+         OR (status='PendingPaid' AND scheduled_at>UTC_TIMESTAMP()))
+        """:"""
+        UPDATE ad_requests SET status='Rejected' WHERE id=@order AND owner_id=@owner AND status='Pending'
+        """,conn,tx);
+    cmd.Parameters.AddWithValue("@order",orderId);cmd.Parameters.AddWithValue("@owner",ownerId);
+    if(await cmd.ExecuteNonQueryAsync(ct)!=1){await tx.RollbackAsync(ct);return Results.Conflict(new{error="Заказ недоступен или его время/статус изменились. Обновите список."});}
+    await using var notify=new MySqlCommand("""
+        INSERT INTO notification_outbox(recipient_id,order_id,body)
+        SELECT advertiser_id,id,CONCAT(@prefix,' Заявка #',id,@suffix)
+        FROM ad_requests WHERE id=@order
+        """,conn,tx);
+    notify.Parameters.AddWithValue("@order",orderId);
+    notify.Parameters.AddWithValue("@prefix",approve?"✅":"❌");
+    notify.Parameters.AddWithValue("@suffix",approve?" одобрена. Откройте заказ в Reklio.":" отклонена владельцем.");
+    await notify.ExecuteNonQueryAsync(ct);
+    await tx.CommitAsync(ct);
+    return Results.Ok(new{saved=true});
+});
 app.MapPost("/api/auth/logout", async (HttpContext ctx) =>
 {
     var origin=ctx.Request.Headers.Origin.ToString();
@@ -2000,3 +2057,5 @@ sealed class ShortOidcStateFormat(IMemoryCache cache) : ISecureDataFormat<Authen
         return entry.Purpose==purpose ? entry.Data : null;
     }
 }
+
+record WebOrderDecision(string Action);
