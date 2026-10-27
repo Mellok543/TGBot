@@ -434,3 +434,12 @@ html{scroll-behavior:smooth;scroll-padding-top:90px}
 .lp-account-order-actions button{background:#285b96;color:white;padding:11px 15px;border:1px solid #5487c7;border-radius:10px;cursor:pointer}
 .lp-account-order-actions button:disabled{opacity:.5}
 @media(max-width:760px){.lp-account-order-head{align-items:flex-start;flex-direction:column}}
+
+
+.lp-account-action-form{margin-top:12px;display:grid;gap:12px;padding:14px;border:1px solid #4f7298;border-radius:12px}
+.lp-account-action-form label{display:grid;gap:7px;font-size:13px}
+.lp-account-action-form input,.lp-account-action-form textarea{min-height:42px;border:1px solid #6c8aa8;background:#192b46;color:#fff;padding:9px;border-radius:9px;width:100%}
+.lp-account-action-form textarea{min-height:105px;resize:vertical}
+.lp-account-action-form button{justify-self:start;border:0;background:#288ad5;color:#fff;padding:11px 16px;border-radius:9px;cursor:pointer}
+.lp-account-order-actions{margin-top:10px}.lp-account-order-actions span{font-size:12px;opacity:.8}
+.lp-theme-light .lp-account-action-form input,.lp-theme-light .lp-account-action-form textarea{background:#fff;color:#172a45}
