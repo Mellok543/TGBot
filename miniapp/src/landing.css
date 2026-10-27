@@ -344,3 +344,19 @@ html{scroll-behavior:smooth;scroll-padding-top:90px}
 .lp-login-user button{border:1px solid #53719566;border-radius:10px;background:#244977;color:#eaf4ff;padding:9px 12px;font-size:12px}
 .lp-theme-light .lp-login-user button{background:#e9f2ff;color:#1a5294;border-color:#c7d9ef}
 @media(max-width:750px){.lp-login-user{max-width:160px;overflow:hidden}.lp-login-user span{overflow:hidden;text-overflow:ellipsis}.lp-login-user button{padding:7px}}
+
+
+/* Mobile navigation must fit in the viewport at 320-430px. */
+.lp-drawer-login{display:none}
+@media(max-width:760px){
+  .lp .lp-nav{width:100%;max-width:100%;min-width:0;display:grid;grid-template-columns:minmax(0,1fr) auto auto;align-items:center;gap:8px;padding:10px 12px}
+  .lp .lp-nav>.lp-brand{min-width:0;font-size:clamp(17px,5vw,22px);overflow:hidden}
+  .lp .lp-nav>.lp-brand img{width:30px;height:30px;margin-right:6px;flex-shrink:0}
+  .lp .lp-nav>.lp-theme-control{margin:0;padding:2px;gap:1px}
+  .lp .lp-nav>.lp-theme-control button{width:27px;height:29px;font-size:16px}
+  .lp .lp-nav>.lp-nav-action,.lp .lp-nav>.lp-login-user{display:none!important}
+  .lp .lp-nav>.lp-mobile-menu{display:block;margin:0;min-width:36px;padding:7px 9px}
+  .lp-mobile-drawer .lp-drawer-login{display:block;padding:8px 0 12px}
+  .lp-mobile-drawer .lp-drawer-login .lp-nav-action{display:flex!important;width:100%;justify-content:center;white-space:normal;font-size:14px!important;padding:13px!important}
+  .lp-mobile-drawer .lp-drawer-login .lp-login-user{display:flex;max-width:none;justify-content:space-between}
+}
