@@ -421,3 +421,16 @@ html{scroll-behavior:smooth;scroll-padding-top:90px}
 .lp-theme-light .lp-account-rate{border-color:#d5e0ee}
 .lp-theme-light .lp-account-rate-form input,.lp-theme-light .lp-account-rate-form select{background:#fff;color:#172a45;border-color:#c5d5e8}
 @media(max-width:760px){.lp-account-rate{align-items:stretch;flex-direction:column}.lp-account-rate-form button{width:100%}}
+
+
+.lp-account-order-filters{display:flex;gap:8px;flex-wrap:wrap;margin-top:16px}
+.lp-account-order-filters button{padding:9px 16px;border:1px solid #52749b;border-radius:10px;background:transparent;color:inherit;cursor:pointer}
+.lp-account-order-filters button.active{background:#285b96;color:#fff}
+.lp-account-order-head{display:flex;justify-content:space-between;align-items:center;gap:12px}
+.lp-account-order-head h2{overflow-wrap:anywhere}
+.lp-account-order details{margin:12px 0}.lp-account-order summary{cursor:pointer}
+.lp-account-order-text{white-space:pre-wrap;overflow-wrap:anywhere}
+.lp-account-order-actions{display:flex;gap:10px;flex-wrap:wrap}
+.lp-account-order-actions button{background:#285b96;color:white;padding:11px 15px;border:1px solid #5487c7;border-radius:10px;cursor:pointer}
+.lp-account-order-actions button:disabled{opacity:.5}
+@media(max-width:760px){.lp-account-order-head{align-items:flex-start;flex-direction:column}}
