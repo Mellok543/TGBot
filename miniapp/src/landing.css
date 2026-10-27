@@ -393,3 +393,16 @@ html{scroll-behavior:smooth;scroll-padding-top:90px}
 .lp-theme-light .lp-account-stats strong{color:#287cda}
 .lp-theme-light .lp-account-plan{color:#2357a0;border-color:#c2d5ef}
 @media(max-width:760px){.lp-account{padding:27px 16px 70px}.lp-account-layout{grid-template-columns:minmax(0,1fr);gap:15px}.lp-account-navigation{display:flex;overflow-x:auto;gap:6px;padding:7px;scrollbar-width:none}.lp-account-navigation a{flex-shrink:0;white-space:nowrap;padding:11px;font-size:12px}.lp-account-panel{padding:18px}.lp-account-identity{gap:10px;flex-wrap:wrap}.lp-account-avatar{height:48px;width:48px;font-size:20px}.lp-account-stats{gap:8px}.lp-account-stats>div{padding:14px 9px}.lp-account-stats strong{font-size:23px}.lp-account-stats span{font-size:11px}}
+
+
+.lp-account-channel{display:flex;align-items:center;justify-content:space-between;gap:18px}
+.lp-account-channel p{margin:5px 0 11px}
+.lp-account-status{display:inline-block;padding:5px 10px;border-radius:9px;color:#f2c39e;background:#6e472a55;font-size:12px}
+.lp-account-status.listed{color:#9ce9c1;background:#176b4c55}
+.lp-account-channel-actions{display:flex;align-items:center;flex-wrap:wrap;gap:12px}
+.lp-account-channel-actions button{cursor:pointer;border:1px solid #4d7db8;background:#275389;color:#fff;border-radius:10px;padding:11px 14px}
+.lp-account-channel-actions button:disabled{opacity:.5;cursor:wait}
+.lp-account-channel-actions a{color:#65c9ff;font-size:13px;text-decoration:none}
+.lp-theme-light .lp-account-status.listed{color:#18734c;background:#ddf8e9}
+.lp-theme-light .lp-account-status{color:#995522;background:#fff1e4}
+@media(max-width:760px){.lp-account-channel{align-items:stretch;flex-direction:column}.lp-account-channel-actions{gap:10px}}
