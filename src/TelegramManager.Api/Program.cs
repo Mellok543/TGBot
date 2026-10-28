@@ -440,10 +440,39 @@ app.MapGet("/api/web/channels/{channelId:long}/analytics", async (long channelId
         """);
     orders.Parameters.Add(new MySqlParameter("@channel",channelId));
     orders.Parameters.Add(new MySqlParameter("@days",days));
-    await using var stats=await orders.ExecuteReaderAsync(ct);
-    await stats.ReadAsync(ct);
-    return Results.Ok(new {days,points,orders=stats.GetInt64(0),published=stats.GetInt64(1),
-        revenue=stats.GetDecimal(2),pending=stats.GetInt64(3)});
+    long totalOrders,published,pending;decimal revenue;
+    await using(var stats=await orders.ExecuteReaderAsync(ct)){
+      await stats.ReadAsync(ct);totalOrders=stats.GetInt64(0);published=stats.GetInt64(1);
+      revenue=stats.GetDecimal(2);pending=stats.GetInt64(3);
+    }
+    await using var previous=db.CreateCommand("""
+      SELECT COUNT(*),COALESCE(SUM(CASE WHEN payment_status='Paid' AND is_test_order=FALSE THEN price_rub ELSE 0 END),0)
+      FROM ad_requests WHERE channel_id=@channel
+        AND created_at>=DATE_SUB(UTC_TIMESTAMP(),INTERVAL @twice DAY)
+        AND created_at<DATE_SUB(UTC_TIMESTAMP(),INTERVAL @days DAY)
+      """);
+    previous.Parameters.Add(new MySqlParameter("@channel",channelId));
+    previous.Parameters.Add(new MySqlParameter("@days",days));
+    previous.Parameters.Add(new MySqlParameter("@twice",days*2));
+    long previousOrders;decimal previousRevenue;
+    await using(var rd=await previous.ExecuteReaderAsync(ct)){
+      await rd.ReadAsync(ct);previousOrders=rd.GetInt64(0);previousRevenue=rd.GetDecimal(1);
+    }
+    await using var daily=db.CreateCommand("""
+      SELECT DATE(created_at),COALESCE(SUM(price_rub),0)
+      FROM ad_requests
+      WHERE channel_id=@channel AND payment_status='Paid' AND is_test_order=FALSE
+        AND created_at>=DATE_SUB(UTC_TIMESTAMP(),INTERVAL @days DAY)
+      GROUP BY DATE(created_at) ORDER BY DATE(created_at)
+      """);
+    daily.Parameters.Add(new MySqlParameter("@channel",channelId));
+    daily.Parameters.Add(new MySqlParameter("@days",days));
+    var revenuePoints=new List<object>();
+    await using(var rd=await daily.ExecuteReaderAsync(ct))
+      while(await rd.ReadAsync(ct))
+        revenuePoints.Add(new {day=rd.GetDateTime(0).ToString("yyyy-MM-dd"),amount=rd.GetDecimal(1)});
+    return Results.Ok(new {days,points,orders=totalOrders,published,revenue,pending,
+      previousOrders,previousRevenue,revenuePoints});
 });
 app.MapPost("/api/auth/logout", async (HttpContext ctx) =>
 {
