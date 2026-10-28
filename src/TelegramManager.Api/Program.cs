@@ -2057,7 +2057,9 @@ app.MapPost("/api/orders/{orderId:long}/payment", async (long orderId, HttpReque
         description = "Тестовая оплата Reklio #" + orderId,
         metadata = new { order_id = orderId.ToString() }
     });
-    using var response = await client.SendAsync(request, ct);
+    using var providerTimeout=CancellationTokenSource.CreateLinkedTokenSource(ct);
+    providerTimeout.CancelAfter(TimeSpan.FromSeconds(12));
+    using var response = await client.SendAsync(request, providerTimeout.Token);
     if (!response.IsSuccessStatusCode)
         return Results.Problem("ЮKassa отклонила создание тестового платежа", statusCode: 502);
     using var document = await System.Text.Json.JsonDocument.ParseAsync(await response.Content.ReadAsStreamAsync(ct), cancellationToken: ct);
