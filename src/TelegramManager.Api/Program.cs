@@ -2074,7 +2074,8 @@ app.MapPost("/api/orders/{orderId:long}/payment", async (long orderId, HttpReque
     await using var saveTx = await conn.BeginTransactionAsync(ct);
     await using var save = new MySqlCommand("""
         UPDATE reklio_payment_attempts
-        SET provider_payment_id=@provider,confirmation_url=@url,status='Pending'
+        SET provider_payment_id=@provider,confirmation_url=@url,
+            status=IF(status='Succeeded','Succeeded','Pending')
         WHERE id=@attempt AND mode='test' AND status IN ('Created','Pending','Succeeded')
           AND (provider_payment_id IS NULL OR provider_payment_id=@provider)
         """, conn, saveTx);
