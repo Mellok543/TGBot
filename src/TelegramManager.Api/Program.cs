@@ -513,7 +513,7 @@ long? Authorized(HttpRequest req)
     // Cross-origin requests must carry the exact trusted website Origin (CSRF defense).
     var path=req.Path.Value??"";
     if(!System.Text.RegularExpressions.Regex.IsMatch(path,
-        @"^/api/orders/[0-9]+/(reschedule|dispute|payment|payment/check|deal)$",
+        @"^(?:/api/orders/[0-9]+/(?:reschedule|dispute|payment|payment/check|deal)|/api/my-channels/connect)$",
         System.Text.RegularExpressions.RegexOptions.CultureInvariant)) return null;
     if(req.Headers.Origin.ToString() is not ("https://reklio.site" or "https://www.reklio.site"))return null;
     if(req.HttpContext.User.Identity?.IsAuthenticated!=true)return null;
