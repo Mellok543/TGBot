@@ -2030,8 +2030,8 @@ app.MapPost("/api/orders/{orderId:long}/payment", async (long orderId, HttpReque
         await insert.ExecuteNonQueryAsync(ct);
         attemptId = insert.LastInsertedId;
     }
-    // Keep the order row locked until the provider returns and the attempt is saved.
-    // This serializes simultaneous clicks across API instances.
+    // Commit the persisted idempotency key before contacting the provider.
+    // Concurrent requests reuse the same key; YooKassa deduplicates them.
     if (attemptStatus == "Succeeded")
     {
         await tx.RollbackAsync(ct);
@@ -2043,6 +2043,9 @@ app.MapPost("/api/orders/{orderId:long}/payment", async (long orderId, HttpReque
         return Results.Ok(new { confirmationUrl = confirmation });
     }
 
+    await tx.CommitAsync(ct);
+
+    // No database transaction or order row lock is held across the HTTP call.
     // The provider idempotence key is persisted BEFORE the network request.
     // Do not mark the order paid based on this response.
     var client = clients.CreateClient();
@@ -2068,17 +2071,19 @@ app.MapPost("/api/orders/{orderId:long}/payment", async (long orderId, HttpReque
     var url = root.GetProperty("confirmation").GetProperty("confirmation_url").GetString();
     if (string.IsNullOrWhiteSpace(providerId) || string.IsNullOrWhiteSpace(url))
         return Results.Problem("Некорректный ответ ЮKassa", statusCode: 502);
+    await using var saveTx = await conn.BeginTransactionAsync(ct);
     await using var save = new MySqlCommand("""
         UPDATE reklio_payment_attempts
         SET provider_payment_id=@provider,confirmation_url=@url,status='Pending'
-        WHERE id=@attempt AND (provider_payment_id IS NULL OR provider_payment_id=@provider)
-        """, conn, tx);
+        WHERE id=@attempt AND mode='test' AND status IN ('Created','Pending','Succeeded')
+          AND (provider_payment_id IS NULL OR provider_payment_id=@provider)
+        """, conn, saveTx);
     save.Parameters.AddWithValue("@provider", providerId);
     save.Parameters.AddWithValue("@url", url);
     save.Parameters.AddWithValue("@attempt", attemptId);
     if (await save.ExecuteNonQueryAsync(ct) != 1)
         throw new InvalidOperationException("Payment attempt was not saved");
-    await tx.CommitAsync(ct);
+    await saveTx.CommitAsync(ct);
     return Results.Ok(new { confirmationUrl = url });
 });
 
