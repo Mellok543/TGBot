@@ -501,3 +501,19 @@ html{scroll-behavior:smooth;scroll-padding-top:90px}
 .lp-theme-light .lp-dashboard-actions a span{color:#486c97}
 .lp-theme-light .lp-dashboard-finance div,.lp-theme-light .lp-dashboard-orders a{border-color:#d5e0ee}
 @media(max-width:760px){.lp-dashboard-actions{grid-template-columns:1fr}.lp-dashboard-finance{grid-template-columns:1fr}.lp-dashboard-orders a{flex-direction:column}.lp-dashboard-orders a>div:last-child{text-align:left}}
+
+
+.lp-account-settings{width:100%;display:grid;gap:14px;padding:18px;border:1px solid #43688e;border-radius:14px;background:#1a3452}
+.lp-account-settings h3{margin:0;font-size:17px}.lp-account-settings label{display:grid;gap:7px;font-size:13px}
+.lp-account-settings select,.lp-account-settings input{width:100%;min-width:0;min-height:42px;padding:9px 11px;border:1px solid #6585a8;border-radius:9px;background:#152b46;color:#f4f9ff}
+.lp-account-alias-field{display:flex;align-items:center;border:1px solid #6585a8;border-radius:9px;overflow:hidden}
+.lp-account-alias-field span{white-space:nowrap;padding:10px;background:#213f60;color:#9ec4e6;font-size:13px}
+.lp-account-alias-field input{border:0;border-radius:0;flex:1}
+.lp-account-settings p{font-size:12px;margin:0;color:#9eb5ca}
+.lp-account-settings>button{justify-self:start;border:0;border-radius:10px;padding:12px 18px;background:#298add;color:white;cursor:pointer}
+.lp-account-settings>button:disabled{opacity:.5}
+.lp-theme-light .lp-account-settings{background:#f5f9ff;border-color:#d5e0ee}
+.lp-theme-light .lp-account-settings select,.lp-theme-light .lp-account-settings input{background:#fff;color:#1a3351;border-color:#ccd9e8}
+.lp-theme-light .lp-account-alias-field{border-color:#ccd9e8}.lp-theme-light .lp-account-alias-field span{background:#e8eff9;color:#45647c}
+.lp-theme-light .lp-account-settings p{color:#657e97}
+@media(max-width:520px){.lp-account-settings{padding:12px}.lp-account-alias-field span{font-size:11px;padding:10px 6px}}
