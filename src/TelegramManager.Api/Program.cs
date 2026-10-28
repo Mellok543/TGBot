@@ -368,6 +368,39 @@ app.MapGet("/api/web/finance", async (HttpContext ctx,MySqlDataSource db,Cancell
     return Results.Ok(new{revenue,expenses,testPayments,paid,readyForReview=ready,pending,blocked,refunded,
       operations,transactions,note="Учитываются реальные оплаченные заказы; тестовые платежи показаны отдельно. Выплаты здесь не инициируются."});
 });
+app.MapPost("/api/web/channels/{channelId:long}/category",async(long channelId,UpdateCategoryInput input,HttpContext ctx,MySqlDataSource db,CancellationToken ct)=>{
+ if(ctx.User.Identity?.IsAuthenticated!=true||!long.TryParse(ctx.User.FindFirst("id")?.Value,out var userId)||userId<=0)return Results.Unauthorized();
+ if(ctx.Request.Headers.Origin.ToString() is not ("https://reklio.site" or "https://www.reklio.site"))return Results.StatusCode(403);
+ var category=input.Category?.Trim()??"";
+ var allowed=new HashSet<string>(StringComparer.Ordinal){"Технологии","Игры","Новости","Бизнес","Финансы","Образование","Развлечения","Юмор","Спорт","Путешествия","Авто","Красота и стиль","Здоровье","Кулинария","Музыка","Кино","Другое"};
+ if(!allowed.Contains(category))return Results.BadRequest(new{error="Выберите категорию из списка"});
+ await using var cmd=db.CreateCommand("UPDATE channels SET category=@category WHERE telegram_id=@id AND connected_by=@owner");
+ cmd.Parameters.Add(new MySqlParameter("@category",category));cmd.Parameters.Add(new MySqlParameter("@id",channelId));cmd.Parameters.Add(new MySqlParameter("@owner",userId));
+ return await cmd.ExecuteNonQueryAsync(ct)>0?Results.Ok(new{category}):Results.NotFound();
+});
+app.MapPost("/api/web/channels/{channelId:long}/alias",async(long channelId,ChannelAliasInput input,HttpContext ctx,MySqlDataSource db,CancellationToken ct)=>{
+ if(ctx.User.Identity?.IsAuthenticated!=true||!long.TryParse(ctx.User.FindFirst("id")?.Value,out var userId)||userId<=0)return Results.Unauthorized();
+ if(ctx.Request.Headers.Origin.ToString() is not ("https://reklio.site" or "https://www.reklio.site"))return Results.StatusCode(403);
+ var alias=(input.Alias??"").Trim().ToLowerInvariant();
+ if(!System.Text.RegularExpressions.Regex.IsMatch(alias,@"^[a-z0-9_]{4,32}$"))return Results.BadRequest(new{error="Используйте 4–32 латинских символа, цифры или _"});
+ if(alias is "admin" or "api" or "app" or "help" or "catalog" or "login" or "support" or "reklio" or "account" or "pricing" or "terms" or "privacy")return Results.BadRequest(new{error="Этот адрес зарезервирован"});
+ await using var conn=await db.OpenConnectionAsync(ct);
+ await using var tx=await conn.BeginTransactionAsync(ct);
+ await using(var verify=new MySqlCommand("SELECT telegram_id FROM channels WHERE telegram_id=@id AND connected_by=@owner FOR UPDATE",conn,tx)){
+ verify.Parameters.AddWithValue("@id",channelId);verify.Parameters.AddWithValue("@owner",userId);
+ if(await verify.ExecuteScalarAsync(ct) is null){await tx.RollbackAsync(ct);return Results.NotFound();}
+ }
+ try{
+ await using(var cmd=new MySqlCommand("""
+ INSERT INTO reklio_channel_aliases(channel_id,alias) VALUES(@id,@alias)
+ ON DUPLICATE KEY UPDATE alias=VALUES(alias)
+ """,conn,tx)){
+ cmd.Parameters.AddWithValue("@id",channelId);cmd.Parameters.AddWithValue("@alias",alias);await cmd.ExecuteNonQueryAsync(ct);
+ }
+ await tx.CommitAsync(ct);
+ return Results.Ok(new{alias,url="https://reklio.site/ad/"+alias});
+ }catch(MySqlException ex) when(ex.Number==1062){await tx.RollbackAsync(ct);return Results.Conflict(new{error="Этот адрес уже занят. Выберите другой."});}
+});
 app.MapPost("/api/auth/logout", async (HttpContext ctx) =>
 {
     var origin=ctx.Request.Headers.Origin.ToString();
