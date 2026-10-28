@@ -27,16 +27,17 @@ builder.Services.AddRateLimiter(options =>
     {
         var path=context.Request.Path.Value??"";
         // Keep health checks and YooKassa callbacks available during traffic spikes.
-        if(path=="/api/health"||path=="/api/payments/yookassa/notification")
+        if(path=="/api/health")
             return RateLimitPartition.GetNoLimiter("health-or-webhook");
         var identity=context.User.FindFirst("id")?.Value;
         var ip=context.Connection.RemoteIpAddress?.ToString()??"unknown";
         var key=(identity is null?"ip:"+ip:"user:"+identity)+
             (path=="/api/my-channels/connect"?":connect":path.StartsWith("/api/orders/")&&path.EndsWith("/payment")?":payment":":general");
         var isSensitive=path=="/api/my-channels/connect"||path.StartsWith("/api/auth/");
+        var isWebhook=path=="/api/payments/yookassa/notification";
         return RateLimitPartition.GetFixedWindowLimiter(key,_=>new FixedWindowRateLimiterOptions
         {
-            PermitLimit=isSensitive?12:180,Window=TimeSpan.FromMinutes(1),
+            PermitLimit=isWebhook?60:isSensitive?12:180,Window=TimeSpan.FromMinutes(1),
             QueueLimit=0,AutoReplenishment=true
         });
     });
@@ -120,8 +121,8 @@ builder.Services.AddCors(o => o.AddPolicy("miniapp", p => p
     .AllowAnyHeader().AllowAnyMethod().AllowCredentials()));
 var app = builder.Build();
 app.UseCors("miniapp");
-app.UseRateLimiter();
 app.UseAuthentication();
+app.UseRateLimiter();
 app.UseAuthorization();
 app.MapGet("/api/auth/config", () => Results.Ok(new {telegramLoginAvailable=loginEnabled}));
 app.MapGet("/api/auth/login", (HttpContext ctx) =>
