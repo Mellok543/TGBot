@@ -480,3 +480,24 @@ html{scroll-behavior:smooth;scroll-padding-top:90px}
 .lp-finance-filters label{display:grid;gap:6px;font-size:13px;flex:1;min-width:160px}
 .lp-finance-filters select{background:#1b314f;color:#f0f7ff;border:1px solid #527da7;border-radius:10px;padding:10px}
 .lp-theme-light .lp-finance-filters select{background:#fff;color:#19304d;border-color:#c8d8ea}
+
+
+.lp-dashboard-actions{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+.lp-dashboard-actions a{display:grid;gap:9px;padding:20px;border-radius:16px;border:1px solid #42668c;background:#1b3556;text-decoration:none;color:#e6f5ff}
+.lp-dashboard-actions a strong{font-size:16px}.lp-dashboard-actions a span{color:#87bce8;font-size:13px}
+.lp-dashboard-actions a:hover{border-color:#41b5ed;background:#244871}
+.lp-dashboard-section-title{display:flex;align-items:center;justify-content:space-between;gap:12px}
+.lp-dashboard-section-title h2{margin:0}.lp-dashboard-section-title a{color:#62caff;text-decoration:none;font-size:13px}
+.lp-dashboard-finance{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin-top:18px}
+.lp-dashboard-finance div{border:1px solid #42668c;border-radius:12px;padding:16px;display:grid;gap:10px}
+.lp-dashboard-finance span,.lp-dashboard-orders span{color:var(--muted);font-size:12px}
+.lp-dashboard-finance strong{font-size:22px;overflow-wrap:anywhere}
+.lp-dashboard-orders{display:grid;gap:9px;margin-top:18px}
+.lp-dashboard-orders a{border:1px solid #42668c;border-radius:12px;padding:13px;display:flex;justify-content:space-between;gap:14px;color:inherit;text-decoration:none}
+.lp-dashboard-orders a>div{display:grid;gap:6px;min-width:0}
+.lp-dashboard-orders a>div:last-child{text-align:right;flex-shrink:0}
+.lp-dashboard-orders strong{overflow-wrap:anywhere}
+.lp-theme-light .lp-dashboard-actions a{background:#f4f8ff;border-color:#d5e0ee;color:#183e68}
+.lp-theme-light .lp-dashboard-actions a span{color:#486c97}
+.lp-theme-light .lp-dashboard-finance div,.lp-theme-light .lp-dashboard-orders a{border-color:#d5e0ee}
+@media(max-width:760px){.lp-dashboard-actions{grid-template-columns:1fr}.lp-dashboard-finance{grid-template-columns:1fr}.lp-dashboard-orders a{flex-direction:column}.lp-dashboard-orders a>div:last-child{text-align:left}}
