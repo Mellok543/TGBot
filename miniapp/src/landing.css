@@ -555,3 +555,5 @@ html{scroll-behavior:smooth;scroll-padding-top:90px}
 .lp-theme-light .lp-channel-analytics,.lp-theme-light .lp-channel-summary>div{border-color:#d5e0ee}
 .lp-theme-light .lp-channel-periods button{border-color:#cbd9e8}
 @media(max-width:720px){.lp-channel-top{align-items:flex-start}.lp-channel-picture{width:48px;height:48px}.lp-channel-summary{grid-template-columns:repeat(2,minmax(0,1fr))}.lp-channel-analytics{padding:12px}}
+
+.lp-channel-graphs{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}.lp-channel-graph{padding:14px;border:1px solid #567b9c;border-radius:12px;min-width:0}.lp-channel-bars{height:130px;display:flex;align-items:flex-end;gap:3px;border-bottom:1px solid #567b9c}.lp-channel-bars>div{flex:1;min-width:2px;max-height:100%;background:#35ade8}.lp-channel-comparison{display:flex;flex-wrap:wrap;gap:14px}@media(max-width:800px){.lp-channel-graphs{grid-template-columns:1fr}}
