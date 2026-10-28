@@ -340,8 +340,33 @@ app.MapGet("/api/web/finance", async (HttpContext ctx,MySqlDataSource db,Cancell
            publishedAt=reader.IsDBNull(5)?(DateTime?)null:reader.GetDateTime(5),
            eligibleAt=reader.IsDBNull(6)?(DateTime?)null:reader.GetDateTime(6)});
     }
+    await using var history=db.CreateCommand("""
+        SELECT a.id,c.title,a.price_rub,a.created_at,a.payment_status,a.payout_status,
+               a.is_test_order,a.owner_id,a.advertiser_id
+        FROM ad_requests a JOIN channels c ON c.telegram_id=a.channel_id
+        WHERE (a.owner_id=@user OR a.advertiser_id=@user)
+          AND a.payment_status IN ('Paid','TestPaid')
+        ORDER BY a.created_at DESC,a.id DESC LIMIT 300
+        """);
+    history.Parameters.Add(new MySqlParameter("@user",userId));
+    var transactions=new List<object>();
+    await using(var reader=await history.ExecuteReaderAsync(ct))
+    while(await reader.ReadAsync(ct))
+    {
+        var isOwner=reader.GetInt64(7)==userId;
+        var isBuyer=reader.GetInt64(8)==userId;
+        var payment=reader.GetString(4);
+        var isTest=reader.GetBoolean(6);
+        // Own-channel self-tests must never be presented as real income.
+        if(isOwner)transactions.Add(new{id=reader.GetInt64(0),channel=reader.GetString(1),
+           amount=reader.GetDecimal(2),createdAt=reader.GetDateTime(3),
+           type=isTest?"test_sale":"sale",payoutStatus=reader.GetString(5),paymentStatus=payment});
+        if(isBuyer)transactions.Add(new{id=reader.GetInt64(0),channel=reader.GetString(1),
+           amount=reader.GetDecimal(2),createdAt=reader.GetDateTime(3),
+           type=isTest?"test_purchase":"purchase",payoutStatus=reader.GetString(5),paymentStatus=payment});
+    }
     return Results.Ok(new{revenue,expenses,testPayments,paid,readyForReview=ready,pending,blocked,refunded,
-      operations,note="Учитываются реальные оплаченные заказы; тестовые платежи показаны отдельно. Выплаты здесь не инициируются."});
+      operations,transactions,note="Учитываются реальные оплаченные заказы; тестовые платежи показаны отдельно. Выплаты здесь не инициируются."});
 });
 app.MapPost("/api/auth/logout", async (HttpContext ctx) =>
 {
