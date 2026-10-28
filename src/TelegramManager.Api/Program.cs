@@ -474,6 +474,21 @@ app.MapGet("/api/web/channels/{channelId:long}/analytics", async (long channelId
     return Results.Ok(new {days,points,orders=totalOrders,published,revenue,pending,
       previousOrders,previousRevenue,revenuePoints});
 });
+app.MapGet("/api/web/channels/{channelId:long}/orders",async(long channelId,HttpContext ctx,MySqlDataSource db,CancellationToken ct)=>{
+ if(ctx.User.Identity?.IsAuthenticated!=true||!long.TryParse(ctx.User.FindFirst("id")?.Value,out var userId)||userId<=0)return Results.Unauthorized();
+ await using var cmd=db.CreateCommand("""
+ SELECT a.id,a.status,a.price_rub,a.created_at,a.scheduled_at,a.payment_status
+ FROM ad_requests a JOIN channels c ON c.telegram_id=a.channel_id
+ WHERE c.telegram_id=@channel AND c.connected_by=@owner AND a.owner_id=@owner
+ ORDER BY a.created_at DESC LIMIT 30
+ """);
+ cmd.Parameters.Add(new MySqlParameter("@channel",channelId));cmd.Parameters.Add(new MySqlParameter("@owner",userId));
+ var items=new List<object>();
+ await using var reader=await cmd.ExecuteReaderAsync(ct);
+ while(await reader.ReadAsync(ct))items.Add(new{id=reader.GetInt64(0),status=reader.GetString(1),price=reader.GetDecimal(2),
+ createdAt=reader.GetDateTime(3),scheduledAt=reader.IsDBNull(4)?(DateTime?)null:reader.GetDateTime(4),paymentStatus=reader.GetString(5)});
+ return Results.Ok(items);
+});
 app.MapPost("/api/auth/logout", async (HttpContext ctx) =>
 {
     var origin=ctx.Request.Headers.Origin.ToString();
