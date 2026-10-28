@@ -10,6 +10,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using MySqlConnector;
+using System.Threading.RateLimiting;
 
 var builder = WebApplication.CreateBuilder(args);
 var token = Environment.GetEnvironmentVariable("BOT_TOKEN")
@@ -19,6 +20,27 @@ var connectionString = Environment.GetEnvironmentVariable("DATABASE_URL")
 builder.Services.AddSingleton(new MySqlDataSourceBuilder(connectionString).Build());
 builder.Services.AddHttpClient();
 builder.Services.AddMemoryCache();
+builder.Services.AddRateLimiter(options =>
+{
+    options.RejectionStatusCode=StatusCodes.Status429TooManyRequests;
+    options.GlobalLimiter=PartitionedRateLimiter.Create<HttpContext,string>(context =>
+    {
+        var path=context.Request.Path.Value??"";
+        // Keep health checks and YooKassa callbacks available during traffic spikes.
+        if(path=="/api/health"||path=="/api/payments/yookassa/notification")
+            return RateLimitPartition.GetNoLimiter("health-or-webhook");
+        var identity=context.User.FindFirst("id")?.Value;
+        var ip=context.Connection.RemoteIpAddress?.ToString()??"unknown";
+        var key=(identity is null?"ip:"+ip:"user:"+identity)+
+            (path=="/api/my-channels/connect"?":connect":path.StartsWith("/api/orders/")&&path.EndsWith("/payment")?":payment":":general");
+        var isSensitive=path=="/api/my-channels/connect"||path.StartsWith("/api/auth/");
+        return RateLimitPartition.GetFixedWindowLimiter(key,_=>new FixedWindowRateLimiterOptions
+        {
+            PermitLimit=isSensitive?12:180,Window=TimeSpan.FromMinutes(1),
+            QueueLimit=0,AutoReplenishment=true
+        });
+    });
+});
 // OIDC credentials must be configured in VPS environment, never in Git.
 var loginClientId=Environment.GetEnvironmentVariable("TELEGRAM_LOGIN_CLIENT_ID");
 var loginSecret=Environment.GetEnvironmentVariable("TELEGRAM_LOGIN_CLIENT_SECRET");
@@ -98,6 +120,7 @@ builder.Services.AddCors(o => o.AddPolicy("miniapp", p => p
     .AllowAnyHeader().AllowAnyMethod().AllowCredentials()));
 var app = builder.Build();
 app.UseCors("miniapp");
+app.UseRateLimiter();
 app.UseAuthentication();
 app.UseAuthorization();
 app.MapGet("/api/auth/config", () => Results.Ok(new {telegramLoginAvailable=loginEnabled}));
@@ -2058,6 +2081,9 @@ app.MapPost("/api/orders/{orderId:long}/payment", async (long orderId, HttpReque
 
 app.MapPost("/api/payments/yookassa/notification", async (HttpRequest req, MySqlDataSource db, IHttpClientFactory clients, CancellationToken ct) =>
 {
+    if(req.ContentLength>65536)return Results.StatusCode(413);
+    var maxBody=req.HttpContext.Features.Get<Microsoft.AspNetCore.Http.Features.IHttpMaxRequestBodySizeFeature>();
+    if(maxBody is {IsReadOnly:false})maxBody.MaxRequestBodySize=65536;
     if (Environment.GetEnvironmentVariable("YOOKASSA_MODE") != "test")
         return Results.StatusCode(503);
     var shop=Environment.GetEnvironmentVariable("YOOKASSA_SHOP_ID");
