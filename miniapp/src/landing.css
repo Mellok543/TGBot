@@ -601,3 +601,19 @@ html{scroll-behavior:smooth;scroll-padding-top:90px}
 .lp.lp-theme-light .lp-channel-periods button.active{color:#fff;background:#2065b4}
 .lp.lp-theme-light .lp-account-settings>button,.lp.lp-theme-light .wc-form button,.lp.lp-theme-light .wc-line button{color:#fff}
 .lp.lp-theme-light .lp-account-connect-row button{color:#fff}
+
+
+/* Desktop layout: use wide monitors without stretching readable text. */
+@media (min-width:1200px){
+ .lp-nav,.lp-footer,.lp-section,.lp-catalog,.lp-home-market,.lp-market-hero,.lp-hero{max-width:1560px;width:calc(100% - 64px)}
+ .lp-banner,.lp-shortcuts,.lp-route-heading,.lp-channel-page,.lp-start{max-width:1504px;width:calc(100% - 64px)}
+ .lp-account{max-width:1504px;width:calc(100% - 64px)}
+ .wc-page{max-width:1460px;width:calc(100% - 64px)}
+ .lp-copy>p{max-width:650px}
+ .lp-hero{grid-template-columns:minmax(0,1fr) minmax(440px,0.95fr)}
+ .lp-section-head>p,.lp-market-copy>p{max-width:780px}
+}
+@media (min-width:1750px){
+ .lp-nav,.lp-footer,.lp-section,.lp-catalog,.lp-home-market,.lp-market-hero,.lp-hero{width:calc(100% - 112px)}
+ .lp-banner,.lp-shortcuts,.lp-route-heading,.lp-channel-page,.lp-start,.lp-account,.wc-page{width:calc(100% - 112px)}
+}
