@@ -580,3 +580,24 @@ html{scroll-behavior:smooth;scroll-padding-top:90px}
 .wc-error{color:#ff9c9c}.wc-notice{color:#8de7bb}
 .lp-theme-light .wc-card{background:#fff;border-color:#d9e2ef}.lp-theme-light .wc-form input,.lp-theme-light .wc-form select{background:#fff;color:#172a42}
 @media(max-width:660px){.wc-page{padding:20px 12px 50px}.wc-header{align-items:flex-start}.wc-avatar{width:60px;height:60px}.wc-stats{grid-template-columns:1fr}.wc-card{padding:15px}.wc-line{align-items:flex-start;flex-direction:column}}
+
+
+/* Light theme contrast: owner workspace, analytics, forms, and legacy dark-only text. */
+.lp.lp-theme-light .wc-page{color:#172a45}
+.lp.lp-theme-light .wc-page p,.lp.lp-theme-light .wc-page small{color:#415a76}
+.lp.lp-theme-light .wc-header h1,.lp.lp-theme-light .wc-card h2,.lp.lp-theme-light .wc-card h3,.lp.lp-theme-light .wc-line strong,.lp.lp-theme-light .wc-stats strong{color:#172a45}
+.lp.lp-theme-light .wc-tabs button{background:#f2f6fc;border-color:#c6d7e9;color:#263e5c}
+.lp.lp-theme-light .wc-tabs button.active{background:#2065b4;color:#fff;border-color:#2065b4}
+.lp.lp-theme-light .wc-stats>div{border-color:#d0ddec;background:#f7faff;color:#334c69}
+.lp.lp-theme-light .wc-line{border-color:#d6e1ee}
+.lp.lp-theme-light .wc-scroll th,.lp.lp-theme-light .wc-scroll td{color:#263e5c;border-color:#d5e1ee}
+.lp.lp-theme-light .wc-error{color:#a4232b}
+.lp.lp-theme-light .wc-notice{color:#116b45}
+.lp.lp-theme-light .lp-account-panel p,.lp.lp-theme-light .lp-account-panel label,.lp.lp-theme-light .lp-account-panel h3,.lp.lp-theme-light .lp-account-panel h4{color:#263d58}
+.lp.lp-theme-light .lp-account-order-actions span,.lp.lp-theme-light .lp-finance-operation span,.lp.lp-theme-light .lp-dashboard-orders span,.lp.lp-theme-light .lp-dashboard-finance span,.lp.lp-theme-light .lp-channel-summary span,.lp.lp-theme-light .lp-channel-metrics{color:#4c6480}
+.lp.lp-theme-light .lp-channel-metrics strong{color:#172a45}
+.lp.lp-theme-light .lp-finance-operation strong,.lp.lp-theme-light .lp-dashboard-orders strong,.lp.lp-theme-light .lp-channel-summary strong{color:#172a45}
+.lp.lp-theme-light .lp-channel-periods button{color:#274563;background:#f2f6fd}
+.lp.lp-theme-light .lp-channel-periods button.active{color:#fff;background:#2065b4}
+.lp.lp-theme-light .lp-account-settings>button,.lp.lp-theme-light .wc-form button,.lp.lp-theme-light .wc-line button{color:#fff}
+.lp.lp-theme-light .lp-account-connect-row button{color:#fff}
