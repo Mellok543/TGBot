@@ -601,14 +601,3 @@ html{scroll-behavior:smooth;scroll-padding-top:90px}
 .lp.lp-theme-light .lp-channel-periods button.active{color:#fff;background:#2065b4}
 .lp.lp-theme-light .lp-account-settings>button,.lp.lp-theme-light .wc-form button,.lp.lp-theme-light .wc-line button{color:#fff}
 .lp.lp-theme-light .lp-account-connect-row button{color:#fff}
-
-
-/* Balanced desktop composition: restrained page width and consistent gutters. */
-@media (min-width:1200px){
- .lp-nav,.lp-footer,.lp-section,.lp-hero,.lp-home-market,.lp-market-hero{max-width:1300px}
- .lp-catalog{max-width:1340px}
- .lp-banner,.lp-shortcuts,.lp-route-heading,.lp-channel-page,.lp-start{max-width:1240px}
- .lp-account{max-width:1280px}
- .wc-page{max-width:1240px}
- .lp-hero{grid-template-columns:minmax(0,1.02fr) minmax(0,.98fr)}
-}
