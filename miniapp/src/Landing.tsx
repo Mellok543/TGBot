@@ -156,6 +156,19 @@ function ChannelPage(){
  </section>;
 }
 const legalPages={
+ 'payments':{title:'Оплата, оказание услуг и возвраты',sections:[
+ ['Какие услуги предоставляет Reklio','Платформа предоставляет доступ к инструментам управления Telegram-каналами и рекламными размещениями. Бесплатный тариф FREE включает базовые функции. Тариф PRO указан на странице тарифов.'],
+ ['Стоимость и условия','Актуальная цена и срок предоставления каждой платной услуги указываются на странице тарифов и при оформлении заказа до оплаты. Покупка рекламы в сторонних каналах не входит в стоимость тарифа PRO.'],
+ ['Когда оказывается услуга','Для цифровых функций Reklio доступ предоставляется через личный кабинет или Telegram Mini App после подтверждения оплаты, если подключён действующий способ платежа. Физическая доставка отсутствует.'],
+ ['Отказ от услуги','Чтобы отказаться от платной услуги или сообщить об ошибке, направьте обращение с идентификатором заказа и описанием ситуации на support@reklio.site. Каждый запрос рассматривается с учётом фактически оказанной части услуги и применимого законодательства.'],
+ ['Возврат денежных средств','При наличии оснований для возврата он производится на исходный способ оплаты через платёжного провайдера или иным согласованным законным способом. Срок зачисления зависит от банка и платёжной системы. До подключения реальных платежей возвраты не выполняются через сайт.'],
+ ['Важное ограничение','Данный порядок относится к собственным услугам Reklio. Оплата рекламных услуг сторонних владельцев каналов будет доступна только после согласования соответствующей модели расчётов с платёжным провайдером.']
+ ]},
+ 'contacts':{title:'Контакты и сведения о продавце',sections:[
+ ['Поддержка','По вопросам работы сайта, заказов и отказа от услуг пишите на support@reklio.site или в Telegram: @ReklioBot.'],
+ ['Продавец и реквизиты','Оператор Reklio готовит публикацию данных самозанятого: полных ФИО, ИНН и города деятельности. До публикации этих сведений и утверждения оферты реальные платежи за собственные услуги на сайте не активированы.'],
+ ['Документы','Информация об условиях использования, обработке персональных данных и порядке возврата находится на отдельных страницах сайта.']
+ ]},
  'terms':{title:'Условия использования',sections:[
  ['Назначение сервиса','Reklio помогает находить рекламные площадки, согласовывать заказы и отслеживать размещения в Telegram. Доступ к функциям может зависеть от роли и тарифа.'],
  ['Размещение рекламы','Владелец канала указывает условия и стоимость. Рекламодатель предоставляет материалы и выбирает время. Публикация выполняется после подтверждения заказа согласно доступному процессу.'],
@@ -196,7 +209,7 @@ function ChannelAliasRedirect(){
 export default function Landing(){
  const path=window.location.pathname;
  const aliasRoute=window.location.hostname.replace(/^www\./,'')==='reklio.site' && /^\/ad\/[a-zA-Z0-9_]{4,32}\/?$/.test(path);
- const legalKind=path==='/terms'?'terms':path==='/privacy'?'privacy':path==='/advertising-rules'?'advertising':null;
+ const legalKind=path==='/terms'?'terms':path==='/privacy'?'privacy':path==='/advertising-rules'?'advertising':path==='/payments-and-refunds'?'payments':path==='/contacts'?'contacts':null;
  const [mobileMenu,setMobileMenu]=useState(false);
  const [themePreference,setThemePreference]=useState<'light'|'dark'|'system'>(()=>{
    try {const saved=localStorage.getItem('reklio-theme');return saved==='light'||saved==='dark'?saved:'system';} catch {return 'system';}
@@ -259,6 +272,6 @@ export default function Landing(){
  </>}{path==="/pricing"&&<><section className="lp-section lp-pricing" id="pricing"><div className="lp-section-head"><span className="lp-kicker">ТАРИФЫ ДЛЯ ВЛАДЕЛЬЦЕВ</span><h2>Начните бесплатно.<br/><em>Растите с PRO.</em></h2><p>Выбирайте тариф по количеству каналов. Покупка рекламы оплачивается отдельно по условиям выбранной площадки.</p></div><div className="lp-pricing-grid"><article><div className="lp-pricing-head"><h3>FREE</h3><strong>Бесплатно</strong></div><ul><li>До 1 канала</li><li>Без ограничения по времени</li><li>Базовая статистика</li><li>Комиссия 5%</li><li>Управление заявками и уведомления</li></ul><a href="https://t.me/ReklioBot">Начать бесплатно ↗</a></article><article className="featured"><div className="lp-pricing-head"><h3>PRO</h3><strong>399 ₽ / 30 дней</strong></div><ul><li>До 10 каналов</li><li>Полная аналитика и расширенная статистика</li><li>Комиссия 2,5%</li><li>Все функции управления площадками</li></ul><p>Подключение платежей PRO находится в подготовке.</p><a href="https://t.me/ReklioBot">Узнать о PRO ↗</a></article></div></section>
  </>}{path==="/"&&<><section className="lp-cta"><div className="lp-cta-glow"/><img src="/reklio-mark.svg" alt=""/><h2>Реклама начинается здесь.</h2><p>Попробуйте Reklio внутри Telegram.</p><a href="https://t.me/ReklioBot">Открыть Reklio ↗</a></section>
  </>}</>}
- </main><footer className="lp-footer"><a className="lp-brand" href="/"><img src="/reklio-mark.svg" alt=""/>Reklio</a><span>© 2026 Reklio · Платформа рекламных размещений</span><div className="lp-footer-links"><a href="/terms">Условия</a><a href="/privacy">Конфиденциальность</a><a href="/advertising-rules">Правила рекламы</a><a href="mailto:support@reklio.site">Контакты</a></div></footer>
+ </main><footer className="lp-footer"><a className="lp-brand" href="/"><img src="/reklio-mark.svg" alt=""/>Reklio</a><span>© 2026 Reklio · Платформа рекламных размещений</span><div className="lp-footer-links"><a href="/terms">Условия</a><a href="/privacy">Конфиденциальность</a><a href="/advertising-rules">Правила рекламы</a><a href="/payments-and-refunds">Оплата и возвраты</a><a href="/contacts">Контакты и реквизиты</a></div></footer>
  </div>
 }
