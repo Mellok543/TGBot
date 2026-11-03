@@ -2507,6 +2507,79 @@ app.MapPost("/api/web/payouts",async(PayoutRequestInput input,HttpContext ctx,My
     await tx.CommitAsync(ct);
     return Results.Ok(new{id,status="Pending",amount=input.Amount});
 });
+app.MapGet("/api/payouts",async(HttpContext ctx,MySqlDataSource db,CancellationToken ct)=>
+{
+    if(Authorized(ctx.Request) is not long ownerId)
+        return Results.Unauthorized();
+    await using var conn=await db.OpenConnectionAsync(ct);
+    await ReconcileOwnerEarnings(conn,ownerId,ct);
+    var available=await OwnerAvailable(conn,ownerId,ct);
+    await using var cmd=new MySqlCommand("""
+        SELECT id,amount_rub,status,created_at,processed_at
+        FROM reklio_payout_requests WHERE owner_id=@owner
+        ORDER BY id DESC LIMIT 100
+        """,conn);
+    cmd.Parameters.AddWithValue("@owner",ownerId);
+    var history=new List<object>();
+    await using(var reader=await cmd.ExecuteReaderAsync(ct))
+        while(await reader.ReadAsync(ct))
+            history.Add(new {id=reader.GetInt64(0),amount=reader.GetDecimal(1),status=reader.GetString(2),
+                createdAt=reader.GetDateTime(3),processedAt=reader.IsDBNull(4)?(DateTime?)null:reader.GetDateTime(4)});
+    return Results.Ok(new {available=Math.Max(0m,available),requests=history,
+        note="Учёт начислений за выполненные заказы. Это не электронный кошелёк; заявки обрабатываются вручную."});
+});
+app.MapPost("/api/payouts",async(PayoutRequestInput input,HttpContext ctx,MySqlDataSource db,CancellationToken ct)=>
+{
+    if(Authorized(ctx.Request) is not long ownerId)
+        return Results.Unauthorized();
+    if(input.Amount<100m || input.Amount>1000000m || decimal.Round(input.Amount,2)!=input.Amount)
+        return Results.BadRequest(new {error="Сумма выплаты: от 100 до 1 000 000 ₽, не более двух знаков после запятой"});
+    await using var conn=await db.OpenConnectionAsync(ct);
+    await using var tx=await conn.BeginTransactionAsync(ct);
+    // Serialize requests for the same owner across all API instances.
+    await using(var owner=new MySqlCommand("SELECT telegram_id FROM users WHERE telegram_id=@id FOR UPDATE",conn,tx))
+    {
+        owner.Parameters.AddWithValue("@id",ownerId);
+        if(await owner.ExecuteScalarAsync(ct) is null){await tx.RollbackAsync(ct);return Results.NotFound();}
+    }
+    await using(var credit=new MySqlCommand("""
+        INSERT IGNORE INTO reklio_owner_earnings(order_id,owner_id,amount_rub)
+        SELECT a.id,a.owner_id,a.price_rub FROM ad_requests a
+        WHERE a.owner_id=@owner AND a.payment_status='Paid' AND a.is_test_order=FALSE
+          AND a.status='Deleted' AND a.payout_status='ReadyForManualReview' AND a.price_rub>0
+        """,conn,tx))
+    {
+        credit.Parameters.AddWithValue("@owner",ownerId);
+        await credit.ExecuteNonQueryAsync(ct);
+    }
+    decimal available;
+    await using(var balance=new MySqlCommand("""
+        SELECT
+           (SELECT COALESCE(SUM(e.amount_rub),0) FROM reklio_owner_earnings e
+              JOIN ad_requests a ON a.id=e.order_id WHERE e.owner_id=@owner
+              AND a.owner_id=@owner AND a.payment_status='Paid' AND a.is_test_order=FALSE
+              AND a.status='Deleted' AND a.payout_status IN ('ReadyForManualReview','Paid'))
+           -
+           (SELECT COALESCE(SUM(amount_rub),0) FROM reklio_payout_requests
+              WHERE owner_id=@owner AND status IN ('Pending','Paid'))
+        """,conn,tx))
+    {
+        balance.Parameters.AddWithValue("@owner",ownerId);
+        available=Convert.ToDecimal(await balance.ExecuteScalarAsync(ct));
+    }
+    if(available<input.Amount){await tx.RollbackAsync(ct);return Results.Conflict(new{error="Недостаточно доступных начислений"});}
+    await using var insert=new MySqlCommand("""
+        INSERT INTO reklio_payout_requests(owner_id,amount_rub,status)
+        VALUES(@owner,@amount,'Pending')
+        """,conn,tx);
+    insert.Parameters.AddWithValue("@owner",ownerId);
+    insert.Parameters.AddWithValue("@amount",input.Amount);
+    await insert.ExecuteNonQueryAsync(ct);
+    var id=insert.LastInsertedId;
+    await tx.CommitAsync(ct);
+    return Results.Ok(new{id,status="Pending",amount=input.Amount});
+});
+
 app.MapGet("/api/admin/payouts",async(HttpRequest req,MySqlDataSource db,CancellationToken ct)=>
 {
     if(Authorized(req) is not long uid)return Results.Unauthorized();
