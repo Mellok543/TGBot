@@ -521,6 +521,38 @@ app.MapPost("/api/auth/logout", async (HttpContext ctx) =>
     await ctx.SignOutAsync(CookieAuthenticationDefaults.AuthenticationScheme);
     return Results.Ok(new {authenticated=false});
 });
+// Earnings and withdrawal requests; no custody, wallet top-ups, or automatic transfers.
+try
+{
+    var payoutDb=app.Services.GetRequiredService<MySqlDataSource>();
+    await using var earn=payoutDb.CreateCommand("""
+        CREATE TABLE IF NOT EXISTS reklio_owner_earnings(
+          order_id BIGINT NOT NULL PRIMARY KEY,
+          owner_id BIGINT NOT NULL,
+          amount_rub DECIMAL(15,2) NOT NULL,
+          credited_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          INDEX idx_owner_earnings_owner(owner_id)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+        """);
+    await earn.ExecuteNonQueryAsync();
+    await using var requests=payoutDb.CreateCommand("""
+        CREATE TABLE IF NOT EXISTS reklio_payout_requests(
+          id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+          owner_id BIGINT NOT NULL,
+          amount_rub DECIMAL(15,2) NOT NULL,
+          status ENUM('Pending','Paid','Rejected') NOT NULL DEFAULT 'Pending',
+          created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          processed_at DATETIME NULL,
+          processed_by BIGINT NULL,
+          transfer_reference VARCHAR(120) NULL,
+          INDEX idx_payout_owner(owner_id,created_at),
+          INDEX idx_payout_status(status,created_at)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+        """);
+    await requests.ExecuteNonQueryAsync();
+}
+catch(MySqlException ex){app.Logger.LogError(ex,"Payout accounting schema bootstrap failed");}
+
 // Bootstrap only the role/audit tables. Existing payment and Safe Deal migrations remain manual.
 try
 {
@@ -2260,6 +2292,165 @@ app.MapPost("/api/orders/{orderId:long}/payment/check", async (long orderId, Htt
     return Results.Ok(new { status = payment.Status });
 });
 
+
+// Owner earnings are bookkeeping entries, not stored-value accounts or customer deposits.
+// Only externally verified real payments and completed, payout-reviewed orders qualify.
+static async Task ReconcileOwnerEarnings(MySqlConnection conn,long ownerId,CancellationToken ct)
+{
+    await using var credit=new MySqlCommand("""
+        INSERT IGNORE INTO reklio_owner_earnings(order_id,owner_id,amount_rub)
+        SELECT a.id,a.owner_id,a.price_rub
+        FROM ad_requests a
+        WHERE a.owner_id=@owner AND a.payment_status='Paid' AND a.is_test_order=FALSE
+          AND a.status='Deleted' AND a.payout_status='ReadyForManualReview'
+          AND a.price_rub>0
+        """,conn);
+    credit.Parameters.AddWithValue("@owner",ownerId);
+    await credit.ExecuteNonQueryAsync(ct);
+}
+
+static async Task<decimal> OwnerAvailable(MySqlConnection conn,long ownerId,CancellationToken ct)
+{
+    await using var sum=new MySqlCommand("""
+        SELECT
+          (SELECT COALESCE(SUM(e.amount_rub),0) FROM reklio_owner_earnings e
+             JOIN ad_requests a ON a.id=e.order_id
+           WHERE e.owner_id=@owner AND a.owner_id=@owner
+             AND a.payment_status='Paid' AND a.is_test_order=FALSE
+             AND a.status='Deleted' AND a.payout_status IN ('ReadyForManualReview','Paid'))
+          -
+          (SELECT COALESCE(SUM(r.amount_rub),0) FROM reklio_payout_requests r
+           WHERE r.owner_id=@owner AND r.status IN ('Pending','Paid'))
+        """,conn);
+    sum.Parameters.AddWithValue("@owner",ownerId);
+    return Convert.ToDecimal(await sum.ExecuteScalarAsync(ct));
+}
+
+app.MapGet("/api/web/payouts",async(HttpContext ctx,MySqlDataSource db,CancellationToken ct)=>
+{
+    if(ctx.User.Identity?.IsAuthenticated!=true || !long.TryParse(ctx.User.FindFirst("id")?.Value,out var ownerId)||ownerId<=0)
+        return Results.Unauthorized();
+    await using var conn=await db.OpenConnectionAsync(ct);
+    await ReconcileOwnerEarnings(conn,ownerId,ct);
+    var available=await OwnerAvailable(conn,ownerId,ct);
+    await using var cmd=new MySqlCommand("""
+        SELECT id,amount_rub,status,created_at,processed_at
+        FROM reklio_payout_requests WHERE owner_id=@owner
+        ORDER BY id DESC LIMIT 100
+        """,conn);
+    cmd.Parameters.AddWithValue("@owner",ownerId);
+    var history=new List<object>();
+    await using(var reader=await cmd.ExecuteReaderAsync(ct))
+        while(await reader.ReadAsync(ct))
+            history.Add(new {id=reader.GetInt64(0),amount=reader.GetDecimal(1),status=reader.GetString(2),
+                createdAt=reader.GetDateTime(3),processedAt=reader.IsDBNull(4)?(DateTime?)null:reader.GetDateTime(4)});
+    return Results.Ok(new {available=Math.Max(0m,available),requests=history,
+        note="Учёт начислений за выполненные заказы. Это не электронный кошелёк; заявки обрабатываются вручную."});
+});
+app.MapPost("/api/web/payouts",async(PayoutRequestInput input,HttpContext ctx,MySqlDataSource db,CancellationToken ct)=>
+{
+    if(ctx.User.Identity?.IsAuthenticated!=true || !long.TryParse(ctx.User.FindFirst("id")?.Value,out var ownerId)||ownerId<=0)
+        return Results.Unauthorized();
+    if(ctx.Request.Headers.Origin.ToString() is not ("https://reklio.site" or "https://www.reklio.site"))
+        return Results.StatusCode(403);
+    if(input.Amount<100m || input.Amount>1000000m || decimal.Round(input.Amount,2)!=input.Amount)
+        return Results.BadRequest(new {error="Сумма выплаты: от 100 до 1 000 000 ₽, не более двух знаков после запятой"});
+    await using var conn=await db.OpenConnectionAsync(ct);
+    await using var tx=await conn.BeginTransactionAsync(ct);
+    // Serialize requests for the same owner across all API instances.
+    await using(var owner=new MySqlCommand("SELECT telegram_id FROM users WHERE telegram_id=@id FOR UPDATE",conn,tx))
+    {
+        owner.Parameters.AddWithValue("@id",ownerId);
+        if(await owner.ExecuteScalarAsync(ct) is null){await tx.RollbackAsync(ct);return Results.NotFound();}
+    }
+    await using(var credit=new MySqlCommand("""
+        INSERT IGNORE INTO reklio_owner_earnings(order_id,owner_id,amount_rub)
+        SELECT a.id,a.owner_id,a.price_rub FROM ad_requests a
+        WHERE a.owner_id=@owner AND a.payment_status='Paid' AND a.is_test_order=FALSE
+          AND a.status='Deleted' AND a.payout_status='ReadyForManualReview' AND a.price_rub>0
+        """,conn,tx))
+    {
+        credit.Parameters.AddWithValue("@owner",ownerId);
+        await credit.ExecuteNonQueryAsync(ct);
+    }
+    decimal available;
+    await using(var balance=new MySqlCommand("""
+        SELECT
+           (SELECT COALESCE(SUM(e.amount_rub),0) FROM reklio_owner_earnings e
+              JOIN ad_requests a ON a.id=e.order_id WHERE e.owner_id=@owner
+              AND a.owner_id=@owner AND a.payment_status='Paid' AND a.is_test_order=FALSE
+              AND a.status='Deleted' AND a.payout_status IN ('ReadyForManualReview','Paid'))
+           -
+           (SELECT COALESCE(SUM(amount_rub),0) FROM reklio_payout_requests
+              WHERE owner_id=@owner AND status IN ('Pending','Paid'))
+        """,conn,tx))
+    {
+        balance.Parameters.AddWithValue("@owner",ownerId);
+        available=Convert.ToDecimal(await balance.ExecuteScalarAsync(ct));
+    }
+    if(available<input.Amount){await tx.RollbackAsync(ct);return Results.Conflict(new{error="Недостаточно доступных начислений"});}
+    await using var insert=new MySqlCommand("""
+        INSERT INTO reklio_payout_requests(owner_id,amount_rub,status)
+        VALUES(@owner,@amount,'Pending')
+        """,conn,tx);
+    insert.Parameters.AddWithValue("@owner",ownerId);
+    insert.Parameters.AddWithValue("@amount",input.Amount);
+    await insert.ExecuteNonQueryAsync(ct);
+    var id=insert.LastInsertedId;
+    await tx.CommitAsync(ct);
+    return Results.Ok(new{id,status="Pending",amount=input.Amount});
+});
+app.MapGet("/api/admin/payouts",async(HttpRequest req,MySqlDataSource db,CancellationToken ct)=>
+{
+    if(Authorized(req) is not long uid)return Results.Unauthorized();
+    if(!IsRootAdmin(uid))return Results.Forbid();
+    await using var cmd=db.CreateCommand("""
+        SELECT id,owner_id,amount_rub,status,created_at,processed_at
+        FROM reklio_payout_requests ORDER BY id DESC LIMIT 100
+        """);
+    var history=new List<object>();
+    await using var reader=await cmd.ExecuteReaderAsync(ct);
+    while(await reader.ReadAsync(ct))history.Add(new {
+        id=reader.GetInt64(0),ownerId=reader.GetInt64(1),amount=reader.GetDecimal(2),
+        status=reader.GetString(3),createdAt=reader.GetDateTime(4),
+        processedAt=reader.IsDBNull(5)?(DateTime?)null:reader.GetDateTime(5)});
+    return Results.Ok(history);
+});
+app.MapPost("/api/admin/payouts/{id:long}/decision",async(long id,HttpRequest req,MySqlDataSource db,CancellationToken ct)=>
+{
+    if(Authorized(req) is not long uid)return Results.Unauthorized();
+    if(!IsRootAdmin(uid))return Results.Forbid();
+    var input=await req.ReadFromJsonAsync<PayoutDecisionInput>(cancellationToken:ct);
+    if(input is null || input.Decision is not ("Paid" or "Rejected"))
+        return Results.BadRequest(new{error="Неизвестное действие"});
+    var reference=(input.Reference??"").Trim();
+    if(input.Decision=="Paid"&&(reference.Length<4||reference.Length>120))
+        return Results.BadRequest(new{error="Укажите номер или идентификатор подтверждённого банковского перевода"});
+    if(reference.Length>120)return Results.BadRequest();
+    await using var conn=await db.OpenConnectionAsync(ct);
+    await using var tx=await conn.BeginTransactionAsync(ct);
+    await using var cmd=new MySqlCommand("""
+        UPDATE reklio_payout_requests
+        SET status=@decision,processed_at=UTC_TIMESTAMP(),processed_by=@admin,transfer_reference=@ref
+        WHERE id=@id AND status='Pending'
+        """,conn,tx);
+    cmd.Parameters.AddWithValue("@id",id);
+    cmd.Parameters.AddWithValue("@decision",input.Decision);
+    cmd.Parameters.AddWithValue("@admin",uid);
+    cmd.Parameters.AddWithValue("@ref",reference);
+    if(await cmd.ExecuteNonQueryAsync(ct)!=1){await tx.RollbackAsync(ct);return Results.Conflict(new{error="Заявка уже обработана или не найдена"});}
+    await using var audit=new MySqlCommand("""
+        INSERT INTO reklio_admin_audit(actor_id,action,target_id,details)
+        VALUES(@admin,'OwnerPayout',@id,@details)
+        """,conn,tx);
+    audit.Parameters.AddWithValue("@admin",uid);
+    audit.Parameters.AddWithValue("@id",id);
+    audit.Parameters.AddWithValue("@details",input.Decision+" "+reference);
+    await audit.ExecuteNonQueryAsync(ct);
+    await tx.CommitAsync(ct);
+    return Results.Ok(new {id,status=input.Decision});
+});
+
 app.Run();
 
 record CreateOrderInput(long ChannelId, string Text);
@@ -2315,3 +2506,5 @@ sealed class ShortOidcStateFormat(IMemoryCache cache) : ISecureDataFormat<Authen
 }
 
 record WebOrderDecision(string Action);
+record PayoutRequestInput(decimal Amount);
+record PayoutDecisionInput(string Decision,string? Reference);
