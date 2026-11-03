@@ -10,6 +10,8 @@ const progressStage=(status:string)=>status==='Draft'?0:['Pending','PendingPaid'
 type FinanceTransaction={id:number;channel:string;amount:number;createdAt:string;type:'sale'|'purchase'|'test_sale'|'test_purchase';paymentStatus:string;payoutStatus:string};
 type FinanceOperation={id:number;channel:string;amount:number;status:string;payoutStatus:string;publishedAt:string|null;eligibleAt:string|null};
 type FinanceSummary={revenue:number;expenses:number;testPayments:number;paid:number;readyForReview:number;pending:number;blocked:number;refunded:number;operations:FinanceOperation[];transactions:FinanceTransaction[];note:string};
+type PayoutRequest={id:number;amount:number;status:'Pending'|'Paid'|'Rejected';createdAt:string;processedAt:string|null};
+type PayoutSummary={available:number;requests:PayoutRequest[];note:string};
 type WebOrder={id:number;channel:string;price:number;status:string;createdAt:string;isOwner:boolean;text:string;scheduledAt:string|null;durationHours:number|null;paymentStatus:string;payoutStatus:string;isTest:boolean;disputeReason:string|null;publicationIssue:string|null};
 type Rate={id:number;hours:number;price:number;active:boolean};
 type MyChannel={id:number;title:string;listed:boolean;price:number;category:string;alias:string|null;subscribers:number|null;avgViews:number|null};
@@ -31,6 +33,19 @@ export default function WebAccount(){
   }catch(error){setConnectError(error instanceof Error?error.message:'Ошибка подключения')}finally{setConnecting(false)}
  };
  const [finance,setFinance]=useState<FinanceSummary|null>(null);
+ const [payouts,setPayouts]=useState<PayoutSummary|null>(null);
+ const [payoutAmount,setPayoutAmount]=useState('');
+ const [payoutBusy,setPayoutBusy]=useState(false);
+ const [payoutMessage,setPayoutMessage]=useState('');
+ const [payoutError,setPayoutError]=useState('');
+ const reloadPayouts=async()=>{const r=await fetch(api+'/api/web/payouts',{credentials:'include'});if(!r.ok)throw new Error('Не удалось загрузить доступные начисления');setPayouts(await r.json())};
+ const submitPayout=async(e:React.FormEvent)=>{e.preventDefault();setPayoutBusy(true);setPayoutError('');setPayoutMessage('');
+  try{const amount=Number(payoutAmount.replace(',','.'));if(!Number.isFinite(amount)||amount<100)throw new Error('Минимальная заявка — 100 ₽');
+   const r=await fetch(api+'/api/web/payouts',{method:'POST',credentials:'include',headers:{'Content-Type':'application/json'},body:JSON.stringify({amount})});
+   const data=await r.json().catch(()=>({}));if(!r.ok)throw new Error(data.error||'Не удалось отправить заявку');
+   setPayoutAmount('');setPayoutMessage('Заявка создана. После проверки выплата производится вручную.');await reloadPayouts();
+  }catch(e){setPayoutError(e instanceof Error?e.message:'Ошибка оформления заявки')}finally{setPayoutBusy(false)}};
+
  const [dashboardOrders,setDashboardOrders]=useState<WebOrder[]>([]);
  const [dashboardFinance,setDashboardFinance]=useState<FinanceSummary|null>(null);
  const [dashboardStatus,setDashboardStatus]=useState<'loading'|'ready'|'partial'>('loading');
@@ -84,6 +99,7 @@ export default function WebAccount(){
  const toggleRate=async(rate:Rate)=>{if(selectedChannel===null)return;setPendingRate(rate.id);setChannelMessage('');try{const response=await fetch(api+'/api/web/channels/'+selectedChannel+'/rates/'+rate.id+'/toggle',{method:'POST',credentials:'include'});if(!response.ok)throw new Error();await loadRates(selectedChannel)}catch{setChannelMessage('Не удалось изменить статус предложения.')}finally{setPendingRate(null)}};
  const section=window.location.pathname==='/account/channels'?'channels':window.location.pathname==='/account/orders'?'orders':window.location.pathname==='/account/finance'?'finance':'profile';
  useEffect(()=>{if(section!=='profile')return;const controller=new AbortController();setDashboardStatus('loading');Promise.allSettled([fetch(api+'/api/web/orders',{credentials:'include',signal:controller.signal}).then(r=>{if(!r.ok)throw new Error();return r.json() as Promise<WebOrder[]>}),fetch(api+'/api/web/finance',{credentials:'include',signal:controller.signal}).then(r=>{if(!r.ok)throw new Error();return r.json() as Promise<FinanceSummary>})]).then(([ordersResult,financeResult])=>{if(controller.signal.aborted)return;if(ordersResult.status==='fulfilled')setDashboardOrders(ordersResult.value);if(financeResult.status==='fulfilled')setDashboardFinance(financeResult.value);setDashboardStatus(ordersResult.status==='fulfilled'&&financeResult.status==='fulfilled'?'ready':'partial')});return()=>controller.abort()},[section]);
+ useEffect(()=>{if(section!=='finance')return;reloadPayouts().catch(()=>setPayoutError('Не удалось загрузить баланс начислений'))},[section]);
  useEffect(()=>{if(section!=='finance')return;const controller=new AbortController();setFinanceStatus('loading');fetch(api+'/api/web/finance',{credentials:'include',signal:controller.signal}).then(async r=>{if(!r.ok)throw new Error();setFinance(await r.json());setFinanceStatus('ready')}).catch(()=>{if(!controller.signal.aborted)setFinanceStatus('error')});return()=>controller.abort()},[section]);
  const rub=(v:number)=>v.toLocaleString('ru-RU',{minimumFractionDigits:0,maximumFractionDigits:2})+' ₽';
  const payoutLabel=(s:string)=>({Paid:'Выплачено',ReadyForManualReview:'На проверке',Blocked:'Заблокировано',Refunded:'Возвращено',OnHold:'Удерживается',AwaitingVerification:'Проверяется'} as Record<string,string>)[s]||s;
@@ -125,6 +141,15 @@ export default function WebAccount(){
     {financeStatus==='error'&&<div className="lp-account-panel" role="alert">Не удалось загрузить финансы. Обновите страницу.</div>}
     {financeStatus==='ready'&&finance&&<>
       <div className="lp-account-stats lp-finance-stats"><div><strong>{rub(finance.revenue)}</strong><span>Реальные продажи</span></div><div><strong>{rub(finance.expenses)}</strong><span>Расходы на рекламу</span></div><div><strong>{rub(finance.testPayments)}</strong><span>Тестовые покупки</span></div></div>
+      <div className="lp-account-panel lp-payout-panel">
+       <h2>Начисления и заявки на выплаты</h2>
+       <p>Это учёт средств за выполненные и проверенные рекламные заказы, без пополнения кошелька. Выплаты выполняются вручную после проверки заявки.</p>
+       <div className="lp-account-stats"><div><strong>{rub(payouts?.available??0)}</strong><span>Доступно к заявке</span></div><div><strong>{payouts?.requests.filter(r=>r.status==='Pending').length??0}</strong><span>Заявок на проверке</span></div></div>
+       <form className="lp-account-action-form" onSubmit={submitPayout}><label>Сумма к выплате, ₽<input type="number" min="100" max="1000000" step="0.01" inputMode="decimal" required value={payoutAmount} onChange={e=>setPayoutAmount(e.target.value)} placeholder="Например, 1000"/></label><button type="submit" disabled={payoutBusy||!payouts||payouts.available<100}>{payoutBusy?'Отправляем…':'Запросить выплату'}</button></form>
+       {payoutMessage&&<p role="status">{payoutMessage}</p>}{payoutError&&<p role="alert" className="lp-connect-error">{payoutError}</p>}
+       <h3>История заявок</h3>
+       {!payouts?<p>Загрузка начислений…</p>:payouts.requests.length===0?<p>Заявок пока нет.</p>:<div className="lp-finance-history">{payouts.requests.map(item=><div className="lp-finance-operation" key={item.id}><div><strong>Заявка #{item.id}</strong><span>{new Date(item.createdAt).toLocaleString('ru-RU')} · {item.status==='Pending'?'На проверке':item.status==='Paid'?'Выплачено':'Отклонено'}</span></div><strong>{rub(item.amount)}</strong></div>)}</div>}
+      </div>
       <div className="lp-account-panel"><h2>Состояние выплат</h2><div className="lp-finance-breakdown"><div>Выплачено <strong>{rub(finance.paid)}</strong></div><div>Ожидает проверки <strong>{rub(finance.readyForReview)}</strong></div><div>В обработке <strong>{rub(finance.pending)}</strong></div><div>Заблокировано <strong>{rub(finance.blocked)}</strong></div><div>Возвращено <strong>{rub(finance.refunded)}</strong></div></div><p>{finance.note}</p></div>
       <div className="lp-account-panel"><h2>История финансовых операций</h2><div className="lp-finance-filters"><label>Период<select value={financePeriod} onChange={e=>setFinancePeriod(e.target.value)}><option value="all">За всё время</option><option value="7">7 дней</option><option value="30">30 дней</option><option value="90">90 дней</option><option value="365">Год</option></select></label><label>Тип операции<select value={financeType} onChange={e=>setFinanceType(e.target.value)}><option value="all">Все операции</option><option value="sale">Продажи</option><option value="purchase">Покупки</option><option value="test">Тестовые</option></select></label></div>{(()=>{const filtered=(finance.transactions||[]).filter(t=>(financeType==='all'||(financeType==='test'?t.type.startsWith('test'):t.type===financeType))&&(financePeriod==='all'||new Date(t.createdAt).getTime()>=Date.now()-Number(financePeriod)*86400000));const sales=filtered.filter(t=>t.type==='sale').reduce((v,t)=>v+t.amount,0);const purchases=filtered.filter(t=>t.type==='purchase').reduce((v,t)=>v+t.amount,0);return <><p>Операций: {filtered.length} · Продажи: {rub(sales)} · Покупки: {rub(purchases)}</p>{filtered.length===0?<p>За выбранный период операций нет.</p>:<div className="lp-finance-history">{filtered.map(op=><div className="lp-finance-operation" key={op.type+'-'+op.id}><div><strong>#{op.id} · {op.channel}</strong><span>{new Date(op.createdAt).toLocaleString('ru-RU')} · {op.type==='sale'?'Продажа':op.type==='purchase'?'Покупка':op.type==='test_sale'?'Тестовая продажа':'Тестовая покупка'}</span></div><div><strong>{op.type==='purchase'||op.type==='test_purchase'?'-':'+'}{rub(op.amount)}</strong><span>{op.type.startsWith('test')?'Тестовая операция':payoutLabel(op.payoutStatus)}</span></div></div>)}</div>}</>})()}</div>
     </>}
