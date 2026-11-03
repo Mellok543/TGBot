@@ -2326,6 +2326,60 @@ static async Task<decimal> OwnerAvailable(MySqlConnection conn,long ownerId,Canc
     return Convert.ToDecimal(await sum.ExecuteScalarAsync(ct));
 }
 
+
+app.MapGet("/api/web/admin/payouts",async(HttpContext ctx,MySqlDataSource db,CancellationToken ct)=>
+{
+    if(ctx.User.Identity?.IsAuthenticated!=true||!long.TryParse(ctx.User.FindFirst("id")?.Value,out var uid)||uid<=0)
+        return Results.Unauthorized();
+    if(!IsRootAdmin(uid))return Results.Forbid();
+    await using var cmd=db.CreateCommand("""
+        SELECT id,owner_id,amount_rub,status,created_at,processed_at,transfer_reference
+        FROM reklio_payout_requests ORDER BY id DESC LIMIT 100
+        """);
+    var rows=new List<object>();
+    await using var reader=await cmd.ExecuteReaderAsync(ct);
+    while(await reader.ReadAsync(ct))rows.Add(new{id=reader.GetInt64(0),ownerId=reader.GetInt64(1),
+        amount=reader.GetDecimal(2),status=reader.GetString(3),createdAt=reader.GetDateTime(4),
+        processedAt=reader.IsDBNull(5)?(DateTime?)null:reader.GetDateTime(5),
+        reference=reader.IsDBNull(6)?null:reader.GetString(6)});
+    return Results.Ok(rows);
+});
+app.MapPost("/api/web/admin/payouts/{id:long}/decision",async(long id,PayoutDecisionInput input,HttpContext ctx,MySqlDataSource db,CancellationToken ct)=>
+{
+    if(ctx.User.Identity?.IsAuthenticated!=true||!long.TryParse(ctx.User.FindFirst("id")?.Value,out var uid)||uid<=0)
+        return Results.Unauthorized();
+    if(!IsRootAdmin(uid))return Results.Forbid();
+    if(ctx.Request.Headers.Origin.ToString() is not ("https://reklio.site" or "https://www.reklio.site"))
+        return Results.StatusCode(403);
+    if(input.Decision is not ("Paid" or "Rejected"))return Results.BadRequest(new{error="Неверное действие"});
+    var reference=(input.Reference??"").Trim();
+    if(input.Decision=="Paid"&&(reference.Length<4||reference.Length>120))
+        return Results.BadRequest(new{error="Требуется идентификатор подтверждённого банковского перевода"});
+    if(reference.Length>120)return Results.BadRequest();
+    await using var conn=await db.OpenConnectionAsync(ct);
+    await using var tx=await conn.BeginTransactionAsync(ct);
+    await using var cmd=new MySqlCommand("""
+        UPDATE reklio_payout_requests
+        SET status=@status,processed_at=UTC_TIMESTAMP(),processed_by=@admin,transfer_reference=@reference
+        WHERE id=@id AND status='Pending'
+        """,conn,tx);
+    cmd.Parameters.AddWithValue("@id",id);
+    cmd.Parameters.AddWithValue("@status",input.Decision);
+    cmd.Parameters.AddWithValue("@admin",uid);
+    cmd.Parameters.AddWithValue("@reference",reference);
+    if(await cmd.ExecuteNonQueryAsync(ct)!=1){await tx.RollbackAsync(ct);return Results.Conflict(new{error="Заявка уже обработана"});}
+    await using var audit=new MySqlCommand("""
+        INSERT INTO reklio_admin_audit(actor_id,action,target_id,details)
+        VALUES(@admin,'OwnerPayout',@id,@details)
+        """,conn,tx);
+    audit.Parameters.AddWithValue("@admin",uid);
+    audit.Parameters.AddWithValue("@id",id);
+    audit.Parameters.AddWithValue("@details",input.Decision+" "+reference);
+    await audit.ExecuteNonQueryAsync(ct);
+    await tx.CommitAsync(ct);
+    return Results.Ok(new{id,status=input.Decision});
+});
+
 app.MapGet("/api/web/payouts",async(HttpContext ctx,MySqlDataSource db,CancellationToken ct)=>
 {
     if(ctx.User.Identity?.IsAuthenticated!=true || !long.TryParse(ctx.User.FindFirst("id")?.Value,out var ownerId)||ownerId<=0)
