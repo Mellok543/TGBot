@@ -2472,6 +2472,47 @@ static bool ValidDirectSellerLink(string? value)
       && !System.Net.IPAddress.TryParse(uri.Host,out _)
       && uri.Host!="localhost";
 }
+
+app.MapGet("/api/web/channels/{channelId:long}/direct-payment",async(long channelId,HttpContext ctx,MySqlDataSource db,CancellationToken ct)=>
+{
+    if(ctx.User.Identity?.IsAuthenticated!=true||!long.TryParse(ctx.User.FindFirst("id")?.Value,out var uid)||uid<=0)return Results.Unauthorized();
+    await using var cmd=db.CreateCommand("""
+      SELECT l.payment_url FROM channels c LEFT JOIN reklio_channel_direct_links l ON l.channel_id=c.telegram_id
+      WHERE c.telegram_id=@channel AND c.connected_by=@owner
+      """);
+    cmd.Parameters.Add(new MySqlParameter("@channel",channelId));cmd.Parameters.Add(new MySqlParameter("@owner",uid));
+    var value=await cmd.ExecuteScalarAsync(ct);
+    return value is null?Results.NotFound():Results.Ok(new{url=value is DBNull?null:(string)value});
+});
+app.MapPost("/api/web/channels/{channelId:long}/direct-payment",async(long channelId,DirectPaymentLinkInput input,HttpContext ctx,MySqlDataSource db,CancellationToken ct)=>
+{
+    if(ctx.User.Identity?.IsAuthenticated!=true||!long.TryParse(ctx.User.FindFirst("id")?.Value,out var uid)||uid<=0)return Results.Unauthorized();
+    if(ctx.Request.Headers.Origin.ToString() is not ("https://reklio.site" or "https://www.reklio.site"))return Results.StatusCode(403);
+    var url=(input.Url??"").Trim();if(!ValidDirectSellerLink(url))return Results.BadRequest(new{error="Нужна действительная HTTPS-ссылка для прямой оплаты продавцу"});
+    await using var cmd=db.CreateCommand("""
+      INSERT INTO reklio_channel_direct_links(channel_id,owner_id,payment_url)
+      SELECT telegram_id,connected_by,@url FROM channels WHERE telegram_id=@id AND connected_by=@owner
+      ON DUPLICATE KEY UPDATE owner_id=VALUES(owner_id),payment_url=VALUES(payment_url),updated_at=UTC_TIMESTAMP()
+      """);
+    cmd.Parameters.Add(new MySqlParameter("@id",channelId));cmd.Parameters.Add(new MySqlParameter("@owner",uid));cmd.Parameters.Add(new MySqlParameter("@url",url));
+    return await cmd.ExecuteNonQueryAsync(ct)>0?Results.Ok(new{url}):Results.NotFound();
+});
+app.MapGet("/api/web/orders/{orderId:long}/direct-payment",async(long orderId,HttpContext ctx,MySqlDataSource db,CancellationToken ct)=>
+{
+    if(ctx.User.Identity?.IsAuthenticated!=true||!long.TryParse(ctx.User.FindFirst("id")?.Value,out var uid)||uid<=0)return Results.Unauthorized();
+    await using var cmd=db.CreateCommand("""
+      SELECT a.price_rub,a.status,a.payment_status,l.payment_url,d.status
+      FROM ad_requests a LEFT JOIN reklio_channel_direct_links l ON l.channel_id=a.channel_id AND l.owner_id=a.owner_id
+      LEFT JOIN reklio_direct_payments d ON d.order_id=a.id
+      WHERE a.id=@id AND (a.advertiser_id=@uid OR a.owner_id=@uid)
+      """);
+    cmd.Parameters.Add(new MySqlParameter("@id",orderId));cmd.Parameters.Add(new MySqlParameter("@uid",uid));
+    await using var rd=await cmd.ExecuteReaderAsync(ct);
+    if(!await rd.ReadAsync(ct))return Results.NotFound();
+    return Results.Ok(new{amount=rd.GetDecimal(0),orderStatus=rd.GetString(1),paymentStatus=rd.GetString(2),
+       url=rd.IsDBNull(3)?null:rd.GetString(3),claimStatus=rd.IsDBNull(4)?null:rd.GetString(4)});
+});
+
 app.MapGet("/api/my-channels/{channelId:long}/direct-payment",async(long channelId,HttpRequest req,MySqlDataSource db,CancellationToken ct)=>
 {
     if(Authorized(req) is not long uid)return Results.Unauthorized();
