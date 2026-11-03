@@ -11,6 +11,7 @@ type FinanceTransaction={id:number;channel:string;amount:number;createdAt:string
 type FinanceOperation={id:number;channel:string;amount:number;status:string;payoutStatus:string;publishedAt:string|null;eligibleAt:string|null};
 type FinanceSummary={revenue:number;expenses:number;testPayments:number;paid:number;readyForReview:number;pending:number;blocked:number;refunded:number;operations:FinanceOperation[];transactions:FinanceTransaction[];note:string};
 type PayoutRequest={id:number;amount:number;status:'Pending'|'Paid'|'Rejected';createdAt:string;processedAt:string|null};
+type AdminPayout=PayoutRequest&{ownerId:number;reference:string|null};
 type PayoutSummary={available:number;requests:PayoutRequest[];note:string};
 type WebOrder={id:number;channel:string;price:number;status:string;createdAt:string;isOwner:boolean;text:string;scheduledAt:string|null;durationHours:number|null;paymentStatus:string;payoutStatus:string;isTest:boolean;disputeReason:string|null;publicationIssue:string|null};
 type Rate={id:number;hours:number;price:number;active:boolean};
@@ -34,6 +35,19 @@ export default function WebAccount(){
  };
  const [finance,setFinance]=useState<FinanceSummary|null>(null);
  const [payouts,setPayouts]=useState<PayoutSummary|null>(null);
+ const [adminPayouts,setAdminPayouts]=useState<AdminPayout[]>([]);
+ const [adminReference,setAdminReference]=useState<Record<number,string>>({});
+ const [adminBusy,setAdminBusy]=useState<number|null>(null);
+ const [adminError,setAdminError]=useState('');
+ const loadAdminPayouts=async()=>{const response=await fetch(api+'/api/web/admin/payouts',{credentials:'include'});if(!response.ok)throw new Error('Не удалось получить заявки');setAdminPayouts(await response.json())};
+ const adminPayoutDecision=async(id:number,decision:'Paid'|'Rejected')=>{
+   if(decision==='Paid'&&!window.confirm('Вы уже перевели деньги владельцу канала через банк? Отметка не выполняет перевод.'))return;
+   setAdminBusy(id);setAdminError('');
+   try{const response=await fetch(api+'/api/web/admin/payouts/'+id+'/decision',{method:'POST',credentials:'include',headers:{'Content-Type':'application/json'},body:JSON.stringify({decision,reference:adminReference[id]||''})});
+    const data=await response.json().catch(()=>({}));if(!response.ok)throw new Error(data.error||'Не удалось обработать заявку');await loadAdminPayouts();await reloadPayouts();
+   }catch(e){setAdminError(e instanceof Error?e.message:'Ошибка обработки')}finally{setAdminBusy(null)}
+ };
+
  const [payoutAmount,setPayoutAmount]=useState('');
  const [payoutBusy,setPayoutBusy]=useState(false);
  const [payoutMessage,setPayoutMessage]=useState('');
@@ -100,6 +114,7 @@ export default function WebAccount(){
  const section=window.location.pathname==='/account/channels'?'channels':window.location.pathname==='/account/orders'?'orders':window.location.pathname==='/account/finance'?'finance':'profile';
  useEffect(()=>{if(section!=='profile')return;const controller=new AbortController();setDashboardStatus('loading');Promise.allSettled([fetch(api+'/api/web/orders',{credentials:'include',signal:controller.signal}).then(r=>{if(!r.ok)throw new Error();return r.json() as Promise<WebOrder[]>}),fetch(api+'/api/web/finance',{credentials:'include',signal:controller.signal}).then(r=>{if(!r.ok)throw new Error();return r.json() as Promise<FinanceSummary>})]).then(([ordersResult,financeResult])=>{if(controller.signal.aborted)return;if(ordersResult.status==='fulfilled')setDashboardOrders(ordersResult.value);if(financeResult.status==='fulfilled')setDashboardFinance(financeResult.value);setDashboardStatus(ordersResult.status==='fulfilled'&&financeResult.status==='fulfilled'?'ready':'partial')});return()=>controller.abort()},[section]);
  useEffect(()=>{if(section!=='finance')return;reloadPayouts().catch(()=>setPayoutError('Не удалось загрузить баланс начислений'))},[section]);
+ useEffect(()=>{if(section!=='finance'||profile?.staffRole!=='owner')return;loadAdminPayouts().catch(()=>setAdminError('Не удалось загрузить список заявок'))},[section,profile?.staffRole]);
  useEffect(()=>{if(section!=='finance')return;const controller=new AbortController();setFinanceStatus('loading');fetch(api+'/api/web/finance',{credentials:'include',signal:controller.signal}).then(async r=>{if(!r.ok)throw new Error();setFinance(await r.json());setFinanceStatus('ready')}).catch(()=>{if(!controller.signal.aborted)setFinanceStatus('error')});return()=>controller.abort()},[section]);
  const rub=(v:number)=>v.toLocaleString('ru-RU',{minimumFractionDigits:0,maximumFractionDigits:2})+' ₽';
  const payoutLabel=(s:string)=>({Paid:'Выплачено',ReadyForManualReview:'На проверке',Blocked:'Заблокировано',Refunded:'Возвращено',OnHold:'Удерживается',AwaitingVerification:'Проверяется'} as Record<string,string>)[s]||s;
@@ -150,6 +165,16 @@ export default function WebAccount(){
        <h3>История заявок</h3>
        {!payouts?<p>Загрузка начислений…</p>:payouts.requests.length===0?<p>Заявок пока нет.</p>:<div className="lp-finance-history">{payouts.requests.map(item=><div className="lp-finance-operation" key={item.id}><div><strong>Заявка #{item.id}</strong><span>{new Date(item.createdAt).toLocaleString('ru-RU')} · {item.status==='Pending'?'На проверке':item.status==='Paid'?'Выплачено':'Отклонено'}</span></div><strong>{rub(item.amount)}</strong></div>)}</div>}
       </div>
+
+      {profile?.staffRole==='owner'&&<div className="lp-account-panel lp-payout-admin"><h2>Администрирование выплат</h2><p>Перевод денег выполняется отдельно через банк. Отмечайте заявку выплаченной только после подтверждения перевода и указывайте банковский идентификатор.</p>
+       {adminError&&<p role="alert" className="lp-connect-error">{adminError}</p>}
+       {adminPayouts.filter(p=>p.status==='Pending').length===0?<p>Ожидающих заявок нет.</p>:adminPayouts.filter(p=>p.status==='Pending').map(item=><div className="lp-finance-operation lp-payout-admin-row" key={item.id}>
+        <div><strong>Заявка #{item.id} · {rub(item.amount)}</strong><span>Telegram ID: {item.ownerId} · {new Date(item.createdAt).toLocaleString('ru-RU')}</span>
+         <input type="text" maxLength={120} value={adminReference[item.id]||''} onChange={e=>setAdminReference(v=>({...v,[item.id]:e.target.value}))} placeholder="ID банковского перевода"/>
+        </div>
+        <div className="lp-account-order-actions"><button type="button" disabled={adminBusy===item.id||!(adminReference[item.id]||'').trim()} onClick={()=>adminPayoutDecision(item.id,'Paid')}>Отметить выплаченной</button><button type="button" disabled={adminBusy===item.id} onClick={()=>adminPayoutDecision(item.id,'Rejected')}>Отклонить</button></div>
+       </div>)}
+      </div>}
       <div className="lp-account-panel"><h2>Состояние выплат</h2><div className="lp-finance-breakdown"><div>Выплачено <strong>{rub(finance.paid)}</strong></div><div>Ожидает проверки <strong>{rub(finance.readyForReview)}</strong></div><div>В обработке <strong>{rub(finance.pending)}</strong></div><div>Заблокировано <strong>{rub(finance.blocked)}</strong></div><div>Возвращено <strong>{rub(finance.refunded)}</strong></div></div><p>{finance.note}</p></div>
       <div className="lp-account-panel"><h2>История финансовых операций</h2><div className="lp-finance-filters"><label>Период<select value={financePeriod} onChange={e=>setFinancePeriod(e.target.value)}><option value="all">За всё время</option><option value="7">7 дней</option><option value="30">30 дней</option><option value="90">90 дней</option><option value="365">Год</option></select></label><label>Тип операции<select value={financeType} onChange={e=>setFinanceType(e.target.value)}><option value="all">Все операции</option><option value="sale">Продажи</option><option value="purchase">Покупки</option><option value="test">Тестовые</option></select></label></div>{(()=>{const filtered=(finance.transactions||[]).filter(t=>(financeType==='all'||(financeType==='test'?t.type.startsWith('test'):t.type===financeType))&&(financePeriod==='all'||new Date(t.createdAt).getTime()>=Date.now()-Number(financePeriod)*86400000));const sales=filtered.filter(t=>t.type==='sale').reduce((v,t)=>v+t.amount,0);const purchases=filtered.filter(t=>t.type==='purchase').reduce((v,t)=>v+t.amount,0);return <><p>Операций: {filtered.length} · Продажи: {rub(sales)} · Покупки: {rub(purchases)}</p>{filtered.length===0?<p>За выбранный период операций нет.</p>:<div className="lp-finance-history">{filtered.map(op=><div className="lp-finance-operation" key={op.type+'-'+op.id}><div><strong>#{op.id} · {op.channel}</strong><span>{new Date(op.createdAt).toLocaleString('ru-RU')} · {op.type==='sale'?'Продажа':op.type==='purchase'?'Покупка':op.type==='test_sale'?'Тестовая продажа':'Тестовая покупка'}</span></div><div><strong>{op.type==='purchase'||op.type==='test_purchase'?'-':'+'}{rub(op.amount)}</strong><span>{op.type.startsWith('test')?'Тестовая операция':payoutLabel(op.payoutStatus)}</span></div></div>)}</div>}</>})()}</div>
     </>}
