@@ -188,7 +188,7 @@ public sealed class PublicationWorker(MySqlDataSource database, IHttpClientFacto
                 UPDATE reklio_publications SET state='Deleted',deleted_at=UTC_TIMESTAMP()
                 WHERE order_id=@id AND state='Deleting';
                 UPDATE ad_requests SET status=IF(status='Published','Deleted',status),
-                    payout_status=IF(is_test_order=TRUE,'NotEligible',IF(payout_status='Blocked','Blocked','AwaitingVerification'))
+                    payout_status=IF(is_test_order=TRUE OR payment_status='DirectPaid','NotEligible',IF(payout_status='Blocked','Blocked','AwaitingVerification'))
                 WHERE id=@id AND status IN ('Published','Disputed','DisputeResolved');
                 """, conn);
             done.Parameters.AddWithValue("@id", id);
