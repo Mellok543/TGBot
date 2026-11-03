@@ -52,10 +52,15 @@ public sealed class PublicationWorker(MySqlDataSource database, IHttpClientFacto
             FROM ad_requests a
             WHERE a.status='Scheduled' AND a.scheduled_at<=UTC_TIMESTAMP()
               AND (@testChannelId IS NULL OR a.channel_id=@testChannelId)
-              AND EXISTS (
-                SELECT 1 FROM reklio_payment_attempts p
-                WHERE p.order_id=a.id AND p.status='Succeeded'
-                  AND (p.mode='live' OR (p.mode='test' AND @allowTest=1))
+              AND (
+                EXISTS (
+                  SELECT 1 FROM reklio_payment_attempts p
+                  WHERE p.order_id=a.id AND p.status='Succeeded'
+                    AND (p.mode='live' OR (p.mode='test' AND @allowTest=1))
+                )
+                OR (a.payment_status='DirectPaid' AND a.paid_confirmed=TRUE
+                   AND EXISTS (SELECT 1 FROM reklio_direct_payments d
+                     WHERE d.order_id=a.id AND d.owner_id=a.owner_id AND d.status='OwnerConfirmed'))
               )
               AND NOT EXISTS (SELECT 1 FROM reklio_publications j WHERE j.order_id=a.id)
             ORDER BY a.scheduled_at ASC LIMIT 1 FOR UPDATE
