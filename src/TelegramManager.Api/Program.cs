@@ -521,6 +521,35 @@ app.MapPost("/api/auth/logout", async (HttpContext ctx) =>
     await ctx.SignOutAsync(CookieAuthenticationDefaults.AuthenticationScheme);
     return Results.Ok(new {authenticated=false});
 });
+
+try
+{
+    var directDb=app.Services.GetRequiredService<MySqlDataSource>();
+    await using var links=directDb.CreateCommand("""
+        CREATE TABLE IF NOT EXISTS reklio_channel_direct_links(
+          channel_id BIGINT NOT NULL PRIMARY KEY,
+          owner_id BIGINT NOT NULL,
+          payment_url VARCHAR(512) NOT NULL,
+          updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          INDEX idx_direct_link_owner(owner_id)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+        """);
+    await links.ExecuteNonQueryAsync();
+    await using var claims=directDb.CreateCommand("""
+        CREATE TABLE IF NOT EXISTS reklio_direct_payments(
+          order_id BIGINT NOT NULL PRIMARY KEY,
+          owner_id BIGINT NOT NULL,
+          buyer_id BIGINT NOT NULL,
+          status ENUM('BuyerClaimed','OwnerConfirmed','Rejected') NOT NULL,
+          claimed_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          confirmed_at DATETIME NULL,
+          INDEX idx_direct_owner(owner_id,status)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+        """);
+    await claims.ExecuteNonQueryAsync();
+}
+catch(MySqlException ex){app.Logger.LogError(ex,"Direct seller payment schema bootstrap failed");}
+
 // Earnings and withdrawal requests; no custody, wallet top-ups, or automatic transfers.
 try
 {
@@ -2433,6 +2462,142 @@ app.MapPost("/api/web/admin/payouts/{id:long}/decision",async(long id,PayoutDeci
     return Results.Ok(new{id,status=input.Decision});
 });
 
+
+// Seller receives ad payments independently. Reklio never owns the funds or creates payout balances.
+static bool ValidDirectSellerLink(string? value)
+{
+    if(value is null || value.Length>512 || !Uri.TryCreate(value,UriKind.Absolute,out var uri))return false;
+    return uri.Scheme==Uri.UriSchemeHttps && uri.Host.Contains('.') && uri.UserInfo.Length==0
+      && uri.Port==443 && uri.AbsoluteUri.Length<=512
+      && !System.Net.IPAddress.TryParse(uri.Host,out _)
+      && uri.Host!="localhost";
+}
+app.MapGet("/api/my-channels/{channelId:long}/direct-payment",async(long channelId,HttpRequest req,MySqlDataSource db,CancellationToken ct)=>
+{
+    if(Authorized(req) is not long uid)return Results.Unauthorized();
+    await using var cmd=db.CreateCommand("""
+      SELECT l.payment_url FROM channels c
+      LEFT JOIN reklio_channel_direct_links l ON l.channel_id=c.telegram_id
+      WHERE c.telegram_id=@channel AND c.connected_by=@owner
+      """);
+    cmd.Parameters.Add(new MySqlParameter("@channel",channelId));
+    cmd.Parameters.Add(new MySqlParameter("@owner",uid));
+    var value=await cmd.ExecuteScalarAsync(ct);
+    return value is null?Results.NotFound():Results.Ok(new{url=value is DBNull?null:(string)value});
+});
+app.MapPost("/api/my-channels/{channelId:long}/direct-payment",async(long channelId,DirectPaymentLinkInput input,HttpRequest req,MySqlDataSource db,CancellationToken ct)=>
+{
+    if(Authorized(req) is not long uid)return Results.Unauthorized();
+    var url=(input.Url??"").Trim();
+    if(!ValidDirectSellerLink(url))return Results.BadRequest(new{error="Укажите действительную HTTPS-ссылку оплаты продавцу (без логина и пароля в адресе)"});
+    await using var cmd=db.CreateCommand("""
+      INSERT INTO reklio_channel_direct_links(channel_id,owner_id,payment_url)
+      SELECT telegram_id,connected_by,@url FROM channels WHERE telegram_id=@id AND connected_by=@owner
+      ON DUPLICATE KEY UPDATE owner_id=VALUES(owner_id),payment_url=VALUES(payment_url),updated_at=UTC_TIMESTAMP()
+      """);
+    cmd.Parameters.Add(new MySqlParameter("@id",channelId));
+    cmd.Parameters.Add(new MySqlParameter("@owner",uid));
+    cmd.Parameters.Add(new MySqlParameter("@url",url));
+    return await cmd.ExecuteNonQueryAsync(ct)>0?Results.Ok(new{url}):Results.NotFound();
+});
+app.MapGet("/api/orders/{orderId:long}/direct-payment",async(long orderId,HttpRequest req,MySqlDataSource db,CancellationToken ct)=>
+{
+    if(Authorized(req) is not long uid)return Results.Unauthorized();
+    await using var cmd=db.CreateCommand("""
+      SELECT a.price_rub,a.status,a.payment_status,l.payment_url,d.status
+      FROM ad_requests a LEFT JOIN reklio_channel_direct_links l ON l.channel_id=a.channel_id AND l.owner_id=a.owner_id
+      LEFT JOIN reklio_direct_payments d ON d.order_id=a.id
+      WHERE a.id=@id AND (a.advertiser_id=@uid OR a.owner_id=@uid)
+      """);
+    cmd.Parameters.Add(new MySqlParameter("@id",orderId));
+    cmd.Parameters.Add(new MySqlParameter("@uid",uid));
+    await using var rd=await cmd.ExecuteReaderAsync(ct);
+    if(!await rd.ReadAsync(ct))return Results.NotFound();
+    return Results.Ok(new{amount=rd.GetDecimal(0),orderStatus=rd.GetString(1),paymentStatus=rd.GetString(2),
+        url=rd.IsDBNull(3)?null:rd.GetString(3),claimStatus=rd.IsDBNull(4)?null:rd.GetString(4),
+        notice="Деньги перечисляются напрямую продавцу. Reklio не проверяет банковский перевод и не предоставляет безопасную сделку."});
+});
+app.MapPost("/api/orders/{orderId:long}/direct-payment/claim",async(long orderId,HttpRequest req,MySqlDataSource db,CancellationToken ct)=>
+{
+    if(Authorized(req) is not long uid)return Results.Unauthorized();
+    await using var conn=await db.OpenConnectionAsync(ct);
+    await using var tx=await conn.BeginTransactionAsync(ct);
+    await using var check=new MySqlCommand("""
+      SELECT a.owner_id FROM ad_requests a
+      JOIN reklio_channel_direct_links l ON l.channel_id=a.channel_id AND l.owner_id=a.owner_id
+      WHERE a.id=@id AND a.advertiser_id=@buyer AND a.status='AwaitingPayment'
+        AND a.payment_status='Unpaid' AND a.scheduled_at>DATE_ADD(UTC_TIMESTAMP(),INTERVAL 10 MINUTE)
+      FOR UPDATE
+      """,conn,tx);
+    check.Parameters.AddWithValue("@id",orderId);
+    check.Parameters.AddWithValue("@buyer",uid);
+    var owner=await check.ExecuteScalarAsync(ct);
+    if(owner is null){await tx.RollbackAsync(ct);return Results.Conflict(new{error="Заказ недоступен или время размещения слишком близко"});}
+    await using var cmd=new MySqlCommand("""
+      INSERT INTO reklio_direct_payments(order_id,owner_id,buyer_id,status)
+      VALUES(@id,@owner,@buyer,'BuyerClaimed')
+      ON DUPLICATE KEY UPDATE status=IF(status='OwnerConfirmed',status,'BuyerClaimed'),claimed_at=UTC_TIMESTAMP()
+      """,conn,tx);
+    cmd.Parameters.AddWithValue("@id",orderId);cmd.Parameters.AddWithValue("@owner",Convert.ToInt64(owner));cmd.Parameters.AddWithValue("@buyer",uid);
+    await cmd.ExecuteNonQueryAsync(ct);
+    await using var notice=new MySqlCommand("""
+      INSERT INTO notification_outbox(recipient_id,order_id,body)
+      SELECT owner_id,id,CONCAT('💳 Покупатель сообщил об оплате напрямую · заказ #',id,CHAR(10),
+         'Проверьте поступление в своём банке. Подтверждение в Reklio запускает публикацию.')
+      FROM ad_requests WHERE id=@id
+      """,conn,tx);
+    notice.Parameters.AddWithValue("@id",orderId);await notice.ExecuteNonQueryAsync(ct);
+    await tx.CommitAsync(ct);return Results.Ok(new{status="BuyerClaimed"});
+});
+app.MapPost("/api/orders/{orderId:long}/direct-payment/{decision}",async(long orderId,string decision,HttpRequest req,MySqlDataSource db,CancellationToken ct)=>
+{
+    if(Authorized(req) is not long uid)return Results.Unauthorized();
+    if(decision is not ("confirm" or "reject"))return Results.BadRequest();
+    await using var conn=await db.OpenConnectionAsync(ct);
+    await using var tx=await conn.BeginTransactionAsync(ct);
+    await using var check=new MySqlCommand("""
+       SELECT a.status,a.scheduled_at,d.status FROM ad_requests a
+       JOIN reklio_direct_payments d ON d.order_id=a.id
+       WHERE a.id=@id AND a.owner_id=@owner AND d.owner_id=@owner AND d.status='BuyerClaimed'
+       FOR UPDATE
+       """,conn,tx);
+    check.Parameters.AddWithValue("@id",orderId);check.Parameters.AddWithValue("@owner",uid);
+    string? status=null;DateTime? schedule=null;
+    await using(var rd=await check.ExecuteReaderAsync(ct))
+       if(await rd.ReadAsync(ct)){status=rd.GetString(0);schedule=rd.IsDBNull(1)?null:rd.GetDateTime(1);}
+    if(status!="AwaitingPayment"){await tx.RollbackAsync(ct);return Results.Conflict(new{error="Заявка недоступна для подтверждения"});}
+    if(decision=="confirm" && (schedule is null||schedule.Value<=DateTime.UtcNow.AddMinutes(10)))
+    {await tx.RollbackAsync(ct);return Results.Conflict(new{error="Попросите покупателя перенести дату: осталось меньше 10 минут"});}
+    await using var claim=new MySqlCommand("""
+        UPDATE reklio_direct_payments SET status=@status,
+          confirmed_at=IF(@status='OwnerConfirmed',UTC_TIMESTAMP(),NULL)
+        WHERE order_id=@id AND status='BuyerClaimed'
+        """,conn,tx);
+    claim.Parameters.AddWithValue("@id",orderId);
+    claim.Parameters.AddWithValue("@status",decision=="confirm"?"OwnerConfirmed":"Rejected");
+    if(await claim.ExecuteNonQueryAsync(ct)!=1){await tx.RollbackAsync(ct);return Results.Conflict();}
+    if(decision=="confirm")
+    {
+        await using var update=new MySqlCommand("""
+          UPDATE ad_requests SET status='Scheduled',paid_confirmed=TRUE,
+             payment_status='DirectPaid',is_test_order=FALSE,payout_status='NotEligible'
+          WHERE id=@id AND owner_id=@owner AND status='AwaitingPayment' AND payment_status='Unpaid'
+          """,conn,tx);
+        update.Parameters.AddWithValue("@id",orderId);update.Parameters.AddWithValue("@owner",uid);
+        if(await update.ExecuteNonQueryAsync(ct)!=1){await tx.RollbackAsync(ct);return Results.Conflict();}
+    }
+    await using var notice=new MySqlCommand("""
+      INSERT INTO notification_outbox(recipient_id,order_id,body)
+      SELECT advertiser_id,id,CONCAT(IF(@approved=1,'✅ Продавец подтвердил получение оплаты','❌ Продавец не подтвердил оплату'),
+           ' · заказ #',id,CHAR(10),IF(@approved=1,'Размещение запланировано.','Свяжитесь с продавцом и проверьте перевод.'))
+      FROM ad_requests WHERE id=@id
+      """,conn,tx);
+    notice.Parameters.AddWithValue("@id",orderId);notice.Parameters.AddWithValue("@approved",decision=="confirm");
+    await notice.ExecuteNonQueryAsync(ct);
+    await tx.CommitAsync(ct);
+    return Results.Ok(new{status=decision=="confirm"?"Scheduled":"AwaitingPayment"});
+});
+
 app.MapGet("/api/web/payouts",async(HttpContext ctx,MySqlDataSource db,CancellationToken ct)=>
 {
     if(ctx.User.Identity?.IsAuthenticated!=true || !long.TryParse(ctx.User.FindFirst("id")?.Value,out var ownerId)||ownerId<=0)
@@ -2643,6 +2808,7 @@ record ScheduleOrderInput(long RateId, DateTimeOffset ScheduledAt);
 
 record UpdateRateInput(int Hours, decimal Price);
 record UpdateListingInput(bool Listed);
+record DirectPaymentLinkInput(string? Url);
 record UpdateCategoryInput(string Category);
 record ChannelAliasInput(string Alias);
 
