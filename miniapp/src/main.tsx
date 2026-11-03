@@ -5,6 +5,7 @@ import './style.css';
 
 declare global { interface Window { Telegram?: { WebApp?: { initData: string; ready(): void; expand(): void; colorScheme: string; openTelegramLink(url: string): void } } } }
 
+type DirectPayment={url:string|null;amount:number;orderStatus:string;paymentStatus:string;claimStatus:string|null;notice:string};
 type Rate = { id: number; hours: number; price: number };
 type HistoryPoint = { day: string; subscribers: number | null; posts: number; avgViews:number|null };
 type PublicationEvent={orderId:number;channel:string;type:string;createdAt:string};
@@ -367,6 +368,29 @@ function App() {
   const [editingChannel, setEditingChannel] = useState<Mine | null>(null);
   const [sellerRates, setSellerRates] = useState<SellerRate[]>([]);
   const [aliasDraft,setAliasDraft]=useState('');
+  const [directLink,setDirectLink]=useState('');
+  const [directLinkBusy,setDirectLinkBusy]=useState(false);
+  const [directPaymentDetails,setDirectPaymentDetails]=useState<Record<number,DirectPayment>>({});
+  const [directPaymentBusy,setDirectPaymentBusy]=useState<number|null>(null);
+  const loadDirectPayment=async(orderId:number)=>{
+    try{const data=await get<DirectPayment>('/api/orders/'+orderId+'/direct-payment');
+      setDirectPaymentDetails(prev=>({...prev,[orderId]:data}));
+    }catch(e){setOrderMessage(e instanceof Error?e.message:'Не удалось загрузить способ оплаты')}
+  };
+  const directPaymentAction=async(id:number,decision:'claim'|'confirm'|'reject')=>{
+    setDirectPaymentBusy(id);setOrderMessage('');
+    try{const result=await post<{status:string}>('/api/orders/'+id+'/direct-payment/'+decision,{});
+      setOrderMessage(decision==='claim'?'Сообщение отправлено продавцу. Ожидайте подтверждения.':decision==='confirm'?'Платёж подтверждён владельцем. Размещение запланировано.':'Оплата не подтверждена. Свяжитесь с покупателем.');
+      if(decision==='confirm')setOrders(prev=>prev.map(o=>o.id===id?{...o,status:'Scheduled',paymentStatus:'DirectPaid'}:o));
+      await loadDirectPayment(id);
+    }catch(e){setOrderMessage(e instanceof Error?e.message:'Не удалось обработать оплату')}finally{setDirectPaymentBusy(null)}
+  };
+  const saveDirectLink=async()=>{
+    if(!editingChannel)return;setDirectLinkBusy(true);setSellerMessage('');
+    try{const data=await post<{url:string}>('/api/my-channels/'+editingChannel.id+'/direct-payment',{url:directLink.trim()});
+      setDirectLink(data.url);setSellerMessage('Платёжная ссылка сохранена. Покупатели смогут платить вам напрямую.');
+    }catch(e){setSellerMessage(e instanceof Error?e.message:'Не удалось сохранить ссылку')}finally{setDirectLinkBusy(false)}
+  };
   const [analyticsPeriod,setAnalyticsPeriod] = useState<7|30|90>(7);
   const [analytics,setAnalytics] = useState<ChannelAnalytics|null>(null);
   const [analyticsLoading,setAnalyticsLoading] = useState(false);
@@ -402,7 +426,8 @@ function App() {
   const [sellerBusy, setSellerBusy] = useState(false);
   const [sellerMessage, setSellerMessage] = useState('');
   async function loadSellerRates(channel: Mine) {
-    setEditingChannel(channel);setAliasDraft(channel.alias||''); setSellerMessage(''); setSellerRates([]);setAnalyticsPeriod(subscription?.isPro?30:7);void loadChannelAnalytics(channel.id,subscription?.isPro?30:7);
+    setEditingChannel(channel);setAliasDraft(channel.alias||'');setDirectLink('');
+    get<{url:string|null}>('/api/my-channels/'+channel.id+'/direct-payment').then(data=>setDirectLink(data.url||'')).catch(()=>setSellerMessage('Не удалось загрузить ссылку для оплаты')); setSellerMessage(''); setSellerRates([]);setAnalyticsPeriod(subscription?.isPro?30:7);void loadChannelAnalytics(channel.id,subscription?.isPro?30:7);
     try { setSellerRates(await get<SellerRate[]>('/api/my-channels/'+channel.id+'/rates')); }
     catch(e) { setSellerMessage(e instanceof Error ? e.message : 'Ошибка загрузки тарифов'); }
   }
@@ -649,12 +674,27 @@ function App() {
               {name:'Выплата продавцу',done:o.payoutStatus==='Paid'}
             ].map((step,i)=><div className={step.done?'dealStep done':'dealStep'} key={i}><span>{step.done?'✓':i+1}</span><small>{step.name}</small></div>)}
             <p>{o.isOwner?'Стоимость размещения':'К оплате'}: {money(o.isOwner?o.price:(dealInfo[o.id]?.total??o.price+Math.round(o.price*5)/100))} · Сервисный сбор: {money(dealInfo[o.id]?.serviceFee??Math.round(o.price*5)/100)} · Владельцу канала: {money(o.price)}</p>
-            <small>{dealInfo[o.id]?.message??'Реальные выплаты через YooKassa ещё не подключены. Статусы носят информационный характер.'}</small></div></div>}{o.publicationIssue&&<div className="notice"><strong>Проблема размещения</strong><p>{o.publicationIssue}</p></div>}{o.status==='Disputed' && <div className="notice">По заказу открыт спор. Выплата приостановлена.{o.disputeReason&&<p>{o.disputeReason}</p>}</div>}{!o.isOwner&&['Published','Deleted','DeleteFailed'].includes(o.status)&&['Paid','TestPaid'].includes(o.paymentStatus)&&!['Paid','Refunded'].includes(o.payoutStatus)&&<div className="rescheduleBox"><button className="secondary small" onClick={()=>{setDisputeOrder(disputeOrder===o.id?null:o.id);setDisputeReason('');}}>Сообщить о проблеме</button>{disputeOrder===o.id&&<><label className="field">Что произошло?<textarea rows={3} maxLength={512} value={disputeReason} onChange={e=>setDisputeReason(e.target.value)} placeholder="Например, пост удалён раньше оплаченного срока"/></label><button className="primary small" disabled={processingOrder!==null||disputeReason.trim().length<10} onClick={()=>openDispute(o.id)}>Отправить обращение</button></>}</div>}{!o.isOwner && o.status === 'AwaitingPayment' && <div className="orderActions"><button className="primary small" disabled={processingOrder !== null} onClick={()=>payOrder(o)}>Оплатить (тест)</button><button className="secondary small" disabled={processingOrder !== null} onClick={()=>checkPayment(o)}>Проверить оплату</button></div>}{o.isOwner && (o.status === 'Pending' || o.status === 'PendingPaid') && <div className="orderActions"><button className="primary small" disabled={processingOrder !== null} onClick={()=>decideOrder(o,'approve')}>{processingOrder === o.id ? 'Обработка...' : 'Одобрить'}</button><button className="secondary small" disabled={processingOrder !== null} onClick={()=>decideOrder(o,'reject')}>Отклонить</button></div>}</article>)}</section>}
+            <small>{dealInfo[o.id]?.message??'Реальные выплаты через YooKassa ещё не подключены. Статусы носят информационный характер.'}</small></div></div>}{o.publicationIssue&&<div className="notice"><strong>Проблема размещения</strong><p>{o.publicationIssue}</p></div>}{o.status==='Disputed' && <div className="notice">По заказу открыт спор. Выплата приостановлена.{o.disputeReason&&<p>{o.disputeReason}</p>}</div>}{!o.isOwner&&['Published','Deleted','DeleteFailed'].includes(o.status)&&['Paid','TestPaid'].includes(o.paymentStatus)&&!['Paid','Refunded'].includes(o.payoutStatus)&&<div className="rescheduleBox"><button className="secondary small" onClick={()=>{setDisputeOrder(disputeOrder===o.id?null:o.id);setDisputeReason('');}}>Сообщить о проблеме</button>{disputeOrder===o.id&&<><label className="field">Что произошло?<textarea rows={3} maxLength={512} value={disputeReason} onChange={e=>setDisputeReason(e.target.value)} placeholder="Например, пост удалён раньше оплаченного срока"/></label><button className="primary small" disabled={processingOrder!==null||disputeReason.trim().length<10} onClick={()=>openDispute(o.id)}>Отправить обращение</button></>}</div>}{o.status === 'AwaitingPayment' && <div className="orderActions">
+          <button className="secondary small" type="button" onClick={()=>loadDirectPayment(o.id)}>Прямая оплата владельцу</button>
+          {!o.isOwner&&<button className="secondary small" disabled={processingOrder !== null} onClick={()=>payOrder(o)}>Тестовая YooKassa</button>}
+        </div>}
+        {o.status==='AwaitingPayment'&&directPaymentDetails[o.id]&&<div className="card sellerDirectPanel">
+          <strong>Оплата напрямую продавцу — {money(directPaymentDetails[o.id].amount)}</strong>
+          <p>Reklio не получает деньги и не подтверждает банковский перевод. До оплаты проверьте канал и условия у владельца.</p>
+          {!directPaymentDetails[o.id].url?<p>Владелец ещё не добавил ссылку для оплаты. Попросите его настроить оплату.</p>:
+           <><a className="primary small" href={directPaymentDetails[o.id].url!} target="_blank" rel="noopener noreferrer">Открыть ссылку оплаты продавца ↗</a>
+           {!o.isOwner&&directPaymentDetails[o.id].claimStatus!=='BuyerClaimed'&&<button className="secondary small" type="button" disabled={directPaymentBusy===o.id} onClick={()=>directPaymentAction(o.id,'claim')}>Я перевёл деньги</button>}
+           {!o.isOwner&&directPaymentDetails[o.id].claimStatus==='BuyerClaimed'&&<p>Ожидается проверка поступления продавцом.</p>}
+           {o.isOwner&&directPaymentDetails[o.id].claimStatus==='BuyerClaimed'&&<div className="orderActions"><button className="primary small" type="button" disabled={directPaymentBusy===o.id} onClick={()=>{if(window.confirm('Деньги действительно поступили на ваш счёт?'))void directPaymentAction(o.id,'confirm')}}>Деньги получены — запланировать рекламу</button><button className="secondary small" type="button" disabled={directPaymentBusy===o.id} onClick={()=>directPaymentAction(o.id,'reject')}>Оплата не поступила</button></div>}
+           </>}
+        </div>}{o.isOwner && (o.status === 'Pending' || o.status === 'PendingPaid') && <div className="orderActions"><button className="primary small" disabled={processingOrder !== null} onClick={()=>decideOrder(o,'approve')}>{processingOrder === o.id ? 'Обработка...' : 'Одобрить'}</button><button className="secondary small" disabled={processingOrder !== null} onClick={()=>decideOrder(o,'reject')}>Отклонить</button></div>}</article>)}</section>}
       {tab === 'channels' && <section><div className="channelAddPanel"><div><strong>Управление площадками</strong><p>Подключите Telegram-канал, затем настройте цены, сроки и видимость в каталоге.</p></div><button type="button" className="primary channelAddButton" onClick={()=>{setConnectError('');setConnectOpen(true);}}>＋ Добавить канал</button></div>{!loading && !mine.length && !error && <div className="empty">У вас пока нет подключённых каналов. Нажмите «Добавить канал», чтобы начать.</div>}{mine.map(c=><article className="card" key={c.id}><div className="cardTop"><div className="avatar">{c.title.slice(0,1)}</div><div className="grow"><strong>{c.title}</strong><small>{c.listed?'В каталоге':'Скрыт из каталога'}</small></div><div className="price">{money(c.price)}</div></div><button className="primary small" onClick={()=>loadSellerRates(c)}>Управлять каналом</button></article>)}</section>}
       {connectOpen && tab === 'channels' && <div className="bookingOverlay" role="dialog" aria-modal="true" aria-label="Подключить канал"><div className="bookingPanel"><button className="back" onClick={()=>setConnectOpen(false)}>← К моим каналам</button><h2>Подключение канала · шаг 1 из 3</h2><p className="description">Добавьте @ReklioBot в администраторы канала с правом публикации. Введите публичный адрес канала — Reklio автоматически проверит права и подключит его.</p><label className="field">Адрес канала<input value={connectUsername} onChange={e=>setConnectUsername(e.target.value)} placeholder="@example_channel" autoComplete="off"/></label>{connectError && <div className="notice">{connectError}</div>}<button className="primary" type="button" disabled={connectBusy||!connectUsername.trim()} onClick={()=>void connectChannel()}>{connectBusy?'Проверяем…':'Проверить и подключить'}</button><p className="hint">Сейчас поддерживаются публичные каналы с @username.</p></div></div>}
       {editingChannel && tab === 'channels' && <div className="bookingOverlay"><div className="bookingPanel">
         <button className="back" onClick={()=>setEditingChannel(null)}>← К моим каналам</button>
-        <h2>{editingChannel.title}</h2><div className="ownerChecklist"><strong>Подготовка к продажам</strong><div><span>✓</span> 1. Канал подключён</div><div><span>{editingChannel.category && editingChannel.category!=='Другое'?'✓':'○'}</span> 2. Выберите категорию</div><div><span>{sellerRates.some(r=>r.active)?'✓':'○'}</span> 3. Добавьте рекламный тариф</div><div><span>{editingChannel.listed?'✓':'○'}</span> 4. Опубликуйте канал и поделитесь ссылкой</div></div>
+        <h2>{editingChannel.title}</h2>
+        <section className="card sellerDirectPanel"><h3>Прямая оплата рекламы</h3><p>Вставьте свою HTTPS-ссылку для оплаты (например, платёжную ссылку банка или СБП). Деньги поступают напрямую вам, а не Reklio.</p><label className="field">Ссылка для покупателей<input type="url" placeholder="https://..." value={directLink} onChange={e=>setDirectLink(e.target.value)} maxLength={512}/></label><button className="primary small" type="button" disabled={directLinkBusy||!directLink.startsWith('https://')} onClick={saveDirectLink}>Сохранить способ оплаты</button><small>После перевода вы самостоятельно проверяете поступление денег и подтверждаете заказ. Безопасная сделка и гарантии Reklio здесь не действуют.</small></section>
+        <div className="ownerChecklist"><strong>Подготовка к продажам</strong><div><span>✓</span> 1. Канал подключён</div><div><span>{editingChannel.category && editingChannel.category!=='Другое'?'✓':'○'}</span> 2. Выберите категорию</div><div><span>{sellerRates.some(r=>r.active)?'✓':'○'}</span> 3. Добавьте рекламный тариф</div><div><span>{editingChannel.listed?'✓':'○'}</span> 4. Опубликуйте канал и поделитесь ссылкой</div></div>
         <p className="description">{editingChannel.listed?'Канал виден покупателям':'Канал скрыт из каталога'}</p><label className="field">Категория канала<select value={CHANNEL_CATEGORIES.includes(editingChannel.category)?editingChannel.category:''} disabled={sellerBusy} onChange={e=>void saveChannelCategory(e.target.value)}><option value="" disabled>Выберите категорию</option>{CHANNEL_CATEGORIES.map(item=><option key={item} value={item}>{item}</option>)}</select><small className="hint">Категория отображается в каталоге и используется при фильтрации.</small></label>{sellerMessage&&<div className="notice">{sellerMessage}</div>}
         {sellerRates.some(r=>r.active)&&editingChannel.listed&&<section className="channelDirectLinks">
         <h3>🔗 Ссылка для покупки рекламы</h3>
