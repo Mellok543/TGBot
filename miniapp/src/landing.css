@@ -601,3 +601,15 @@ html{scroll-behavior:smooth;scroll-padding-top:90px}
 .lp.lp-theme-light .lp-channel-periods button.active{color:#fff;background:#2065b4}
 .lp.lp-theme-light .lp-account-settings>button,.lp.lp-theme-light .wc-form button,.lp.lp-theme-light .wc-line button{color:#fff}
 .lp.lp-theme-light .lp-account-connect-row button{color:#fff}
+
+
+/* Owner payout requests and private admin review. */
+.lp-payout-panel .lp-account-stats{margin:16px 0}
+.lp-payout-panel .lp-account-action-form{max-width:460px}
+.lp-payout-admin-row{align-items:center}
+.lp-payout-admin-row>div:first-child{flex:1;min-width:0}
+.lp-payout-admin-row input{width:min(100%,360px);min-height:41px;border:1px solid #6c8aa8;background:#192b46;color:#fff;border-radius:9px;padding:9px 12px}
+.lp-payout-admin-row .lp-account-order-actions{display:flex;text-align:left;flex-wrap:wrap;justify-content:flex-end}
+.lp-theme-light .lp-payout-admin-row input{background:#fff;color:#172a45;border-color:#b6cbe2}
+.lp-payout-admin .lp-account-order-actions button:disabled,.lp-payout-panel button:disabled{opacity:.5;cursor:not-allowed}
+@media(max-width:760px){.lp-payout-admin-row{flex-direction:column;align-items:stretch}.lp-payout-admin-row .lp-account-order-actions{justify-content:flex-start}}
