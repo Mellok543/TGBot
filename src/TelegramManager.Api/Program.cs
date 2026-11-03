@@ -2327,6 +2327,59 @@ static async Task<decimal> OwnerAvailable(MySqlConnection conn,long ownerId,Canc
 }
 
 
+
+app.MapGet("/api/web/admin/earnings-review",async(HttpContext ctx,MySqlDataSource db,CancellationToken ct)=>
+{
+    if(ctx.User.Identity?.IsAuthenticated!=true||!long.TryParse(ctx.User.FindFirst("id")?.Value,out var uid)||uid<=0)
+        return Results.Unauthorized();
+    if(!IsRootAdmin(uid))return Results.Forbid();
+    await using var cmd=db.CreateCommand("""
+        SELECT a.id,a.owner_id,a.price_rub,a.published_at,p.deleted_at
+        FROM ad_requests a
+        JOIN reklio_publications p ON p.order_id=a.id
+        WHERE a.payment_status='Paid' AND a.is_test_order=FALSE
+          AND a.status='Deleted' AND a.payout_status='AwaitingVerification'
+          AND p.state='Deleted' AND p.deleted_at IS NOT NULL
+        ORDER BY p.deleted_at ASC LIMIT 100
+        """);
+    var items=new List<object>();
+    await using var reader=await cmd.ExecuteReaderAsync(ct);
+    while(await reader.ReadAsync(ct))items.Add(new{id=reader.GetInt64(0),ownerId=reader.GetInt64(1),
+        amount=reader.GetDecimal(2),publishedAt=reader.IsDBNull(3)?(DateTime?)null:reader.GetDateTime(3),
+        deletedAt=reader.GetDateTime(4)});
+    return Results.Ok(items);
+});
+app.MapPost("/api/web/admin/earnings-review/{orderId:long}/approve",async(long orderId,HttpContext ctx,MySqlDataSource db,CancellationToken ct)=>
+{
+    if(ctx.User.Identity?.IsAuthenticated!=true||!long.TryParse(ctx.User.FindFirst("id")?.Value,out var uid)||uid<=0)
+        return Results.Unauthorized();
+    if(!IsRootAdmin(uid))return Results.Forbid();
+    if(ctx.Request.Headers.Origin.ToString() is not ("https://reklio.site" or "https://www.reklio.site"))
+        return Results.StatusCode(403);
+    await using var conn=await db.OpenConnectionAsync(ct);
+    await using var tx=await conn.BeginTransactionAsync(ct);
+    await using var cmd=new MySqlCommand("""
+        UPDATE ad_requests a JOIN reklio_publications p ON p.order_id=a.id
+        SET a.payout_status='ReadyForManualReview',a.payout_eligible_at=UTC_TIMESTAMP()
+        WHERE a.id=@id AND a.status='Deleted' AND a.payment_status='Paid'
+          AND a.is_test_order=FALSE AND a.payout_status='AwaitingVerification'
+          AND a.disputed_at IS NULL AND a.publication_issue IS NULL
+          AND p.state='Deleted'
+          AND p.deleted_at<=DATE_SUB(UTC_TIMESTAMP(),INTERVAL 24 HOUR)
+        """,conn,tx);
+    cmd.Parameters.AddWithValue("@id",orderId);
+    if(await cmd.ExecuteNonQueryAsync(ct)!=1){await tx.RollbackAsync(ct);return Results.Conflict(new{error="Заказ не соответствует условиям начисления либо не прошло 24 часа"});}
+    await using var audit=new MySqlCommand("""
+        INSERT INTO reklio_admin_audit(actor_id,action,target_id,details)
+        VALUES(@actor,'OwnerEarningApproved',@order,'Verified payment and completed placement')
+        """,conn,tx);
+    audit.Parameters.AddWithValue("@actor",uid);
+    audit.Parameters.AddWithValue("@order",orderId);
+    await audit.ExecuteNonQueryAsync(ct);
+    await tx.CommitAsync(ct);
+    return Results.Ok(new{orderId,approved=true});
+});
+
 app.MapGet("/api/web/admin/payouts",async(HttpContext ctx,MySqlDataSource db,CancellationToken ct)=>
 {
     if(ctx.User.Identity?.IsAuthenticated!=true||!long.TryParse(ctx.User.FindFirst("id")?.Value,out var uid)||uid<=0)
