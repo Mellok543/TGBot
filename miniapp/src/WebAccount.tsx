@@ -11,6 +11,7 @@ type FinanceTransaction={id:number;channel:string;amount:number;createdAt:string
 type FinanceOperation={id:number;channel:string;amount:number;status:string;payoutStatus:string;publishedAt:string|null;eligibleAt:string|null};
 type FinanceSummary={revenue:number;expenses:number;testPayments:number;paid:number;readyForReview:number;pending:number;blocked:number;refunded:number;operations:FinanceOperation[];transactions:FinanceTransaction[];note:string};
 type PayoutRequest={id:number;amount:number;status:'Pending'|'Paid'|'Rejected';createdAt:string;processedAt:string|null};
+type EarningReview={id:number;ownerId:number;amount:number;publishedAt:string|null;deletedAt:string};
 type AdminPayout=PayoutRequest&{ownerId:number;reference:string|null};
 type PayoutSummary={available:number;requests:PayoutRequest[];note:string};
 type WebOrder={id:number;channel:string;price:number;status:string;createdAt:string;isOwner:boolean;text:string;scheduledAt:string|null;durationHours:number|null;paymentStatus:string;payoutStatus:string;isTest:boolean;disputeReason:string|null;publicationIssue:string|null};
@@ -36,6 +37,17 @@ export default function WebAccount(){
  const [finance,setFinance]=useState<FinanceSummary|null>(null);
  const [payouts,setPayouts]=useState<PayoutSummary|null>(null);
  const [adminPayouts,setAdminPayouts]=useState<AdminPayout[]>([]);
+ const [earningReviews,setEarningReviews]=useState<EarningReview[]>([]);
+ const [earningBusy,setEarningBusy]=useState<number|null>(null);
+ const loadEarningReviews=async()=>{const response=await fetch(api+'/api/web/admin/earnings-review',{credentials:'include'});if(!response.ok)throw new Error('Не удалось загрузить начисления на проверке');setEarningReviews(await response.json())};
+ const approveEarning=async(id:number)=>{if(!window.confirm('Вы проверили реальную оплату, выполнение размещения и отсутствие претензий?'))return;
+  setEarningBusy(id);setAdminError('');
+  try{const response=await fetch(api+'/api/web/admin/earnings-review/'+id+'/approve',{credentials:'include',method:'POST'});
+   const data=await response.json().catch(()=>({}));if(!response.ok)throw new Error(data.error||'Заказ пока нельзя подтвердить');
+   await loadEarningReviews();await reloadPayouts();
+  }catch(e){setAdminError(e instanceof Error?e.message:'Ошибка проверки')}finally{setEarningBusy(null)}
+ };
+
  const [adminReference,setAdminReference]=useState<Record<number,string>>({});
  const [adminBusy,setAdminBusy]=useState<number|null>(null);
  const [adminError,setAdminError]=useState('');
@@ -114,7 +126,7 @@ export default function WebAccount(){
  const section=window.location.pathname==='/account/channels'?'channels':window.location.pathname==='/account/orders'?'orders':window.location.pathname==='/account/finance'?'finance':'profile';
  useEffect(()=>{if(section!=='profile')return;const controller=new AbortController();setDashboardStatus('loading');Promise.allSettled([fetch(api+'/api/web/orders',{credentials:'include',signal:controller.signal}).then(r=>{if(!r.ok)throw new Error();return r.json() as Promise<WebOrder[]>}),fetch(api+'/api/web/finance',{credentials:'include',signal:controller.signal}).then(r=>{if(!r.ok)throw new Error();return r.json() as Promise<FinanceSummary>})]).then(([ordersResult,financeResult])=>{if(controller.signal.aborted)return;if(ordersResult.status==='fulfilled')setDashboardOrders(ordersResult.value);if(financeResult.status==='fulfilled')setDashboardFinance(financeResult.value);setDashboardStatus(ordersResult.status==='fulfilled'&&financeResult.status==='fulfilled'?'ready':'partial')});return()=>controller.abort()},[section]);
  useEffect(()=>{if(section!=='finance')return;reloadPayouts().catch(()=>setPayoutError('Не удалось загрузить баланс начислений'))},[section]);
- useEffect(()=>{if(section!=='finance'||profile?.staffRole!=='owner')return;loadAdminPayouts().catch(()=>setAdminError('Не удалось загрузить список заявок'))},[section,profile?.staffRole]);
+ useEffect(()=>{if(section!=='finance'||profile?.staffRole!=='owner')return;Promise.all([loadAdminPayouts(),loadEarningReviews()]).catch(()=>setAdminError('Не удалось загрузить административные финансовые данные'))},[section,profile?.staffRole]);
  useEffect(()=>{if(section!=='finance')return;const controller=new AbortController();setFinanceStatus('loading');fetch(api+'/api/web/finance',{credentials:'include',signal:controller.signal}).then(async r=>{if(!r.ok)throw new Error();setFinance(await r.json());setFinanceStatus('ready')}).catch(()=>{if(!controller.signal.aborted)setFinanceStatus('error')});return()=>controller.abort()},[section]);
  const rub=(v:number)=>v.toLocaleString('ru-RU',{minimumFractionDigits:0,maximumFractionDigits:2})+' ₽';
  const payoutLabel=(s:string)=>({Paid:'Выплачено',ReadyForManualReview:'На проверке',Blocked:'Заблокировано',Refunded:'Возвращено',OnHold:'Удерживается',AwaitingVerification:'Проверяется'} as Record<string,string>)[s]||s;
@@ -166,6 +178,14 @@ export default function WebAccount(){
        {!payouts?<p>Загрузка начислений…</p>:payouts.requests.length===0?<p>Заявок пока нет.</p>:<div className="lp-finance-history">{payouts.requests.map(item=><div className="lp-finance-operation" key={item.id}><div><strong>Заявка #{item.id}</strong><span>{new Date(item.createdAt).toLocaleString('ru-RU')} · {item.status==='Pending'?'На проверке':item.status==='Paid'?'Выплачено':'Отклонено'}</span></div><strong>{rub(item.amount)}</strong></div>)}</div>}
       </div>
 
+      {profile?.staffRole==='owner'&&<div className="lp-account-panel">
+        <h2>Проверка выполненных размещений</h2>
+        <p>Выплаты доступны только после подтверждения реальной оплаты и завершённого размещения. Минимальная выдержка — 24 часа после удаления рекламы.</p>
+        {earningReviews.length===0?<p>Заказов на проверке нет.</p>:earningReviews.map(item=><div className="lp-finance-operation" key={item.id}>
+         <div><strong>Заказ #{item.id} · {rub(item.amount)}</strong><span>Владелец: {item.ownerId} · удалён: {new Date(item.deletedAt).toLocaleString('ru-RU')}</span></div>
+         <button type="button" disabled={earningBusy===item.id||Date.now()-new Date(item.deletedAt).getTime()<86400000} onClick={()=>approveEarning(item.id)}>Подтвердить начисление</button>
+        </div>)}
+       </div>}
       {profile?.staffRole==='owner'&&<div className="lp-account-panel lp-payout-admin"><h2>Администрирование выплат</h2><p>Перевод денег выполняется отдельно через банк. Отмечайте заявку выплаченной только после подтверждения перевода и указывайте банковский идентификатор.</p>
        {adminError&&<p role="alert" className="lp-connect-error">{adminError}</p>}
        {adminPayouts.filter(p=>p.status==='Pending').length===0?<p>Ожидающих заявок нет.</p>:adminPayouts.filter(p=>p.status==='Pending').map(item=><div className="lp-finance-operation lp-payout-admin-row" key={item.id}>
