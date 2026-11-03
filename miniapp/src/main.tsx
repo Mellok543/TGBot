@@ -21,6 +21,7 @@ type AdminOverview={channels:number;listed:number;orders:number;openDisputes:num
 type AdminDispute = {id:number;channel:string;price:number;text:string;reason:string;openedAt:string|null;status:string;resolution:string|null;paymentStatus:string;isTest:boolean;payoutStatus:string};
 type DealInfo = {orderId:number;sellerPrice:number;serviceFee:number;total:number;status:string;paymentStatus:string;payoutStatus:string;isTest:boolean;isSeller:boolean;providerDealActive:boolean;message:string};
 type FinanceOperation = {id:number;channel:string;amount:number;commission:number;net:number;status:string;payoutStatus:string;publishedAt:string|null;eligibleAt:string|null};
+type PayoutInfo={available:number;requests:{id:number;amount:number;status:string;createdAt:string}[];note:string};
 type FinanceData = {pending:number;readyForReview:number;readyNet:number;paid:number;refunded:number;commissionPercent:number;blocked:number;operations:FinanceOperation[];note:string};
 type OrderSummary = { incomingPending:number; completedSales:number; completedPurchases:number; salesVolume:number; purchaseVolume:number; upcomingSales:number };
 type Order = { id: number; channel: string; price: number; status: string; createdAt: string; isOwner: boolean; text: string; scheduledAt: string | null; durationHours: number | null; paymentStatus:string; payoutStatus:string; isTest:boolean;disputeReason:string|null;publicationIssue:string|null };
@@ -265,6 +266,20 @@ function App() {
 
   const [orders, setOrders] = useState<Order[]>([]);
   const [finance, setFinance] = useState<FinanceData | null>(null);
+  const [ownerPayouts,setOwnerPayouts]=useState<PayoutInfo|null>(null);
+  const [ownerPayoutAmount,setOwnerPayoutAmount]=useState('');
+  const [ownerPayoutBusy,setOwnerPayoutBusy]=useState(false);
+  const [ownerPayoutError,setOwnerPayoutError]=useState('');
+  const [ownerPayoutNotice,setOwnerPayoutNotice]=useState('');
+  const refreshOwnerPayouts=async()=>setOwnerPayouts(await get<PayoutInfo>('/api/payouts'));
+  const createOwnerPayout=async()=>{
+    setOwnerPayoutBusy(true);setOwnerPayoutError('');setOwnerPayoutNotice('');
+    try{const amount=Number(ownerPayoutAmount.replace(',','.'));if(!Number.isFinite(amount)||amount<100)throw new Error('Минимальная сумма — 100 ₽');
+      await post('/api/payouts',{amount});setOwnerPayoutAmount('');setOwnerPayoutNotice('Заявка отправлена на ручную проверку.');
+      await refreshOwnerPayouts();
+    }catch(e){setOwnerPayoutError(e instanceof Error?e.message:'Не удалось создать заявку')}finally{setOwnerPayoutBusy(false)}
+  };
+
   const [financeError, setFinanceError] = useState('');
   const [orderSummary, setOrderSummary] = useState<OrderSummary | null>(null);
   const [orderFilter, setOrderFilter] = useState<'incoming' | 'outgoing' | 'all'>('incoming');
@@ -468,6 +483,7 @@ function App() {
     });
     return ()=>{active=false;};
   },[tab,retry]);
+  useEffect(()=>{if(tab!=='profile')return;let active=true;get<PayoutInfo>('/api/payouts').then(v=>{if(active)setOwnerPayouts(v)}).catch(()=>{if(active)setOwnerPayoutError('Не удалось загрузить начисления')});return()=>{active=false}},[tab,retry]);
   useEffect(() => {
     if(tab!=='profile') return;
     let active=true;
@@ -692,7 +708,13 @@ function App() {
           <div><span>Завершено размещений</span><strong>{orderSummary?.completedSales ?? '—'}</strong></div>
           <div><span>Продажи, ₽*</span><strong>{orderSummary ? money(orderSummary.salesVolume) : '—'}</strong></div>
           <div><span>Заявок на согласовании</span><strong>{orderSummary?.incomingPending ?? '—'}</strong></div>
-        </div><div className="profileQuick"><h3>Проблемные размещения</h3>{profileEvents.length===0?<p>Событий досрочного удаления пока нет.</p>:profileEvents.slice(0,8).map((event,i)=><div className="profileQuickLine" key={i}><span>#{event.orderId} · {event.channel}<br/>{({EarlyDeletionDetected:'Обнаружено удаление',EarlyDeletionRepublishRequested:'Повторная публикация',EarlyDeletionDisputeOpened:'Открыт спор'} as Record<string,string>)[event.type]||event.type}</span><small>{new Date(event.createdAt).toLocaleDateString('ru-RU')}</small></div>)}</div><div className="profileQuick"><h3>Ваши каналы</h3>{profileChannels.length ? profileChannels.slice(0,4).map(c=><div className="profileQuickLine" key={c.id}><span>{c.title}</span><small>{c.listed?'В каталоге':'Скрыт'}</small></div>):<p>Подключённых каналов пока нет.</p>}<button className="secondary small" onClick={()=>setTab('channels')}>Управление каналами →</button></div></> : <><div className="profileStats">
+        </div><section className="card ownerPayoutCard"><h3>Баланс начислений</h3>
+         <p>За выполненные и проверенные рекламные размещения. Пополнение баланса не предусмотрено.</p>
+         <div className="ownerPayoutAmount">{ownerPayouts?money(ownerPayouts.available)+' ₽':'Загрузка…'}</div>
+         <div className="ownerPayoutRequest"><input type="number" min="100" max="1000000" step="0.01" inputMode="decimal" placeholder="Сумма вывода, ₽" value={ownerPayoutAmount} onChange={e=>setOwnerPayoutAmount(e.target.value)}/><button className="primary" disabled={ownerPayoutBusy||!ownerPayouts||ownerPayouts.available<100} onClick={createOwnerPayout}>{ownerPayoutBusy?'Отправляем…':'Запросить выплату'}</button></div>
+         {ownerPayoutError&&<p role="alert" className="error">{ownerPayoutError}</p>}{ownerPayoutNotice&&<p role="status">{ownerPayoutNotice}</p>}
+         <h4>История заявок</h4>{!ownerPayouts||ownerPayouts.requests.length===0?<p>Заявок пока нет.</p>:ownerPayouts.requests.map(item=><div className="ownerPayoutRow" key={item.id}><span>#{item.id} · {item.status==='Pending'?'На проверке':item.status==='Paid'?'Выплачено':'Отклонено'}</span><strong>{money(item.amount)} ₽</strong></div>)}
+        </section><div className="profileQuick"><h3>Проблемные размещения</h3>{profileEvents.length===0?<p>Событий досрочного удаления пока нет.</p>:profileEvents.slice(0,8).map((event,i)=><div className="profileQuickLine" key={i}><span>#{event.orderId} · {event.channel}<br/>{({EarlyDeletionDetected:'Обнаружено удаление',EarlyDeletionRepublishRequested:'Повторная публикация',EarlyDeletionDisputeOpened:'Открыт спор'} as Record<string,string>)[event.type]||event.type}</span><small>{new Date(event.createdAt).toLocaleDateString('ru-RU')}</small></div>)}</div><div className="profileQuick"><h3>Ваши каналы</h3>{profileChannels.length ? profileChannels.slice(0,4).map(c=><div className="profileQuickLine" key={c.id}><span>{c.title}</span><small>{c.listed?'В каталоге':'Скрыт'}</small></div>):<p>Подключённых каналов пока нет.</p>}<button className="secondary small" onClick={()=>setTab('channels')}>Управление каналами →</button></div></> : <><div className="profileStats">
           <div><span>Завершено покупок</span><strong>{orderSummary?.completedPurchases ?? '—'}</strong></div>
           <div><span>Расходы, ₽*</span><strong>{orderSummary ? money(orderSummary.purchaseVolume) : '—'}</strong></div>
           <div><span>Всего заявок</span><strong>{profileOrders.filter(o=>!o.isOwner).length}</strong></div>
