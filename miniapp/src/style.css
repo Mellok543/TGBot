@@ -186,3 +186,14 @@
 .app button.secondary:disabled{opacity:.5;cursor:not-allowed}
 .app button.secondary.small{padding:8px 12px;font-size:12px}
 .channelDirectActions button{margin-top:8px}
+
+
+/* Seller earnings and manual payout requests in Telegram Mini App. */
+.ownerPayoutCard{display:grid;gap:11px}
+.ownerPayoutCard h3,.ownerPayoutCard h4,.ownerPayoutCard p{margin:0}
+.ownerPayoutAmount{font-size:clamp(26px,7vw,36px);font-weight:850;letter-spacing:-.035em}
+.ownerPayoutRequest{display:flex;gap:10px;flex-wrap:wrap}
+.ownerPayoutRequest input{flex:1 1 145px;min-width:0;border:1px solid var(--border,#54637b);background:var(--surface,#172237);color:inherit;border-radius:11px;padding:12px}
+.ownerPayoutRequest button{flex:1 1 145px}
+.ownerPayoutRequest button:disabled{opacity:.55;cursor:not-allowed}
+.ownerPayoutRow{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 0;border-bottom:1px solid var(--border,#526076)}
