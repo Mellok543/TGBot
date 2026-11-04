@@ -1692,9 +1692,9 @@ app.MapPost("/api/tribute/pro/checkout", async (HttpRequest req, MySqlDataSource
             INSERT INTO reklio_tribute_payments(order_uuid,user_id,product,amount_kopecks,status)
             VALUES(@uuid,@user,'pro30',@amount,'pending')
             """);
-        save.Parameters.AddWithValue("@uuid",uuid);
-        save.Parameters.AddWithValue("@user",userId);
-        save.Parameters.AddWithValue("@amount",price*100);
+        ((MySqlConnector.MySqlParameterCollection)save.Parameters).AddWithValue("@uuid",uuid);
+        ((MySqlConnector.MySqlParameterCollection)save.Parameters).AddWithValue("@user",userId);
+        ((MySqlConnector.MySqlParameterCollection)save.Parameters).AddWithValue("@amount",price*100);
         await save.ExecuteNonQueryAsync(ct);
         return Results.Ok(new {orderUuid=uuid,paymentUrl=url});
     }
@@ -1711,8 +1711,8 @@ app.MapPost("/api/tribute/pro/confirm/{orderUuid:guid}",async(Guid orderUuid,Htt
     await using var check=new MySqlCommand("""
         SELECT status FROM reklio_tribute_payments WHERE order_uuid=@uuid AND user_id=@user AND product='pro30' FOR UPDATE
         """,connection,tx);
-    check.Parameters.AddWithValue("@uuid",orderUuid.ToString());
-    check.Parameters.AddWithValue("@user",userId);
+    ((MySqlConnector.MySqlParameterCollection)check.Parameters).AddWithValue("@uuid",orderUuid.ToString());
+    ((MySqlConnector.MySqlParameterCollection)check.Parameters).AddWithValue("@user",userId);
     var existing=await check.ExecuteScalarAsync(ct) as string;
     if(existing is null)return Results.NotFound();
     if(existing=="paid")return Results.Ok(new{status="paid"});
@@ -1727,15 +1727,15 @@ app.MapPost("/api/tribute/pro/confirm/{orderUuid:guid}",async(Guid orderUuid,Htt
               GREATEST(COALESCE(subscription_until,UTC_TIMESTAMP()),UTC_TIMESTAMP()),INTERVAL 30 DAY)
             WHERE telegram_id=@user
             """,connection,tx);
-        update.Parameters.AddWithValue("@user",userId);
+        ((MySqlConnector.MySqlParameterCollection)update.Parameters).AddWithValue("@user",userId);
         if(await update.ExecuteNonQueryAsync(ct)==0)
         {
             await using var exists=new MySqlCommand("SELECT COUNT(*) FROM users WHERE telegram_id=@user",connection,tx);
-            exists.Parameters.AddWithValue("@user",userId);
+            ((MySqlConnector.MySqlParameterCollection)exists.Parameters).AddWithValue("@user",userId);
             if(Convert.ToInt64(await exists.ExecuteScalarAsync(ct))==0)return Results.NotFound();
         }
         await using var mark=new MySqlCommand("UPDATE reklio_tribute_payments SET status='paid',applied_at=UTC_TIMESTAMP() WHERE order_uuid=@uuid",connection,tx);
-        mark.Parameters.AddWithValue("@uuid",orderUuid.ToString());
+        ((MySqlConnector.MySqlParameterCollection)mark.Parameters).AddWithValue("@uuid",orderUuid.ToString());
         await mark.ExecuteNonQueryAsync(ct);
         await tx.CommitAsync(ct);
         return Results.Ok(new{status="paid"});
@@ -1753,7 +1753,7 @@ app.MapGet("/api/tribute/my-payments",async(HttpRequest req,MySqlDataSource db,C
  SELECT order_uuid,product,amount_kopecks,status,created_at,applied_at
  FROM reklio_tribute_payments WHERE user_id=@user ORDER BY created_at DESC LIMIT 20
  """)){
-  cmd.Parameters.AddWithValue("@user",userId);
+  ((MySqlConnector.MySqlParameterCollection)cmd.Parameters).AddWithValue("@user",userId);
   await using var reader=await cmd.ExecuteReaderAsync(ct);
   while(await reader.ReadAsync(ct))result.Add(new{orderUuid=reader.GetString(0),product=reader.GetString(1),amountKopecks=reader.GetInt64(2),status=reader.GetString(3),createdAt=reader.GetDateTime(4),appliedAt=reader.IsDBNull(5)?(DateTime?)null:reader.GetDateTime(5)});
  }
@@ -1761,7 +1761,7 @@ app.MapGet("/api/tribute/my-payments",async(HttpRequest req,MySqlDataSource db,C
  SELECT order_uuid,channel_id,amount_kopecks,status,created_at,applied_at
  FROM reklio_tribute_promotions WHERE user_id=@user ORDER BY created_at DESC LIMIT 20
  """)){
-  cmd.Parameters.AddWithValue("@user",userId);
+  ((MySqlConnector.MySqlParameterCollection)cmd.Parameters).AddWithValue("@user",userId);
   await using var reader=await cmd.ExecuteReaderAsync(ct);
   while(await reader.ReadAsync(ct))result.Add(new{orderUuid=reader.GetString(0),product="promotion7",channelId=reader.GetInt64(1),amountKopecks=reader.GetInt64(2),status=reader.GetString(3),createdAt=reader.GetDateTime(4),appliedAt=reader.IsDBNull(5)?(DateTime?)null:reader.GetDateTime(5)});
  }
@@ -1779,7 +1779,7 @@ app.MapPut("/api/admin/service-prices/{serviceKey}",async(string serviceKey,Upda
  if(await StaffRole(db,uid,ct)!="owner")return Results.Forbid();
  if(serviceKey is not ("pro30" or "promotion7")||input.PriceRub<1||input.PriceRub>100000)return Results.BadRequest();
  await using var cmd=db.CreateCommand("UPDATE reklio_service_prices SET price_rub=@price WHERE service_key=@key");
- cmd.Parameters.AddWithValue("@price",input.PriceRub);cmd.Parameters.AddWithValue("@key",serviceKey);
+ ((MySqlConnector.MySqlParameterCollection)cmd.Parameters).AddWithValue("@price",input.PriceRub);((MySqlConnector.MySqlParameterCollection)cmd.Parameters).AddWithValue("@key",serviceKey);
  await cmd.ExecuteNonQueryAsync(ct);
  return Results.Ok(new{serviceKey,priceRub=input.PriceRub});
 });
@@ -1805,7 +1805,7 @@ app.MapPost("/api/tribute/promotions/{channelId:long}/checkout",async(long chann
  int price;
  await using(var priceCmd=db.CreateCommand("SELECT price_rub FROM reklio_service_prices WHERE service_key='promotion7'"))price=Convert.ToInt32(await priceCmd.ExecuteScalarAsync(ct));
  await using(var check=db.CreateCommand("SELECT COUNT(*) FROM channels WHERE telegram_id=@id AND connected_by=@owner")){
-  check.Parameters.AddWithValue("@id",channelId);check.Parameters.AddWithValue("@owner",owner);
+  ((MySqlConnector.MySqlParameterCollection)check.Parameters).AddWithValue("@id",channelId);((MySqlConnector.MySqlParameterCollection)check.Parameters).AddWithValue("@owner",owner);
   if(Convert.ToInt64(await check.ExecuteScalarAsync(ct))==0)return Results.NotFound();
  }
  try{
@@ -1822,8 +1822,8 @@ app.MapPost("/api/tribute/promotions/{channelId:long}/checkout",async(long chann
     INSERT INTO reklio_tribute_promotions(order_uuid,user_id,channel_id,days,amount_kopecks)
     VALUES(@uuid,@owner,@channel,7,@amount)
     """);
-  save.Parameters.AddWithValue("@uuid",uuid);save.Parameters.AddWithValue("@owner",owner);
-  save.Parameters.AddWithValue("@channel",channelId);save.Parameters.AddWithValue("@amount",price*100);
+  ((MySqlConnector.MySqlParameterCollection)save.Parameters).AddWithValue("@uuid",uuid);((MySqlConnector.MySqlParameterCollection)save.Parameters).AddWithValue("@owner",owner);
+  ((MySqlConnector.MySqlParameterCollection)save.Parameters).AddWithValue("@channel",channelId);((MySqlConnector.MySqlParameterCollection)save.Parameters).AddWithValue("@amount",price*100);
   await save.ExecuteNonQueryAsync(ct);
   return Results.Ok(new{orderUuid=uuid,paymentUrl=url});
  }catch(HttpRequestException){return Results.Problem("Tribute unavailable",statusCode:502);}
@@ -1840,7 +1840,7 @@ app.MapPost("/api/tribute/promotions/confirm/{orderUuid:guid}",async(Guid orderU
    SELECT channel_id,days,status FROM reklio_tribute_promotions
    WHERE order_uuid=@uuid AND user_id=@owner FOR UPDATE
    """,conn,tx);
- check.Parameters.AddWithValue("@uuid",orderUuid.ToString());check.Parameters.AddWithValue("@owner",owner);
+ ((MySqlConnector.MySqlParameterCollection)check.Parameters).AddWithValue("@uuid",orderUuid.ToString());((MySqlConnector.MySqlParameterCollection)check.Parameters).AddWithValue("@owner",owner);
  long channel;int days;string state;
  await using(var reader=await check.ExecuteReaderAsync(ct)){
   if(!await reader.ReadAsync(ct))return Results.NotFound();
@@ -1857,10 +1857,10 @@ app.MapPost("/api/tribute/promotions/confirm/{orderUuid:guid}",async(Guid orderU
    VALUES(@channel,DATE_ADD(UTC_TIMESTAMP(),INTERVAL @days DAY))
    ON DUPLICATE KEY UPDATE active_until=DATE_ADD(GREATEST(active_until,UTC_TIMESTAMP()),INTERVAL @days DAY)
    """,conn,tx);
-  apply.Parameters.AddWithValue("@channel",channel);apply.Parameters.AddWithValue("@days",days);
+  ((MySqlConnector.MySqlParameterCollection)apply.Parameters).AddWithValue("@channel",channel);((MySqlConnector.MySqlParameterCollection)apply.Parameters).AddWithValue("@days",days);
   await apply.ExecuteNonQueryAsync(ct);
   await using var mark=new MySqlCommand("UPDATE reklio_tribute_promotions SET status='paid',applied_at=UTC_TIMESTAMP() WHERE order_uuid=@uuid",conn,tx);
-  mark.Parameters.AddWithValue("@uuid",orderUuid.ToString());await mark.ExecuteNonQueryAsync(ct);
+  ((MySqlConnector.MySqlParameterCollection)mark.Parameters).AddWithValue("@uuid",orderUuid.ToString());await mark.ExecuteNonQueryAsync(ct);
   await tx.CommitAsync(ct);
   return Results.Ok(new{status="paid"});
  }catch(HttpRequestException){return Results.Problem("Tribute verification failed",statusCode:502);}
