@@ -1669,6 +1669,28 @@ CREATE TABLE IF NOT EXISTS reklio_tribute_payments (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
 """)) await tributeSchema.ExecuteNonQueryAsync();
 
+// Tribute Shop webhook: authenticate raw payload before accepting an event.
+// Fulfilment is performed by the reconciliation worker after independently checking Tribute's order status.
+app.MapPost("/api/tribute/webhook",async(HttpRequest request,CancellationToken ct)=>{
+ var secret=Environment.GetEnvironmentVariable("TRIBUTE_API_KEY");
+ if(string.IsNullOrWhiteSpace(secret))return Results.StatusCode(503);
+ var signature=request.Headers["trbt-signature"].ToString().Trim();
+ if(signature.StartsWith("sha256=",StringComparison.OrdinalIgnoreCase))signature=signature[7..];
+ if(signature.Length!=64)return Results.Unauthorized();
+ byte[] provided;
+ try{provided=Convert.FromHexString(signature);}
+ catch(FormatException){return Results.Unauthorized();}
+ using var buffer=new MemoryStream();
+ await request.Body.CopyToAsync(buffer,ct);
+ if(buffer.Length>65536)return Results.StatusCode(413);
+ var expected=HMACSHA256.HashData(Encoding.UTF8.GetBytes(secret),buffer.ToArray());
+ if(!CryptographicOperations.FixedTimeEquals(expected,provided))return Results.Unauthorized();
+ using var json=JsonDocument.Parse(buffer.ToArray());
+ if(!json.RootElement.TryGetProperty("name",out var name)||name.ValueKind!=JsonValueKind.String)
+  return Results.BadRequest();
+ return Results.Ok(new{status="ok"});
+});
+
 app.MapPost("/api/tribute/pro/checkout", async (HttpRequest req, MySqlDataSource db, IHttpClientFactory clients, CancellationToken ct) =>
 {
     if (Authorized(req) is not long userId) return Results.Unauthorized();
