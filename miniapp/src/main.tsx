@@ -362,6 +362,20 @@ function App() {
       try { setOrders(await get<Order[]>('/api/orders')); } catch { /* Preserve the last known list. */ }
     } finally { setProcessingOrder(null); }
   }
+  const [tributeBusy,setTributeBusy]=useState(false);
+  const [tributeNotice,setTributeNotice]=useState('');
+  const [servicePrices,setServicePrices]=useState<Record<string,number>>({});
+  useEffect(()=>{get<Record<string,number>>('/api/service-prices').then(setServicePrices).catch(()=>{});},[]);
+  async function startTributeCheckout(product:'pro30'|'promotion7',channelId?:number){
+    if(tributeBusy)return;
+    setTributeBusy(true);setTributeNotice('');
+    try{
+      const path=product==='pro30'?'/api/tribute/pro/checkout':`/api/tribute/promotions/${channelId}/checkout`;
+      const order=await post<{orderUuid:string;paymentUrl:string}>(path,{});
+      if(!order.paymentUrl.startsWith('https://'))throw new Error('Некорректная ссылка оплаты');
+      window.location.assign(order.paymentUrl);
+    }catch(e){setTributeNotice(e instanceof Error?e.message:'Не удалось создать платёж');setTributeBusy(false);}
+  }
   const [subscription,setSubscription]=useState<Subscription|null>(null);
   useEffect(()=>{get<Subscription>('/api/subscription').then(setSubscription).catch(()=>{});},[tab]);
   const [mine, setMine] = useState<Mine[]>([]);
@@ -710,7 +724,7 @@ function App() {
           <span>{editingChannel.alias?'reklio.site/ad/'+editingChannel.alias:'t.me/ReklioBot?startapp=ad_'+editingChannel.id}</span>
         </div>
         <small>Можно изменить имя в любое время. Старый персональный адрес перестанет работать, ссылка с ID останется доступной.</small>
-        </section>}{(!sellerRates.some(r=>r.active)||!editingChannel.listed)&&<p className="notice">Ссылка для покупателей появится после добавления активного тарифа и публикации канала.</p>}<section className="channelPromotionPanel"><h3>🚀 Продвижение канала</h3><p>Выделение карточки и приоритет в каталоге Reklio. Доступно на тарифах FREE и PRO.</p><div className="promotionPrices"><div><strong>7 дней</strong><span>199 ₽</span></div><div><strong>30 дней</strong><span>499 ₽</span></div></div><button className="primary" type="button" disabled>Оплата продвижения скоро появится</button><small className="hint">Платежи будут доступны после подключения кассы.</small></section>
+        </section>}{(!sellerRates.some(r=>r.active)||!editingChannel.listed)&&<p className="notice">Ссылка для покупателей появится после добавления активного тарифа и публикации канала.</p>}<section className="channelPromotionPanel"><h3>🚀 Продвижение канала</h3><p>Выделение карточки и приоритет в каталоге Reklio. Доступно на тарифах FREE и PRO.</p><div className="promotionPrices"><div><strong>7 дней</strong><span>{servicePrices.promotion7??199} ₽</span></div></div><button className="primary" type="button" disabled={tributeBusy} onClick={()=>void startTributeCheckout("promotion7",editingChannel.id)}>{tributeBusy?"Создаём платёж…":"Оплатить продвижение на 7 дней"}</button>{tributeNotice&&<small className="hint">{tributeNotice}</small>}</section>
         <div className="analyticsPanel"><h3>Аналитика канала</h3>{!subscription?.isPro&&<p className="hint">FREE: базовая статистика за 7 дней. Расширенные периоды и аналитика доступны в PRO.</p>}<div className="analyticsPeriods">{(subscription?.isPro?[7,30,90] as const:[7] as const).map(d=><button key={d} className={analyticsPeriod===d?'active':''} onClick={()=>{setAnalyticsPeriod(d);void loadChannelAnalytics(editingChannel.id,d);}}>{d} дней</button>)}</div>
         {analyticsLoading&&<p className="description">Загрузка аналитики…</p>}
         {analyticsError&&<p className="notice">{analyticsError}</p>}
@@ -737,7 +751,7 @@ function App() {
           <p>{subscription?.isPro?'Расширенная статистика': 'FREE без ограничения по времени · базовая статистика'}</p>
           {subscription?.isPro&&subscription.expiresAt&&<p>Действует до {new Date(subscription.expiresAt).toLocaleDateString('ru-RU')}</p>}
           {!subscription?.isPro&&<p>PRO: до 10 каналов, расширенная статистика, комиссия 2,5%.</p>}
-          <button className="primary" type="button" disabled={!subscription?.checkoutAvailable} onClick={()=>{}}>PRO · {subscription?.proPriceRub??399} ₽ / 30 дней (скоро)</button>
+          <button className="primary" type="button" disabled={!subscription?.checkoutAvailable||tributeBusy} onClick={()=>void startTributeCheckout("pro30")}>PRO · {subscription?.proPriceRub??399} ₽ / 30 дней</button>{tributeNotice&&<p className="hint">{tributeNotice}</p>}
           {!subscription?.checkoutAvailable&&<p className="hint">{subscription?.checkoutMessage??'Подключение кассы ожидается'}</p>}
         </section>
         <div className="profileIdentity"><div className="profileAvatar">{(telegramUser?.first_name || 'R').slice(0,1).toUpperCase()}</div><div><span className="catalogEyebrow">ЛИЧНЫЙ КАБИНЕТ</span><h2>{telegramUser?.first_name || 'Пользователь Reklio'}</h2><p>{telegramUser?.username ? '@'+telegramUser.username : 'Управление рекламой и каналами'}</p></div></div>
