@@ -29,6 +29,7 @@ type Order = { id: number; channel: string; price: number; status: string; creat
 type ChannelAnalytics={days:number;points:HistoryPoint[];orders:number;published:number;revenue:number;pending:number};
 type Mine = { id: number; title: string; listed: boolean; price: number; category: string; alias?:string|null };
 type SellerRate = Rate & { active: boolean };
+type TributePayment={orderUuid:string;product:string;channelId?:number;amountKopecks:number;status:string;createdAt:string;appliedAt:string|null};
 type Subscription={plan:'FREE'|'PRO';isPro:boolean;expiresAt:string|null;channelLimit:number;commissionPercent:number;fullAnalytics:boolean;proPriceRub:number|null;checkoutAvailable:boolean;checkoutMessage:string};
 type Tab = 'catalog' | 'orders' | 'channels' | 'profile';
 const CHANNEL_CATEGORIES=['Технологии','Игры','Новости','Бизнес','Финансы','Образование','Развлечения','Юмор','Спорт','Путешествия','Авто','Красота и стиль','Здоровье','Кулинария','Музыка','Кино','Другое'];
@@ -361,6 +362,25 @@ function App() {
       setOrderMessage(e instanceof Error ? e.message : 'Не удалось обработать заявку');
       try { setOrders(await get<Order[]>('/api/orders')); } catch { /* Preserve the last known list. */ }
     } finally { setProcessingOrder(null); }
+  }
+  const [tributePayments,setTributePayments]=useState<TributePayment[]>([]);
+  const [tributeChecking,setTributeChecking]=useState(false);
+  async function refreshTributePayments(){
+    try{setTributePayments(await get<TributePayment[]>('/api/tribute/my-payments'));}
+    catch{/* Payment history is optional if API is temporarily unavailable. */}
+  }
+  useEffect(()=>{if(tab==='profile')void refreshTributePayments();},[tab]);
+  async function confirmTributePayment(payment:TributePayment){
+    if(tributeChecking)return;
+    setTributeChecking(true);setTributeNotice('');
+    try{
+      const endpoint=payment.product==='pro30'?'/api/tribute/pro/confirm/':'/api/tribute/promotions/confirm/';
+      const result=await post<{status:string}>(endpoint+encodeURIComponent(payment.orderUuid),{});
+      setTributeNotice(result.status==='paid'?'Оплата подтверждена. Услуга активирована.':'Платёж ещё не подтверждён: '+result.status);
+      await refreshTributePayments();
+      setSubscription(await get<Subscription>('/api/subscription'));
+    }catch(e){setTributeNotice(e instanceof Error?e.message:'Не удалось проверить оплату');}
+    finally{setTributeChecking(false);}
   }
   const [tributeBusy,setTributeBusy]=useState(false);
   const [tributeNotice,setTributeNotice]=useState('');
@@ -753,6 +773,8 @@ function App() {
           {!subscription?.isPro&&<p>PRO: до 10 каналов, расширенная статистика, комиссия 2,5%.</p>}
           <button className="primary" type="button" disabled={!subscription?.checkoutAvailable||tributeBusy} onClick={()=>void startTributeCheckout("pro30")}>PRO · {subscription?.proPriceRub??399} ₽ / 30 дней</button>{tributeNotice&&<p className="hint">{tributeNotice}</p>}
           {!subscription?.checkoutAvailable&&<p className="hint">{subscription?.checkoutMessage??'Подключение кассы ожидается'}</p>}
+          {tributePayments.length>0&&<div className="tributePaymentHistory"><strong>Последние платежи</strong>{tributePayments.slice(0,8).map(payment=><div key={payment.orderUuid} className="notice"><span>{payment.product==='pro30'?'PRO':'Продвижение'} · {(payment.amountKopecks/100).toLocaleString('ru-RU')} ₽ · {payment.status==='paid'?'Оплачено':'Ожидает подтверждения'}</span>{payment.status!=='paid'&&<button className="secondary" type="button" disabled={tributeChecking} onClick={()=>void confirmTributePayment(payment)}>Проверить оплату</button>}</div>)}</div>}
+
         </section>
         <div className="profileIdentity"><div className="profileAvatar">{(telegramUser?.first_name || 'R').slice(0,1).toUpperCase()}</div><div><span className="catalogEyebrow">ЛИЧНЫЙ КАБИНЕТ</span><h2>{telegramUser?.first_name || 'Пользователь Reklio'}</h2><p>{telegramUser?.username ? '@'+telegramUser.username : 'Управление рекламой и каналами'}</p></div></div>
         <div className="profileSwitch"><button className={profileView==='seller'?'active':''} onClick={()=>setProfileView('seller')}>Мои каналы</button><button className={profileView==='buyer'?'active':''} onClick={()=>setProfileView('buyer')}>Рекламодатель</button></div>
