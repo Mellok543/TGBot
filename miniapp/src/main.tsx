@@ -423,7 +423,7 @@ function App() {
       if(product==='pro30'){
         // Tribute product checkout is a static link. No Shop API order is created here.
         // Do not claim automatic activation until buyer attribution is implemented.
-        const paymentUrl='https://web.tribute.tg/p/JfV';
+        const paymentUrl='https://web.tribute.tg/p/Jhy';
         const telegramWebApp=window.Telegram?.WebApp as ({openLink?:(url:string)=>void})|undefined;
         if(telegramWebApp?.openLink)telegramWebApp.openLink(paymentUrl);
         else window.open(paymentUrl,'_blank','noopener,noreferrer');
