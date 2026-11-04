@@ -1654,6 +1654,92 @@ app.MapPost("/api/my-channels/connect", async (HttpRequest req, MySqlDataSource 
     return Results.Ok(new {id=channelId,title});
 });
 
+// Tribute Pro checkout: payment state is always verified server-to-server.
+await using (var tributeSchema=app.Services.GetRequiredService<MySqlDataSource>().CreateCommand("""
+CREATE TABLE IF NOT EXISTS reklio_tribute_payments (
+ order_uuid CHAR(36) NOT NULL PRIMARY KEY,
+ user_id BIGINT NOT NULL,
+ product VARCHAR(32) NOT NULL,
+ amount_kopecks BIGINT NOT NULL,
+ status VARCHAR(16) NOT NULL DEFAULT 'pending',
+ created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ applied_at DATETIME NULL,
+ INDEX idx_tribute_user(user_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+""")) await tributeSchema.ExecuteNonQueryAsync();
+
+app.MapPost("/api/tribute/pro/checkout", async (HttpRequest req, MySqlDataSource db, IHttpClientFactory clients, CancellationToken ct) =>
+{
+    if (Authorized(req) is not long userId) return Results.Unauthorized();
+    var key=Environment.GetEnvironmentVariable("TRIBUTE_API_KEY");
+    if (string.IsNullOrWhiteSpace(key)) return Results.Problem("Tribute is not configured",statusCode:503);
+    try
+    {
+        var tribute=new Reklio.Payments.TributeShopClient(clients.CreateClient(),key);
+        using var order=await tribute.CreateOrderAsync(39900,"Reklio Pro","Доступ Pro на 30 дней",userId.ToString(),
+            "https://reklio.site/profile","https://reklio.site/profile",ct);
+        var root=order.RootElement;
+        var uuid=root.GetProperty("uuid").GetString();
+        var url=root.TryGetProperty("webappPaymentUrl",out var webUrl)&&webUrl.ValueKind==JsonValueKind.String
+            ? webUrl.GetString():null;
+        url ??= root.TryGetProperty("paymentUrl",out var paymentUrl)&&paymentUrl.ValueKind==JsonValueKind.String
+            ? paymentUrl.GetString():null;
+        if(!Guid.TryParse(uuid,out _)||!Uri.TryCreate(url,UriKind.Absolute,out var parsed)||parsed.Scheme!="https")
+            return Results.Problem("Tribute returned an invalid checkout response",statusCode:502);
+        await using var save=db.CreateCommand("""
+            INSERT INTO reklio_tribute_payments(order_uuid,user_id,product,amount_kopecks,status)
+            VALUES(@uuid,@user,'pro30',39900,'pending')
+            """);
+        save.Parameters.AddWithValue("@uuid",uuid);
+        save.Parameters.AddWithValue("@user",userId);
+        await save.ExecuteNonQueryAsync(ct);
+        return Results.Ok(new {orderUuid=uuid,paymentUrl=url});
+    }
+    catch(HttpRequestException) {return Results.Problem("Tribute is unavailable",statusCode:502);}
+});
+
+app.MapPost("/api/tribute/pro/confirm/{orderUuid:guid}",async(Guid orderUuid,HttpRequest req,MySqlDataSource db,IHttpClientFactory clients,CancellationToken ct)=>
+{
+    if(Authorized(req) is not long userId)return Results.Unauthorized();
+    var key=Environment.GetEnvironmentVariable("TRIBUTE_API_KEY");
+    if(string.IsNullOrWhiteSpace(key))return Results.StatusCode(503);
+    await using var connection=await db.OpenConnectionAsync(ct);
+    await using var tx=await connection.BeginTransactionAsync(ct);
+    await using var check=new MySqlCommand("""
+        SELECT status FROM reklio_tribute_payments WHERE order_uuid=@uuid AND user_id=@user AND product='pro30' FOR UPDATE
+        """,connection,tx);
+    check.Parameters.AddWithValue("@uuid",orderUuid.ToString());
+    check.Parameters.AddWithValue("@user",userId);
+    var existing=await check.ExecuteScalarAsync(ct) as string;
+    if(existing is null)return Results.NotFound();
+    if(existing=="paid")return Results.Ok(new{status="paid"});
+    try
+    {
+        var tribute=new Reklio.Payments.TributeShopClient(clients.CreateClient(),key);
+        using var status=await tribute.GetOrderStatusAsync(orderUuid,ct);
+        var state=status.RootElement.GetProperty("status").GetString();
+        if(state!="paid")return Results.Ok(new{status=state});
+        await using var update=new MySqlCommand("""
+            UPDATE users SET subscription_until=DATE_ADD(
+              GREATEST(COALESCE(subscription_until,UTC_TIMESTAMP()),UTC_TIMESTAMP()),INTERVAL 30 DAY)
+            WHERE telegram_id=@user
+            """,connection,tx);
+        update.Parameters.AddWithValue("@user",userId);
+        if(await update.ExecuteNonQueryAsync(ct)==0)
+        {
+            await using var exists=new MySqlCommand("SELECT COUNT(*) FROM users WHERE telegram_id=@user",connection,tx);
+            exists.Parameters.AddWithValue("@user",userId);
+            if(Convert.ToInt64(await exists.ExecuteScalarAsync(ct))==0)return Results.NotFound();
+        }
+        await using var mark=new MySqlCommand("UPDATE reklio_tribute_payments SET status='paid',applied_at=UTC_TIMESTAMP() WHERE order_uuid=@uuid",connection,tx);
+        mark.Parameters.AddWithValue("@uuid",orderUuid.ToString());
+        await mark.ExecuteNonQueryAsync(ct);
+        await tx.CommitAsync(ct);
+        return Results.Ok(new{status="paid"});
+    }
+    catch(HttpRequestException){return Results.Problem("Tribute verification failed",statusCode:502);}
+});
+
 app.MapGet("/api/subscription", async (HttpRequest req,MySqlDataSource db,CancellationToken ct) =>
 {
     if(Authorized(req) is not long userId)return Results.Unauthorized();
