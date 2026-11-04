@@ -1676,7 +1676,9 @@ app.MapPost("/api/tribute/pro/checkout", async (HttpRequest req, MySqlDataSource
     try
     {
         var tribute=new Reklio.Payments.TributeShopClient(clients.CreateClient(),key);
-        using var order=await tribute.CreateOrderAsync(39900,"Reklio Pro","Доступ Pro на 30 дней",userId.ToString(),
+        int price;
+        await using(var priceCmd=db.CreateCommand("SELECT price_rub FROM reklio_service_prices WHERE service_key='pro30'"))price=Convert.ToInt32(await priceCmd.ExecuteScalarAsync(ct));
+        using var order=await tribute.CreateOrderAsync(price*100,"Reklio Pro","Доступ Pro на 30 дней",userId.ToString(),
             "https://reklio.site/profile","https://reklio.site/profile",ct);
         var root=order.RootElement;
         var uuid=root.GetProperty("uuid").GetString();
@@ -1688,10 +1690,11 @@ app.MapPost("/api/tribute/pro/checkout", async (HttpRequest req, MySqlDataSource
             return Results.Problem("Tribute returned an invalid checkout response",statusCode:502);
         await using var save=db.CreateCommand("""
             INSERT INTO reklio_tribute_payments(order_uuid,user_id,product,amount_kopecks,status)
-            VALUES(@uuid,@user,'pro30',39900,'pending')
+            VALUES(@uuid,@user,'pro30',@amount,'pending')
             """);
         save.Parameters.AddWithValue("@uuid",uuid);
         save.Parameters.AddWithValue("@user",userId);
+        save.Parameters.AddWithValue("@amount",price*100);
         await save.ExecuteNonQueryAsync(ct);
         return Results.Ok(new {orderUuid=uuid,paymentUrl=url});
     }
@@ -1740,6 +1743,24 @@ app.MapPost("/api/tribute/pro/confirm/{orderUuid:guid}",async(Guid orderUuid,Htt
     catch(HttpRequestException){return Results.Problem("Tribute verification failed",statusCode:502);}
 });
 
+await using(var schema=app.Services.GetRequiredService<MySqlDataSource>().CreateCommand("CREATE TABLE IF NOT EXISTS reklio_service_prices (service_key VARCHAR(32) PRIMARY KEY,price_rub INT NOT NULL) ENGINE=InnoDB"))await schema.ExecuteNonQueryAsync();
+await using(var defaults=app.Services.GetRequiredService<MySqlDataSource>().CreateCommand("INSERT IGNORE INTO reklio_service_prices(service_key,price_rub) VALUES('pro30',399),('promotion7',199)"))await defaults.ExecuteNonQueryAsync();
+app.MapGet("/api/service-prices",async(MySqlDataSource db,CancellationToken ct)=>{
+ await using var cmd=db.CreateCommand("SELECT service_key,price_rub FROM reklio_service_prices");
+ var prices=new Dictionary<string,int>();
+ await using var reader=await cmd.ExecuteReaderAsync(ct);
+ while(await reader.ReadAsync(ct))prices[reader.GetString(0)]=reader.GetInt32(1);
+ return Results.Ok(prices);
+});
+app.MapPut("/api/admin/service-prices/{serviceKey}",async(string serviceKey,UpdateServicePriceInput input,HttpRequest req,MySqlDataSource db,CancellationToken ct)=>{
+ if(Authorized(req) is not long uid)return Results.Unauthorized();
+ if(await StaffRole(db,uid,ct)!="owner")return Results.Forbid();
+ if(serviceKey is not ("pro30" or "promotion7")||input.PriceRub<1||input.PriceRub>100000)return Results.BadRequest();
+ await using var cmd=db.CreateCommand("UPDATE reklio_service_prices SET price_rub=@price WHERE service_key=@key");
+ cmd.Parameters.AddWithValue("@price",input.PriceRub);cmd.Parameters.AddWithValue("@key",serviceKey);
+ await cmd.ExecuteNonQueryAsync(ct);
+ return Results.Ok(new{serviceKey,priceRub=input.PriceRub});
+});
 // Paid channel promotion. Price is configured server-side, never supplied by the client.
 await using(var promoSchema=app.Services.GetRequiredService<MySqlDataSource>().CreateCommand("""
 CREATE TABLE IF NOT EXISTS reklio_tribute_promotions (
@@ -1759,8 +1780,8 @@ app.MapPost("/api/tribute/promotions/{channelId:long}/checkout",async(long chann
  if(Authorized(req) is not long owner)return Results.Unauthorized();
  var key=Environment.GetEnvironmentVariable("TRIBUTE_API_KEY");
  if(string.IsNullOrWhiteSpace(key))return Results.StatusCode(503);
- if(!long.TryParse(Environment.GetEnvironmentVariable("TRIBUTE_PROMOTION_PRICE_RUB"),out var price)||price<1||price>100000)
-  return Results.Problem("Promotion price is not configured",statusCode:503);
+ int price;
+ await using(var priceCmd=db.CreateCommand("SELECT price_rub FROM reklio_service_prices WHERE service_key='promotion7'"))price=Convert.ToInt32(await priceCmd.ExecuteScalarAsync(ct));
  await using(var check=db.CreateCommand("SELECT COUNT(*) FROM channels WHERE telegram_id=@id AND connected_by=@owner")){
   check.Parameters.AddWithValue("@id",channelId);check.Parameters.AddWithValue("@owner",owner);
   if(Convert.ToInt64(await check.ExecuteScalarAsync(ct))==0)return Results.NotFound();
@@ -1831,7 +1852,8 @@ app.MapGet("/api/subscription", async (HttpRequest req,MySqlDataSource db,Cancel
     var value=await cmd.ExecuteScalarAsync(ct);
     var expiry=value is DateTime date ? date : (DateTime?)null;
     var isPro=expiry>DateTime.UtcNow;
-    const decimal price=399m;
+    decimal price=399m;
+    await using(var priceCmd=db.CreateCommand("SELECT price_rub FROM reklio_service_prices WHERE service_key='pro30'"))price=Convert.ToDecimal(await priceCmd.ExecuteScalarAsync(ct));
     return Results.Ok(new {plan=isPro?"PRO":"FREE",isPro,expiresAt=isPro?expiry:null,channelLimit=isPro?10:1,commissionPercent=isPro?2.5m:5m,fullAnalytics=isPro,
         proPriceRub=price,checkoutAvailable=!string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("TRIBUTE_API_KEY")),checkoutMessage="Оплата через Tribute"});
 });
@@ -3008,6 +3030,7 @@ app.MapPost("/api/admin/payouts/{id:long}/decision",async(long id,HttpRequest re
 
 app.Run();
 
+record UpdateServicePriceInput(int PriceRub);
 record CreateOrderInput(long ChannelId, string Text);
 record PublicationReviewInput(string Decision,string Note);
 record StaffInput(long TelegramId,string Role);
