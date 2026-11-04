@@ -424,7 +424,7 @@ function App() {
         // Tribute product checkout is a static link. No Shop API order is created here.
         // Do not claim automatic activation until buyer attribution is implemented.
         const paymentUrl='https://web.tribute.tg/p/JfV';
-        const telegramWebApp=window.Telegram?.WebApp as (typeof window.Telegram.WebApp & {openLink?:(url:string)=>void})|undefined;
+        const telegramWebApp=window.Telegram?.WebApp as ({openLink?:(url:string)=>void})|undefined;
         if(telegramWebApp?.openLink)telegramWebApp.openLink(paymentUrl);
         else window.open(paymentUrl,'_blank','noopener,noreferrer');
         setTributeNotice('Открыта оплата Reklio Pro. Автоматическая активация покупок по этой ссылке пока не подключена. Не оплачивайте товар до завершения интеграции.');
