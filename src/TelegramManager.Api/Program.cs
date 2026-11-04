@@ -19,6 +19,7 @@ var connectionString = Environment.GetEnvironmentVariable("DATABASE_URL")
     ?? throw new InvalidOperationException("DATABASE_URL is required");
 builder.Services.AddSingleton(new MySqlDataSourceBuilder(connectionString).Build());
 builder.Services.AddHttpClient();
+builder.Services.AddHostedService<Reklio.Payments.TributePaymentWorker>();
 builder.Services.AddMemoryCache();
 builder.Services.AddRateLimiter(options =>
 {
