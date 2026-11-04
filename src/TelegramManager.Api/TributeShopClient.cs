@@ -27,6 +27,9 @@ public sealed class TributeShopClient(HttpClient http, string apiKey)
     public Task<JsonDocument> GetShopsAsync(CancellationToken ct = default)
         => SendAsync(HttpMethod.Get, "shops", null, ct);
 
+    public Task<JsonDocument> GetOrderStatusAsync(Guid orderUuid, CancellationToken ct = default)
+        => SendAsync(HttpMethod.Get, $"shop/orders/{orderUuid:D}/status", null, ct);
+
     public Task<JsonDocument> GetOrderAsync(Guid orderUuid, CancellationToken ct = default)
         => SendAsync(HttpMethod.Get, $"shop/orders/{orderUuid:D}", null, ct);
 
