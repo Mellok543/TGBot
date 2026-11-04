@@ -1696,6 +1696,32 @@ app.MapPost("/api/tribute/webhook",async(HttpRequest request,CancellationToken c
  return Results.Ok(new{status="ok"});
 });
 
+// Safe diagnostic: validates Tribute API credentials without creating a paid order.
+app.MapGet("/api/tribute/diagnostics",async(HttpRequest req,MySqlDataSource db,IHttpClientFactory clients,CancellationToken ct)=>
+{
+ if(Authorized(req) is not long userId)return Results.Unauthorized();
+ await using(var conn=await db.OpenConnectionAsync(ct))
+ {
+  if(await StaffRole(conn,userId,ct)!="owner")return Results.Forbid();
+ }
+ var key=Environment.GetEnvironmentVariable("TRIBUTE_API_KEY");
+ if(string.IsNullOrWhiteSpace(key))return Results.Ok(new{configured=false,apiReachable=false,message="TRIBUTE_API_KEY отсутствует"});
+ try
+ {
+  var tribute=new Reklio.Payments.TributeShopClient(clients.CreateClient(),key);
+  using var shops=await tribute.GetShopsAsync(ct);
+  return Results.Ok(new{configured=true,apiReachable=true,message="Tribute API отвечает",responseKind=shops.RootElement.ValueKind.ToString()});
+ }
+ catch(HttpRequestException e)
+ {
+  return Results.Ok(new{configured=true,apiReachable=false,message="Tribute API вернул ошибку",httpStatus=e.StatusCode is null?(int?)null:(int)e.StatusCode.Value});
+ }
+ catch(JsonException)
+ {
+  return Results.Ok(new{configured=true,apiReachable=false,message="Некорректный JSON от Tribute"});
+ }
+});
+
 app.MapPost("/api/tribute/pro/checkout", async (HttpRequest req, MySqlDataSource db, IHttpClientFactory clients, CancellationToken ct) =>
 {
     if (Authorized(req) is not long userId) return Results.Unauthorized();
