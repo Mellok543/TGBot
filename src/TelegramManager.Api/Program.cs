@@ -1750,7 +1750,7 @@ app.MapGet("/api/subscription", async (HttpRequest req,MySqlDataSource db,Cancel
     var isPro=expiry>DateTime.UtcNow;
     const decimal price=399m;
     return Results.Ok(new {plan=isPro?"PRO":"FREE",isPro,expiresAt=isPro?expiry:null,channelLimit=isPro?10:1,commissionPercent=isPro?2.5m:5m,fullAnalytics=isPro,
-        proPriceRub=price,checkoutAvailable=false,checkoutMessage="Ожидается подключение кассы"});
+        proPriceRub=price,checkoutAvailable=!string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("TRIBUTE_API_KEY")),checkoutMessage="Оплата через Tribute"});
 });
 // Custom, unique channel links are stored separately from Telegram channel IDs.
 await using (var aliasDb=app.Services.GetRequiredService<MySqlDataSource>().CreateCommand("""
