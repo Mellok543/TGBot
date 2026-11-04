@@ -370,18 +370,31 @@ function App() {
     catch{/* Payment history is optional if API is temporarily unavailable. */}
   }
   useEffect(()=>{if(tab==='profile')void refreshTributePayments();},[tab]);
-  async function confirmTributePayment(payment:TributePayment){
+  async function confirmTributePayment(payment:TributePayment,silent=false){
     if(tributeChecking)return;
-    setTributeChecking(true);setTributeNotice('');
+    setTributeChecking(true);if(!silent)setTributeNotice('');
     try{
       const endpoint=payment.product==='pro30'?'/api/tribute/pro/confirm/':'/api/tribute/promotions/confirm/';
       const result=await post<{status:string}>(endpoint+encodeURIComponent(payment.orderUuid),{});
-      setTributeNotice(result.status==='paid'?'Оплата подтверждена. Услуга активирована.':'Платёж ещё не подтверждён: '+result.status);
+      if(!silent||result.status==='paid')setTributeNotice(result.status==='paid'?'Оплата подтверждена. Услуга активирована.':'Платёж ещё не подтверждён: '+result.status);
       await refreshTributePayments();
       setSubscription(await get<Subscription>('/api/subscription'));
-    }catch(e){setTributeNotice(e instanceof Error?e.message:'Не удалось проверить оплату');}
+    }catch(e){if(!silent)setTributeNotice(e instanceof Error?e.message:'Не удалось проверить оплату');}
     finally{setTributeChecking(false);}
   }
+  // Confirm pending orders automatically while the profile is open.
+  // Server verification remains authoritative; the browser never marks a payment paid itself.
+  useEffect(()=>{
+    if(tab!=='profile'||tributeChecking)return;
+    const pending=tributePayments.find(p=>p.status==='pending');
+    if(!pending)return;
+    let cancelled=false;
+    const timer=window.setTimeout(async()=>{
+      if(cancelled)return;
+      await confirmTributePayment(pending,true);
+    },5000);
+    return()=>{cancelled=true;window.clearTimeout(timer);};
+  },[tab,tributePayments,tributeChecking]);
   const [tributeBusy,setTributeBusy]=useState(false);
   const [tributeNotice,setTributeNotice]=useState('');
   const [servicePrices,setServicePrices]=useState<Record<string,number>>({});
