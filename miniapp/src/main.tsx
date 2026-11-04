@@ -420,11 +420,21 @@ function App() {
     if(tributeBusy)return;
     setTributeBusy(true);setTributeNotice('');
     try{
-      const path=product==='pro30'?'/api/tribute/pro/checkout':`/api/tribute/promotions/${channelId}/checkout`;
-      const order=await post<{orderUuid:string;paymentUrl:string}>(path,{});
+      if(product==='pro30'){
+        // Tribute product checkout is a static link. No Shop API order is created here.
+        // Do not claim automatic activation until buyer attribution is implemented.
+        const paymentUrl='https://web.tribute.tg/p/JfV';
+        const telegramWebApp=window.Telegram?.WebApp as (typeof window.Telegram.WebApp & {openLink?:(url:string)=>void})|undefined;
+        if(telegramWebApp?.openLink)telegramWebApp.openLink(paymentUrl);
+        else window.open(paymentUrl,'_blank','noopener,noreferrer');
+        setTributeNotice('Открыта оплата Reklio Pro. Автоматическая активация покупок по этой ссылке пока не подключена. Не оплачивайте товар до завершения интеграции.');
+        return;
+      }
+      const order=await post<{orderUuid:string;paymentUrl:string}>(`/api/tribute/promotions/${channelId}/checkout`,{});
       if(!order.paymentUrl.startsWith('https://'))throw new Error('Некорректная ссылка оплаты');
       window.location.assign(order.paymentUrl);
-    }catch(e){setTributeNotice(e instanceof Error?e.message:'Не удалось создать платёж');setTributeBusy(false);}
+    }catch(e){setTributeNotice(e instanceof Error?e.message:'Не удалось открыть оплату');}
+    finally{setTributeBusy(false);}
   }
   const [subscription,setSubscription]=useState<Subscription|null>(null);
   useEffect(()=>{get<Subscription>('/api/subscription').then(setSubscription).catch(()=>{});},[tab]);
