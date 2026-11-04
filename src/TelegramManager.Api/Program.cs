@@ -1749,7 +1749,7 @@ app.MapPost("/api/tribute/pro/checkout", async (HttpRequest req, MySqlDataSource
         await save.ExecuteNonQueryAsync(ct);
         return Results.Ok(new {orderUuid=uuid,paymentUrl=url});
     }
-    catch(HttpRequestException) {return Results.Problem("Tribute is unavailable",statusCode:502);}
+    catch(HttpRequestException e) {return Results.Problem($"Tribute order creation failed (provider HTTP {(e.StatusCode is null ? "network" : ((int)e.StatusCode.Value).ToString())})",statusCode:502);}
 });
 
 app.MapPost("/api/tribute/pro/confirm/{orderUuid:guid}",async(Guid orderUuid,HttpRequest req,MySqlDataSource db,IHttpClientFactory clients,CancellationToken ct)=>
@@ -1877,7 +1877,7 @@ app.MapPost("/api/tribute/promotions/{channelId:long}/checkout",async(long chann
   ((MySqlConnector.MySqlParameterCollection)save.Parameters).AddWithValue("@channel",channelId);((MySqlConnector.MySqlParameterCollection)save.Parameters).AddWithValue("@amount",price*100);
   await save.ExecuteNonQueryAsync(ct);
   return Results.Ok(new{orderUuid=uuid,paymentUrl=url});
- }catch(HttpRequestException){return Results.Problem("Tribute unavailable",statusCode:502);}
+ }catch(HttpRequestException e){return Results.Problem($"Tribute order creation failed (provider HTTP {(e.StatusCode is null ? "network" : ((int)e.StatusCode.Value).ToString())})",statusCode:502);}
 });
 
 app.MapPost("/api/tribute/promotions/confirm/{orderUuid:guid}",async(Guid orderUuid,HttpRequest req,MySqlDataSource db,IHttpClientFactory clients,CancellationToken ct)=>
