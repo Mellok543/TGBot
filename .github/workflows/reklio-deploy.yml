@@ -110,6 +110,17 @@ jobs:
               *) echo "Incorrect $ext content type: $content_type" >&2; exit 1 ;;
             esac
           done
+      - name: Verify Tribute webhook deployment
+        run: |
+          set -euo pipefail
+          # Unsigned payload must be rejected by signature verification (401).
+          # 503 means the API key is not loaded; 404 means the route was not deployed.
+          status="$(curl --silent --show-error --max-time 15 -o /dev/null -w '%{http_code}' \
+            -X POST https://api.reklio.site/api/tribute/webhook \
+            -H 'Content-Type: application/json' \
+            --data '{"name":"deploy-check"}')"
+          echo "Unsigned Tribute webhook HTTP status: $status"
+          test "$status" = "401"
       - name: Diagnose login environment without disclosing credentials
         env:
           DEPLOY_HOST: ${{ secrets.REKLIO_DEPLOY_HOST }}
