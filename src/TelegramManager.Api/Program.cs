@@ -1740,6 +1740,89 @@ app.MapPost("/api/tribute/pro/confirm/{orderUuid:guid}",async(Guid orderUuid,Htt
     catch(HttpRequestException){return Results.Problem("Tribute verification failed",statusCode:502);}
 });
 
+// Paid channel promotion. Price is configured server-side, never supplied by the client.
+await using(var promoSchema=app.Services.GetRequiredService<MySqlDataSource>().CreateCommand("""
+CREATE TABLE IF NOT EXISTS reklio_tribute_promotions (
+ order_uuid CHAR(36) PRIMARY KEY,
+ user_id BIGINT NOT NULL,
+ channel_id BIGINT NOT NULL,
+ days INT NOT NULL,
+ amount_kopecks BIGINT NOT NULL,
+ status VARCHAR(16) NOT NULL DEFAULT 'pending',
+ created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ applied_at DATETIME NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+"""))await promoSchema.ExecuteNonQueryAsync();
+
+app.MapPost("/api/tribute/promotions/{channelId:long}/checkout",async(long channelId,HttpRequest req,MySqlDataSource db,IHttpClientFactory clients,CancellationToken ct)=>
+{
+ if(Authorized(req) is not long owner)return Results.Unauthorized();
+ var key=Environment.GetEnvironmentVariable("TRIBUTE_API_KEY");
+ if(string.IsNullOrWhiteSpace(key))return Results.StatusCode(503);
+ if(!long.TryParse(Environment.GetEnvironmentVariable("TRIBUTE_PROMOTION_PRICE_RUB"),out var price)||price<1||price>100000)
+  return Results.Problem("Promotion price is not configured",statusCode:503);
+ await using(var check=db.CreateCommand("SELECT COUNT(*) FROM channels WHERE telegram_id=@id AND connected_by=@owner")){
+  check.Parameters.AddWithValue("@id",channelId);check.Parameters.AddWithValue("@owner",owner);
+  if(Convert.ToInt64(await check.ExecuteScalarAsync(ct))==0)return Results.NotFound();
+ }
+ try{
+  var tribute=new Reklio.Payments.TributeShopClient(clients.CreateClient(),key);
+  using var order=await tribute.CreateOrderAsync(price*100,"Продвижение Reklio","Выделение канала в каталоге на 7 дней",owner.ToString(),
+    "https://reklio.site/profile","https://reklio.site/profile",ct);
+  var root=order.RootElement;
+  var uuid=root.GetProperty("uuid").GetString();
+  var url=root.TryGetProperty("webappPaymentUrl",out var web)&&web.ValueKind==JsonValueKind.String?web.GetString():null;
+  if(string.IsNullOrWhiteSpace(url))url=root.TryGetProperty("paymentUrl",out var payment)&&payment.ValueKind==JsonValueKind.String?payment.GetString():null;
+  if(!Guid.TryParse(uuid,out _)||!Uri.TryCreate(url,UriKind.Absolute,out var uri)||uri.Scheme!="https")
+   return Results.Problem("Invalid Tribute checkout response",statusCode:502);
+  await using var save=db.CreateCommand("""
+    INSERT INTO reklio_tribute_promotions(order_uuid,user_id,channel_id,days,amount_kopecks)
+    VALUES(@uuid,@owner,@channel,7,@amount)
+    """);
+  save.Parameters.AddWithValue("@uuid",uuid);save.Parameters.AddWithValue("@owner",owner);
+  save.Parameters.AddWithValue("@channel",channelId);save.Parameters.AddWithValue("@amount",price*100);
+  await save.ExecuteNonQueryAsync(ct);
+  return Results.Ok(new{orderUuid=uuid,paymentUrl=url});
+ }catch(HttpRequestException){return Results.Problem("Tribute unavailable",statusCode:502);}
+});
+
+app.MapPost("/api/tribute/promotions/confirm/{orderUuid:guid}",async(Guid orderUuid,HttpRequest req,MySqlDataSource db,IHttpClientFactory clients,CancellationToken ct)=>
+{
+ if(Authorized(req) is not long owner)return Results.Unauthorized();
+ var key=Environment.GetEnvironmentVariable("TRIBUTE_API_KEY");
+ if(string.IsNullOrWhiteSpace(key))return Results.StatusCode(503);
+ await using var conn=await db.OpenConnectionAsync(ct);
+ await using var tx=await conn.BeginTransactionAsync(ct);
+ await using var check=new MySqlCommand("""
+   SELECT channel_id,days,status FROM reklio_tribute_promotions
+   WHERE order_uuid=@uuid AND user_id=@owner FOR UPDATE
+   """,conn,tx);
+ check.Parameters.AddWithValue("@uuid",orderUuid.ToString());check.Parameters.AddWithValue("@owner",owner);
+ long channel;int days;string state;
+ await using(var reader=await check.ExecuteReaderAsync(ct)){
+  if(!await reader.ReadAsync(ct))return Results.NotFound();
+  channel=reader.GetInt64(0);days=reader.GetInt32(1);state=reader.GetString(2);
+ }
+ if(state=="paid")return Results.Ok(new{status="paid"});
+ try{
+  var tribute=new Reklio.Payments.TributeShopClient(clients.CreateClient(),key);
+  using var result=await tribute.GetOrderStatusAsync(orderUuid,ct);
+  var status=result.RootElement.GetProperty("status").GetString();
+  if(status!="paid")return Results.Ok(new{status});
+  await using var apply=new MySqlCommand("""
+   INSERT INTO channel_promotions(channel_id,active_until)
+   VALUES(@channel,DATE_ADD(UTC_TIMESTAMP(),INTERVAL @days DAY))
+   ON DUPLICATE KEY UPDATE active_until=DATE_ADD(GREATEST(active_until,UTC_TIMESTAMP()),INTERVAL @days DAY)
+   """,conn,tx);
+  apply.Parameters.AddWithValue("@channel",channel);apply.Parameters.AddWithValue("@days",days);
+  await apply.ExecuteNonQueryAsync(ct);
+  await using var mark=new MySqlCommand("UPDATE reklio_tribute_promotions SET status='paid',applied_at=UTC_TIMESTAMP() WHERE order_uuid=@uuid",conn,tx);
+  mark.Parameters.AddWithValue("@uuid",orderUuid.ToString());await mark.ExecuteNonQueryAsync(ct);
+  await tx.CommitAsync(ct);
+  return Results.Ok(new{status="paid"});
+ }catch(HttpRequestException){return Results.Problem("Tribute verification failed",statusCode:502);}
+});
+
 app.MapGet("/api/subscription", async (HttpRequest req,MySqlDataSource db,CancellationToken ct) =>
 {
     if(Authorized(req) is not long userId)return Results.Unauthorized();
