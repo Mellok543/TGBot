@@ -1685,9 +1685,14 @@ app.MapPost("/api/tribute/webhook",async(HttpRequest request,CancellationToken c
  if(buffer.Length>65536)return Results.StatusCode(413);
  var expected=HMACSHA256.HashData(Encoding.UTF8.GetBytes(secret),buffer.ToArray());
  if(!CryptographicOperations.FixedTimeEquals(expected,provided))return Results.Unauthorized();
- using var json=JsonDocument.Parse(buffer.ToArray());
- if(!json.RootElement.TryGetProperty("name",out var name)||name.ValueKind!=JsonValueKind.String)
-  return Results.BadRequest();
+ // A valid HMAC authenticates the exact payload, including Tribute test events.
+ // Do not require a particular event property: test and transaction payloads can differ.
+ try
+ {
+  using var json=JsonDocument.Parse(buffer.ToArray());
+  if(json.RootElement.ValueKind!=JsonValueKind.Object)return Results.BadRequest();
+ }
+ catch(JsonException){return Results.BadRequest();}
  return Results.Ok(new{status="ok"});
 });
 
