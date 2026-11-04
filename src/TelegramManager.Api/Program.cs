@@ -1745,6 +1745,28 @@ app.MapPost("/api/tribute/pro/confirm/{orderUuid:guid}",async(Guid orderUuid,Htt
 
 await using(var schema=app.Services.GetRequiredService<MySqlDataSource>().CreateCommand("CREATE TABLE IF NOT EXISTS reklio_service_prices (service_key VARCHAR(32) PRIMARY KEY,price_rub INT NOT NULL) ENGINE=InnoDB"))await schema.ExecuteNonQueryAsync();
 await using(var defaults=app.Services.GetRequiredService<MySqlDataSource>().CreateCommand("INSERT IGNORE INTO reklio_service_prices(service_key,price_rub) VALUES('pro30',399),('promotion7',199)"))await defaults.ExecuteNonQueryAsync();
+// Mini App can resume a payment after returning from Tribute.
+app.MapGet("/api/tribute/my-payments",async(HttpRequest req,MySqlDataSource db,CancellationToken ct)=>{
+ if(Authorized(req) is not long userId)return Results.Unauthorized();
+ var result=new List<object>();
+ await using(var cmd=db.CreateCommand("""
+ SELECT order_uuid,product,amount_kopecks,status,created_at,applied_at
+ FROM reklio_tribute_payments WHERE user_id=@user ORDER BY created_at DESC LIMIT 20
+ """)){
+  cmd.Parameters.AddWithValue("@user",userId);
+  await using var reader=await cmd.ExecuteReaderAsync(ct);
+  while(await reader.ReadAsync(ct))result.Add(new{orderUuid=reader.GetString(0),product=reader.GetString(1),amountKopecks=reader.GetInt64(2),status=reader.GetString(3),createdAt=reader.GetDateTime(4),appliedAt=reader.IsDBNull(5)?(DateTime?)null:reader.GetDateTime(5)});
+ }
+ await using(var cmd=db.CreateCommand("""
+ SELECT order_uuid,channel_id,amount_kopecks,status,created_at,applied_at
+ FROM reklio_tribute_promotions WHERE user_id=@user ORDER BY created_at DESC LIMIT 20
+ """)){
+  cmd.Parameters.AddWithValue("@user",userId);
+  await using var reader=await cmd.ExecuteReaderAsync(ct);
+  while(await reader.ReadAsync(ct))result.Add(new{orderUuid=reader.GetString(0),product="promotion7",channelId=reader.GetInt64(1),amountKopecks=reader.GetInt64(2),status=reader.GetString(3),createdAt=reader.GetDateTime(4),appliedAt=reader.IsDBNull(5)?(DateTime?)null:reader.GetDateTime(5)});
+ }
+ return Results.Ok(result);
+});
 app.MapGet("/api/service-prices",async(MySqlDataSource db,CancellationToken ct)=>{
  await using var cmd=db.CreateCommand("SELECT service_key,price_rub FROM reklio_service_prices");
  var prices=new Dictionary<string,int>();
