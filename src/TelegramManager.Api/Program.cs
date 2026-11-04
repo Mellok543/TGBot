@@ -1700,10 +1700,7 @@ app.MapPost("/api/tribute/webhook",async(HttpRequest request,CancellationToken c
 app.MapGet("/api/tribute/diagnostics",async(HttpRequest req,MySqlDataSource db,IHttpClientFactory clients,CancellationToken ct)=>
 {
  if(Authorized(req) is not long userId)return Results.Unauthorized();
- await using(var conn=await db.OpenConnectionAsync(ct))
- {
-  if(await StaffRole(conn,userId,ct)!="owner")return Results.Forbid();
- }
+ if(await StaffRole(db,userId,ct)!="owner")return Results.StatusCode(403);
  var key=Environment.GetEnvironmentVariable("TRIBUTE_API_KEY");
  if(string.IsNullOrWhiteSpace(key))return Results.Ok(new{configured=false,apiReachable=false,message="TRIBUTE_API_KEY отсутствует"});
  try
