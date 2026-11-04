@@ -110,6 +110,19 @@ jobs:
               *) echo "Incorrect $ext content type: $content_type" >&2; exit 1 ;;
             esac
           done
+      - name: Verify current Pro checkout is deployed
+        run: |
+          set -euo pipefail
+          html="$(curl --fail --silent --show-error --max-time 15 -H 'Cache-Control: no-cache' https://reklio.site/)"
+          asset="$(printf '%s' "$html" | grep -oE '/assets/[^" ]+\.js' | head -n 1 || true)"
+          test -n "$asset" || { echo 'Mini App JavaScript asset missing' >&2; exit 1; }
+          curl --fail --silent --show-error --max-time 20 -H 'Cache-Control: no-cache' "https://reklio.site$asset" -o /tmp/reklio-live-app.js
+          if ! grep -Fq 'https://web.tribute.tg/p/Jhy' /tmp/reklio-live-app.js; then
+            echo 'ERROR: Production Mini App still serves an old JavaScript bundle without the new Tribute Pro link.' >&2
+            echo "Public asset: $asset" >&2
+            exit 1
+          fi
+          echo 'Production Mini App contains the current Tribute Pro payment link.'
       - name: Verify Tribute webhook deployment
         run: |
           set -euo pipefail
