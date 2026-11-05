@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-label="Reklio">
+<defs><linearGradient id="r" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#9651ff"/><stop offset=".46" stop-color="#3862ff"/><stop offset="1" stop-color="#05d5ed"/></linearGradient><linearGradient id="b" x1="0" y1="1" x2="1" y2="0"><stop stop-color="#0759fa"/><stop offset="1" stop-color="#39ebfa"/></linearGradient></defs>
+<rect width="256" height="256" rx="56" fill="#080f24"/>
+<path d="M75 44h89c44 0 68 23 68 60 0 28-16 45-39 52l38 57h-65l-36-58h-16v58H75v-47l33-26h53c18 0 28-10 28-27s-10-25-28-25H75z" fill="url(#r)"/>
+<path d="M26 196h21v17H26zM53 172h21v41H53zM80 148h21v65H80z" fill="url(#b)" rx="5"/>
+<path d="M96 121 209 54 171 139 153 111 126 131z" fill="#fff"/>
+<path d="m153 111 56-57-38 85z" fill="#83defe"/>
+<path d="M34 160 122 115 109 145z" fill="#195cfa" opacity=".7"/>
+</svg>

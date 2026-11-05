@@ -219,7 +219,7 @@ public sealed class BotHandlers(Database database)
         }
         var listed = await database.IsChannelListedAsync(channelId, userId, ct);
         var me = await bot.GetMe(ct);
-        var directLink = $"https://t.me/{me.Username}?start=ad_{channelId}";
+        var directLink = $"https://t.me/{me.Username}?startapp=ad_{channelId}";
         var text = $"⚙️ {settings.Value.Title}\n\n💰 Цена рекламы: {settings.Value.Price:0.##} ₽\n📝 Описание: {(string.IsNullOrWhiteSpace(settings.Value.Description) ? "Не задано" : settings.Value.Description)}\n📦 Форматы: {settings.Value.Formats}\n🌐 Каталог: {(listed ? "Включён" : "Выключен")}\n\n🔗 Ссылка для заказа рекламы:\n{directLink}";
         if (messageId is int id)
             await bot.EditMessageText(chatId, id, text, replyMarkup: SettingsKeyboard(channelId), cancellationToken: ct);
@@ -230,13 +230,19 @@ public sealed class BotHandlers(Database database)
     private static readonly TimeSpan DisplayOffset = TimeSpan.FromHours(3);
     private static InlineKeyboardMarkup Home() => new(new[]
     {
-        new[] { InlineKeyboardButton.WithCallbackData("📺 Мои каналы", "owner_home") },
-        new[] { InlineKeyboardButton.WithCallbackData("🛒 Покупка рекламы", "buyer_home") },
-        new[] { InlineKeyboardButton.WithCallbackData("🔎 Каталог каналов", "catalog") },
-        new[] { InlineKeyboardButton.WithCallbackData("📅 Мои размещения", "placements") },
-        new[] { InlineKeyboardButton.WithCallbackData("👤 Мой профиль", "profile") },
-        new[] { InlineKeyboardButton.WithCallbackData("⚙️ Настройки", "profile_settings") }
+        new[] { new InlineKeyboardButton("🚀 Открыть Reklio")
+        {
+            WebApp = new WebAppInfo { Url = MiniAppUrl() }
+        } }
     });
+
+    private static string MiniAppUrl()
+    {
+        var configured = Environment.GetEnvironmentVariable("MINIAPP_URL");
+        return Uri.TryCreate(configured, UriKind.Absolute, out var uri) && uri.Scheme == Uri.UriSchemeHttps
+            ? uri.ToString() : "https://reklio.site";
+    }
+
     private static InlineKeyboardMarkup ForRole(string? role) => Home();
     private static InlineKeyboardMarkup OwnerHome() => new(new[]
     {
@@ -266,6 +272,15 @@ public sealed class BotHandlers(Database database)
 
     private const int ProPriceStars = 299;
     private static string ProPayload(long userId) => $"pro30:{userId}";
+    private static string PromotionPayload(long owner,long channel,int days) => $"boost:{owner}:{channel}:{days}";
+    private static bool TryPromotion(string payload,long owner,out long channel,out int days)
+    {
+        channel=0;days=0;
+        var parts=payload.Split(':');
+        return parts.Length==4 && parts[0]=="boost" && long.TryParse(parts[1],out var parsedOwner)
+            && parsedOwner==owner && long.TryParse(parts[2],out channel)
+            && int.TryParse(parts[3],out days) && days is 7 or 30;
+    }
 
     public async Task HandleAsync(ITelegramBotClient bot, Update update, CancellationToken ct)
     {
@@ -280,6 +295,9 @@ public sealed class BotHandlers(Database database)
         {
             var valid = pre.Currency == "XTR" && pre.TotalAmount == ProPriceStars &&
                         pre.InvoicePayload == ProPayload(pre.From.Id);
+            if(!valid && TryPromotion(pre.InvoicePayload,pre.From.Id,out var boostChannel,out var boostDays))
+                valid=pre.Currency=="XTR" && pre.TotalAmount==(boostDays==7?99:299)
+                    && await database.OwnsListedChannelAsync(pre.From.Id,boostChannel,ct);
             await bot.AnswerPreCheckoutQuery(pre.Id, errorMessage: valid ? null : "Некорректный платёж. Создайте новый счёт в профиле.",
                 cancellationToken: ct);
             return;
@@ -317,6 +335,17 @@ public sealed class BotHandlers(Database database)
                         credited ? $"⭐ PRO активирован до {expiry?.Add(DisplayOffset):dd.MM.yyyy HH:mm} (UTC+3)."
                                 : "Платёж уже обработан или требует проверки. Если PRO не активен, обратитесь в поддержку.",
                         replyMarkup: Home(), cancellationToken: ct);
+                }
+                else if(TryPromotion(payment.InvoicePayload,user.Id,out var promotedId,out var promotedDays)
+                        && payment.Currency=="XTR" && payment.TotalAmount==(promotedDays==7?99:299))
+                {
+                    var activated=await database.RecordPromotionPaymentAsync(user.Id,promotedId,promotedDays,
+                        payment.TotalAmount,payment.TelegramPaymentChargeId,ct);
+                    var expiry=await database.GetPromotionUntilAsync(promotedId,ct);
+                    await bot.SendMessage(message.Chat.Id,activated
+                        ? $"🚀 Продвижение канала активировано до {expiry?.Add(DisplayOffset):dd.MM.yyyy HH:mm} (UTC+3)."
+                        : "Платёж получен, но продвижение требует проверки. Напишите в поддержку.",
+                        cancellationToken:ct);
                 }
                 else
                 {
@@ -531,14 +560,42 @@ public sealed class BotHandlers(Database database)
             if (message.Text?.StartsWith("/start", StringComparison.Ordinal) == true)
             {
                 var payload = message.Text.Split(' ', 2, StringSplitOptions.RemoveEmptyEntries);
-                if (payload.Length == 2 && payload[1].StartsWith("ad_") && long.TryParse(payload[1][3..], out var directId))
+                if(payload.Length==2 && payload[1]=="connect")
+                {
+                    await bot.SendMessage(message.Chat.Id,
+                        "📺 Подключение канала\\n\\n1. Добавьте @ReklioBot в администраторы канала с разрешением публиковать сообщения.\\n2. Нажмите «Выбрать канал».\\n3. Подтвердите подключение.",
+                        replyMarkup:Connect(),cancellationToken:ct);
+                }
+                else if(payload.Length==2 && payload[1].StartsWith("boost_") &&
+                    long.TryParse(payload[1][6..],out var channelToBoost))
+                {
+                    if(!await database.OwnsListedChannelAsync(user.Id,channelToBoost,ct))
+                        await bot.SendMessage(message.Chat.Id,"Канал не найден среди ваших опубликованных площадок.",cancellationToken:ct);
+                    else
+                        await bot.SendMessage(message.Chat.Id,"🚀 Продвижение канала в каталоге Reklio. Выберите срок:",
+                            replyMarkup:new InlineKeyboardMarkup(new[]{
+                                new[]{InlineKeyboardButton.WithCallbackData("7 дней · 99 ⭐",$"boost:7:{channelToBoost}")},
+                                new[]{InlineKeyboardButton.WithCallbackData("30 дней · 299 ⭐",$"boost:30:{channelToBoost}")}
+                            }),cancellationToken:ct);
+                }
+                else if (payload.Length == 2 && payload[1].StartsWith("ad_") && long.TryParse(payload[1][3..], out var directId))
                 {
                     await ShowOfferAsync(bot, message.Chat.Id, null, directId, ct);
                 }
-                else await bot.SendMessage(message.Chat.Id, "Telegram Manager\nГлавное меню:", replyMarkup: Home(), cancellationToken: ct);
+                else
+                {
+                    // Remove the old persistent reply keyboard without leaving a service message.
+                    var cleanup = await bot.SendMessage(message.Chat.Id, "Обновляем меню…",
+                        replyMarkup: new ReplyKeyboardRemove(), cancellationToken: ct);
+                    try { await bot.DeleteMessage(message.Chat.Id, cleanup.MessageId, cancellationToken: ct); }
+                    catch (Telegram.Bot.Exceptions.ApiRequestException) { /* Older clients can retain the notice. */ }
+                    await bot.SendMessage(message.Chat.Id,
+                        "🚀 Добро пожаловать в Reklio!\n\nПокупайте рекламу, подключайте свои каналы и управляйте размещениями в приложении.\n\nНажмите кнопку ниже, чтобы открыть Reklio.",
+                        replyMarkup: Home(), cancellationToken: ct);
+                }
             }
             else if (message.Text?.StartsWith("/cancel", StringComparison.Ordinal) == true)
-                await bot.SendMessage(message.Chat.Id, "Действие отменено.", replyMarkup: Home(), cancellationToken: ct);
+                await bot.SendMessage(message.Chat.Id, "Действие отменено. Откройте Reklio кнопкой ниже.", replyMarkup: Home(), cancellationToken: ct);
             return;
         }
 
@@ -558,6 +615,50 @@ public sealed class BotHandlers(Database database)
         await database.RegisterAsync(actor.Id, actor.Username, actor.FirstName + (actor.LastName is null ? "" : " " + actor.LastName), ct);
 
         var data = query.Data ?? "";
+        if (data.StartsWith("boost:",StringComparison.Ordinal))
+        {
+            var parts=data.Split(':');
+            if(parts.Length==3 && int.TryParse(parts[1],out var days)
+                && days is 7 or 30 && long.TryParse(parts[2],out var channelId)
+                && await database.OwnsListedChannelAsync(actor.Id,channelId,ct))
+            {
+                var price=days==7?99:299;
+                await bot.SendInvoice(origin.Chat.Id,
+                    title:$"Продвижение канала · {days} дней",
+                    description:"Приоритетное место и цветная карточка в каталоге Reklio.",
+                    payload:PromotionPayload(actor.Id,channelId,days),
+                    currency:"XTR",
+                    prices:new[]{new LabeledPrice($"Продвижение · {days} дней",price)},
+                    providerToken:"",cancellationToken:ct);
+            }
+            else await bot.SendMessage(origin.Chat.Id,"Канал недоступен для продвижения.",cancellationToken:ct);
+            return;
+        }
+        if (data.StartsWith("early:", StringComparison.Ordinal))
+        {
+            var bits=data.Split(':');
+            if(bits.Length==3 && long.TryParse(bits[2],out var earlyOrderId)
+               && bits[1] is ("republish" or "dispute"))
+            {
+                var republish=bits[1]=="republish";
+                if(await database.ResolveEarlyDeletionAsync(earlyOrderId,actor.Id,republish,ct))
+                {
+                    await bot.EditMessageText(origin.Chat.Id,origin.MessageId,
+                        republish
+                          ? $"🔄 Заказ #{earlyOrderId}: повторная публикация поставлена в очередь. Бот разместит исходный рекламный материал заново."
+                          : $"⚖️ Заказ #{earlyOrderId}: спор открыт. Решение доступно в Reklio.",
+                        cancellationToken:ct);
+                    var order=await database.GetAdRequestAsync(earlyOrderId,ct);
+                    if(order is { } current)
+                        await database.EnqueueNotificationToUserAsync(earlyOrderId,current.Advertiser,
+                            republish
+                              ? $"🔄 Заказ #{earlyOrderId}: владелец восстанавливает удалённую публикацию."
+                              : $"⚖️ Заказ #{earlyOrderId}: владелец открыл спор из-за досрочного удаления.",ct);
+                }
+                else await bot.SendMessage(origin.Chat.Id,"Действие недоступно: заявка уже обработана или принадлежит другому владельцу.",cancellationToken:ct);
+            }
+            return;
+        }
         if (data.StartsWith("admin:", StringComparison.Ordinal))
         {
             if (!IsAdmin(actor.Id))
@@ -687,7 +788,7 @@ public sealed class BotHandlers(Database database)
                 var analyticsPlan = await database.GetPlanAsync(actor.Id, ct);
                 if (!analyticsPlan.Pro)
                 {
-                    await bot.EditMessageText(origin.Chat.Id, origin.MessageId, "📊 Детальная статистика по каждому каналу доступна в PRO (299 Stars / 30 дней).\nБесплатная сводка доступна в профиле.", replyMarkup: Back(), cancellationToken: ct);
+                    await bot.EditMessageText(origin.Chat.Id, origin.MessageId, "📊 Расширенная статистика доступна на тарифе PRO.\nБесплатная сводка доступна в профиле.", replyMarkup: Back(), cancellationToken: ct);
                     break;
                 }
                 var channelAnalytics = await database.GetChannelAnalyticsAsync(actor.Id, ct);
@@ -701,31 +802,23 @@ public sealed class BotHandlers(Database database)
                     $"🛒 Покупки рекламы\nПодтверждённых заказов: {buyerAnalytics.Bought}\nСумма заказов: {buyerAnalytics.BookedRub:0.##} ₽\n\nЭто стоимость заказов, не подтверждение оплаты.",
                     replyMarkup: Back(), cancellationToken: ct);
                 break;
+            case "boost_promo_info":
+                await bot.EditMessageText(origin.Chat.Id,origin.MessageId,
+                    "🚀 Продвижение Reklio\\n\\nПродвигаемые каналы получают цветное выделение и приоритет в каталоге сайта. Размещение рекламы покупается отдельно.\\n\\nЧтобы продвинуть свой канал, откройте его страницу на reklio.site и нажмите «Продвинуть канал».",
+                    replyMarkup:Back(),cancellationToken:ct);
+                break;
             case "buy_pro":
-                await bot.SendInvoice(origin.Chat.Id,
-                    title: "Telegram Manager PRO — 30 дней",
-                    description: "До 10 каналов и расширенная статистика на 30 дней.",
-                    payload: ProPayload(actor.Id),
-                    currency: "XTR",
-                    prices: new[] { new LabeledPrice("PRO — 30 дней", ProPriceStars) },
-                    providerToken: "",
-                    cancellationToken: ct);
+                await bot.SendMessage(origin.Chat.Id,
+                    "Оформление PRO временно недоступно. Условия тарифа смотрите в Mini App.",
+                    replyMarkup:Home(),cancellationToken:ct);
                 break;
             case "subscription_status":
                 var plan = await database.GetPlanAsync(actor.Id, ct);
                 var planText = plan.Pro
-                    ? $"⭐ PRO активен до {plan.ProEnds!.Value.Add(DisplayOffset):dd.MM.yyyy HH:mm} (UTC+3).\nЛимит: 10 каналов."
-                    : plan.TrialEnds == DateTime.MaxValue
-                        ? "🎁 Бесплатные 30 дней начнутся после подключения первого канала. Лимит: 1 канал."
-                        : plan.TrialEnds > DateTime.UtcNow
-                        ? $"🎁 Бесплатный период до {plan.TrialEnds.Add(DisplayOffset):dd.MM.yyyy HH:mm} (UTC+3).\nЛимит: 1 канал."
-                        : "⏳ Бесплатные 30 дней закончились. Для новых продаж и подключения каналов необходим PRO — 299 Stars / 30 дней.\nОплата Stars пока не подключена.";
+                    ? $"PRO действует до {plan.ProEnds!.Value.Add(DisplayOffset):dd.MM.yyyy HH:mm} (UTC+3).\\nДо 10 каналов, расширенная статистика, комиссия 2,5%."
+                    : "FREE: 1 канал без ограничения по времени, базовая статистика, комиссия 5%.\\nPRO: до 10 каналов, расширенная статистика, комиссия 2,5%.";
                 await bot.EditMessageText(origin.Chat.Id, origin.MessageId, planText,
-                    replyMarkup: new InlineKeyboardMarkup(new[]
-                    {
-                        new[] { InlineKeyboardButton.WithCallbackData("⭐ Купить / продлить PRO — 299 Stars", "buy_pro") },
-                        new[] { InlineKeyboardButton.WithCallbackData("⬅️ Главное меню", "home") }
-                    }), cancellationToken: ct);
+                    replyMarkup:Home(), cancellationToken: ct);
                 break;
             case "owner_earnings":
                 var earnings = await database.GetOwnerEarningsAsync(actor.Id, ct);
@@ -898,7 +991,7 @@ public sealed class BotHandlers(Database database)
                     var confirmed = await database.GetAdRequestAsync(confirmId, ct);
                     if (confirmed is not null)
                         await database.EnqueueNotificationToUserAsync(confirmId, confirmed.Value.Advertiser,
-                            $"✅ Заявка #{confirmId}: владелец согласовал размещение. Оплата ещё не получена. Откройте заказ, чтобы продолжить.", ct);
+                            $"✅ Заявка #{confirmId} одобрена!\nВладелец подтвердил размещение.\n💳 Следующий шаг — оплата в Reklio.", ct);
                 }
                 else await bot.SendMessage(origin.Chat.Id, "Не удалось подтвердить: заявка недоступна или время уже занято.", cancellationToken: ct);
                 break;
@@ -1069,7 +1162,7 @@ public sealed class BotHandlers(Database database)
                     var testOrder = await database.GetAdRequestAsync(testPaymentOrderId, ct);
                     if (testOrder is not null)
                         await database.EnqueueNotificationToUserAsync(testPaymentOrderId, testOrder.Value.Owner,
-                            $"🧪 Заказ #{testPaymentOrderId} оплачен в тестовом режиме (без денег).", ct);
+                            $"🧪 Тестовая оплата · заказ #{testPaymentOrderId}\n✅ Оплата имитирована, средства не списывались.\n📅 Ожидается публикация.", ct);
                 }
                 else await bot.SendMessage(origin.Chat.Id, "Тестовая оплата недоступна: проверьте статус заказа, время публикации и разрешение тестового аккаунта.", cancellationToken: ct);
                 break;
@@ -1085,7 +1178,7 @@ public sealed class BotHandlers(Database database)
                     var rejected = await database.GetAdRequestAsync(decisionId, ct);
                     if (rejected is not null)
                         await database.EnqueueNotificationToUserAsync(decisionId, rejected.Value.Advertiser,
-                            $"❌ Заявка #{decisionId} отклонена владельцем.", ct);
+                            $"❌ Заявка #{decisionId} отклонена\nВладелец не подтвердил размещение.\n🔎 Попробуйте выбрать другой канал в Reklio.", ct);
                 }
                 else await bot.SendMessage(origin.Chat.Id, "Заявка уже обработана.", cancellationToken: ct);
                 break;

@@ -1,5 +1,6 @@
 using Telegram.Bot;
 using Telegram.Bot.Types;
+using Telegram.Bot.Types.ReplyMarkups;
 
 namespace TelegramManager.Bot;
 
@@ -64,8 +65,8 @@ public sealed class AdScheduler(Database database, ITelegramBotClient bot)
                 // a database write or audit insert failed afterwards.
                 await database.FinishPublishAsync(id, posted?.MessageId, sendError, ct);
                 await TryQueueNotificationAsync(id, posted is null
-                    ? $"❌ Заказ #{id}: публикация не удалась. Проверьте заказ."
-                    : $"✅ Заказ #{id}: реклама опубликована.", ct);
+                    ? $"⚠️ Проблема с публикацией · заказ #{id}\nРеклама не была опубликована.\n📋 Откройте заказ в Reklio, чтобы узнать подробности."
+                    : $"🎉 Реклама опубликована · заказ #{id}\n✅ Публикация успешно размещена в канале.\n📋 Следить за размещением можно в Reklio.", ct);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
@@ -90,8 +91,8 @@ public sealed class AdScheduler(Database database, ITelegramBotClient bot)
 
                 await database.FinishDeletionAsync(id, deleteError, ct);
                 await TryQueueNotificationAsync(id, deleteError is null
-                    ? $"🗑 Заказ #{id}: срок размещения завершён, сообщение удалено."
-                    : $"⚠️ Заказ #{id}: не удалось удалить публикацию. Требуется проверка.", ct);
+                    ? $"🏁 Размещение завершено · заказ #{id}\n✅ Срок публикации истёк.\n🗑 Рекламный пост удалён по расписанию."
+                    : $"⚠️ Требуется проверка · заказ #{id}\nСрок размещения истёк, но автоматически удалить пост не удалось.\n📋 Проверьте заказ в Reklio.", ct);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
@@ -109,7 +110,38 @@ public sealed class AdScheduler(Database database, ITelegramBotClient bot)
                 if (!await database.TryClaimNotificationAsync(item.Id, ct)) continue;
                 try
                 {
-                    await bot.SendMessage(item.Recipient, item.Body, cancellationToken: ct);
+                    var notificationText = item.Body;
+                    InlineKeyboardMarkup? actions = null;
+                    if (item.OrderId > 0 && item.Body.StartsWith("Новая заявка", StringComparison.OrdinalIgnoreCase))
+                    {
+                        var order = await database.GetAdRequestAsync(item.OrderId, ct);
+                        if (order is { } a && a.Owner == item.Recipient && a.Status is ("Pending" or "PendingPaid"))
+                        {
+                            var details = await database.GetAdOrderDetailsAsync(item.OrderId, item.Recipient, ct);
+                            var preview = a.Text ?? "";
+                            if (preview.Length > 650) preview = preview[..650] + "…";
+                            var dateLabel = details?.Scheduled is { } date ? date.AddHours(3).ToString("dd.MM.yyyy HH:mm") + " (UTC+3)" : "не выбрана";
+                            notificationText = $"📥 Новая заявка #{item.OrderId} на рекламу\n" +
+                                $"📺 Канал: {a.Channel}\n💰 Стоимость: {a.Price:0.##} ₽\n" +
+                                $"📅 Публикация: {dateLabel}\n" +
+                                $"⏳ Срок: {details?.DurationHours?.ToString() ?? "—"} ч\n\n" +
+                                $"📝 Рекламный текст:\n{preview}\n\nВыберите действие:";
+                            actions = new InlineKeyboardMarkup(new[]
+                            {
+                                new[] { InlineKeyboardButton.WithCallbackData("✅ Одобрить", $"confirm:0:{item.OrderId}") },
+                                new[] { InlineKeyboardButton.WithCallbackData("❌ Отклонить", $"decision:Rejected:{item.OrderId}") }
+                            });
+                        }
+                    }
+                    if(item.OrderId>0 && item.Body.StartsWith("⚠️ Досрочное удаление",StringComparison.Ordinal))
+                    {
+                        actions=new InlineKeyboardMarkup(new[]
+                        {
+                            new[] { InlineKeyboardButton.WithCallbackData("🔄 Опубликовать заново",$"early:republish:{item.OrderId}") },
+                            new[] { InlineKeyboardButton.WithCallbackData("⚖️ Открыть спор",$"early:dispute:{item.OrderId}") }
+                        });
+                    }
+                    await bot.SendMessage(item.Recipient, notificationText, replyMarkup: actions, cancellationToken: ct);
                     await database.CompleteNotificationAsync(item.Id, null, false, ct);
                 }
                 catch (Telegram.Bot.Exceptions.ApiRequestException ex)

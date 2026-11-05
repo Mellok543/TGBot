@@ -1,0 +1,16 @@
+{
+  "name": "Reklio — биржа рекламы в Telegram",
+  "short_name": "Reklio",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#080f24",
+  "theme_color": "#080f24",
+  "icons": [
+    {
+      "src": "/reklio-mark.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

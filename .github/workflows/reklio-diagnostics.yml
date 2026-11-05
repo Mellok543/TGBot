@@ -1,0 +1,78 @@
+name: Reklio diagnostics
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '17 */6 * * *'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: reklio-diagnostics
+  cancel-in-progress: false
+
+jobs:
+  diagnostics:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    environment: production
+    steps:
+      - name: Configure SSH
+        env:
+          DEPLOY_KEY_B64: ${{ secrets.REKLIO_DEPLOY_SSH_KEY_B64 }}
+          KNOWN_HOSTS: ${{ secrets.REKLIO_SSH_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          test -n "$DEPLOY_KEY_B64" && test -n "$KNOWN_HOSTS"
+          umask 077
+          mkdir -p ~/.ssh
+          printf '%s' "$DEPLOY_KEY_B64" | base64 --decode > ~/.ssh/id_ed25519
+          ssh-keygen -y -f ~/.ssh/id_ed25519 > /dev/null
+          printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/id_ed25519 ~/.ssh/known_hosts
+
+      - name: Public endpoint checks
+        run: |
+          set -euo pipefail
+          curl --fail --silent --show-error --max-time 15 https://api.reklio.site/api/health
+          echo
+          curl --fail --silent --show-error --max-time 15 -o /dev/null -w 'Mini App HTTP %{http_code}\n' https://reklio.site/
+
+      - name: Read-only VPS diagnostics
+        env:
+          DEPLOY_HOST: ${{ secrets.REKLIO_DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.REKLIO_DEPLOY_USER }}
+          DEPLOY_PORT: ${{ secrets.REKLIO_DEPLOY_PORT }}
+        run: |
+          set -euo pipefail
+          test -n "$DEPLOY_HOST" && test -n "$DEPLOY_USER"
+          PORT="${DEPLOY_PORT:-22}"
+          ssh -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=15 \
+            -p "$PORT" "$DEPLOY_USER@$DEPLOY_HOST" 'bash -s' <<'REMOTE'
+          set -eu
+          echo '=== DATE (UTC) ==='
+          date -u '+%Y-%m-%dT%H:%M:%SZ'
+          echo '=== REKLIO API SERVICE ==='
+          systemctl is-active reklio-api.service || true
+          echo '=== NGINX ==='
+          systemctl is-active nginx.service || true
+          echo '=== LOCAL API ==='
+          curl --fail --silent --show-error --max-time 5 http://127.0.0.1:5080/api/health || true
+          echo
+          echo '=== STORAGE ==='
+          df -h /opt/reklio | tail -n 1
+          echo '=== DEPLOYED COMMIT ==='
+          git -C /opt/reklio/source rev-parse --short HEAD || true
+          echo '=== AVAILABLE SERVICES (NAMES ONLY) ==='
+          systemctl list-units --type=service --all --no-legend --no-pager | awk '{print $1}' | grep -Ei 'reklio|telegram' || true
+          echo '=== PUBLICATION MIGRATION PRESENT? ==='
+          if [ -f /opt/reklio/source/deploy/migrations/002_reklio_publications.sql ]; then echo yes; else echo no; fi
+          REMOTE
+
+      - name: Diagnostics summary
+        if: always()
+        run: |
+          echo "## Reklio diagnostics" >> "$GITHUB_STEP_SUMMARY"
+          echo "Review the step logs for endpoint and service results." >> "$GITHUB_STEP_SUMMARY"
+          echo "No database contents, environment files, credentials, or journal logs were requested." >> "$GITHUB_STEP_SUMMARY"
