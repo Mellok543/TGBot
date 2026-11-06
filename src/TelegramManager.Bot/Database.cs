@@ -285,6 +285,12 @@ public sealed class Database(string connectionString) : IAsyncDisposable
         var existingOwner = await existing.ExecuteScalarAsync(ct);
         if (existingOwner is not null && Convert.ToInt64(existingOwner) != userId)
             throw new InvalidOperationException("Канал уже подключён другим владельцем.");
+        await using (var blocked = new MySqlCommand("SELECT COUNT(*) FROM reklio_user_blocks WHERE user_id=@user AND (blocked_until IS NULL OR blocked_until>UTC_TIMESTAMP())", connection, tx))
+        {
+            blocked.Parameters.Add(new MySqlParameter("@user", userId));
+            if (Convert.ToInt64(await blocked.ExecuteScalarAsync(ct)) > 0)
+                throw new InvalidOperationException("Ваш аккаунт заблокирован администрацией Reklio, подключение каналов недоступно.");
+        }
         if (existingOwner is null && existingCount >= (pro ? 10 : 1))
             throw new InvalidOperationException(pro ? "Лимит PRO — 10 каналов." : "В бесплатной версии доступен только один канал. Для 10 каналов подключите PRO.");
         await using var cmd = new MySqlCommand("""

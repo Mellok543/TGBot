@@ -18,6 +18,7 @@ public sealed class OrderLifecycleWorker(MySqlDataSource database, ILogger<Order
                 await ExpireMissedOrdersAsync(stoppingToken);
                 await NotifyBuyersOfEarlyDeletionAsync(stoppingToken);
                 await EscalateEarlyDeletionsAsync(stoppingToken);
+                await DeleteOldImagesAsync(stoppingToken);
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested) { break; }
             catch (Exception error) { log.LogError(error, "Order lifecycle cycle failed"); }
@@ -54,6 +55,17 @@ public sealed class OrderLifecycleWorker(MySqlDataSource database, ILogger<Order
         var expired = await expire.ExecuteNonQueryAsync(ct);
         await tx.CommitAsync(ct);
         if (expired > 0) log.LogInformation("Expired {Count} missed orders", expired);
+    }
+
+    // A closed order no longer needs its picture, except as evidence during the month a dispute may follow.
+    private async Task DeleteOldImagesAsync(CancellationToken ct)
+    {
+        await using var cmd = database.CreateCommand("""
+            DELETE i FROM reklio_order_images i JOIN ad_requests a ON a.id=i.order_id
+            WHERE i.created_at<UTC_TIMESTAMP()-INTERVAL 30 DAY
+              AND a.status IN ('Rejected','Cancelled','Expired','Deleted','DisputeResolved')
+            """);
+        await cmd.ExecuteNonQueryAsync(ct);
     }
 
     // The monitor tells only the owner. The buyer paid for this post and has to know it is gone.

@@ -210,3 +210,11 @@
 .ownerChecklist div.done{color:#a9e6cb}
 .adminPrices{margin-top:14px}
 .adminPrices .sellerRate .field{margin:0;flex:1}
+
+/* The Mini App's screens inside the website account. */
+.app.embeddedApp{min-height:0;padding:0;background:transparent;color:#e9edf6}
+.embeddedApp .bookingOverlay{z-index:60}
+.adImagePreview{display:block;max-width:100%;max-height:280px;border-radius:12px;margin:0 0 12px}
+.filePick{display:inline-block;cursor:pointer}
+.blockOwnerToggle{display:flex;align-items:flex-start;gap:9px;font-size:12px;line-height:1.45;color:#dbe5f7;margin:0 0 12px}
+.blockOwnerToggle input{margin-top:2px;flex-shrink:0}
