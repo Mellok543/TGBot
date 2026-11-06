@@ -201,7 +201,7 @@ export function Admin({ role }: { role: string | null }) {
     </div>}
 
     {tab === 'users' && users.map(u => <div className="sellerRate" key={u.id}>
-      <div><strong>{u.name || 'Пользователь'} · {u.id}</strong><small>{u.username ? '@' + u.username + ' · ' : ''}Каналов: {u.channels} · Покупок: {u.purchases}{u.blocked ? ' · ' + blockText(u.blockedUntil) : ''}</small></div>
+      <div><strong>{u.name || 'Пользователь'} · {u.id}</strong><small>Первый запуск: {dateTime(u.firstSeen)}</small><small>{u.username ? '@' + u.username + ' · ' : ''}Каналов: {u.channels} · Покупок: {u.purchases}{u.blocked ? ' · ' + blockText(u.blockedUntil) : ''}</small></div>
       {u.blocked && <button className="secondary small" disabled={busy} onClick={() => void unblockOwner(u.id)}>Снять блокировку</button>}
     </div>)}
 

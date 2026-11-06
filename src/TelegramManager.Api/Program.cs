@@ -774,6 +774,18 @@ app.MapGet("/api/public/bot-link", async (IHttpClientFactory clients, Cancellati
 app.MapGet("/api/me", async (HttpRequest req,MySqlDataSource db,CancellationToken ct) =>
 {
     if(Authorized(req) is not long id) return Results.Unauthorized();
+    // Opening the Mini App sends the bot no message, so the first launch has to be recorded here too.
+    using(var profile=JsonDocument.Parse(System.Web.HttpUtility.ParseQueryString(req.Headers["X-Telegram-Init-Data"].ToString())["user"]!))
+    {
+        var person=profile.RootElement;
+        var name=string.Join(" ",new[]{"first_name","last_name"}.Select(key=>person.TryGetProperty(key,out var part)?part.GetString():null).Where(part=>!string.IsNullOrWhiteSpace(part)));
+        if(name.Length==0)name=id.ToString();
+        await using var register=db.CreateCommand("INSERT IGNORE INTO users(telegram_id,username,display_name) VALUES(@id,@username,@name)");
+        register.Parameters.Add(new MySqlParameter("@id",id));
+        register.Parameters.Add(new MySqlParameter("@username",person.TryGetProperty("username",out var username)?(object?)username.GetString()??DBNull.Value:DBNull.Value));
+        register.Parameters.Add(new MySqlParameter("@name",name.Length>255?name[..255]:name));
+        await register.ExecuteNonQueryAsync(ct);
+    }
     var role=await StaffRole(db,id,ct);
     return Results.Ok(new {id,isDisputeAdmin=role is not null,adminRole=role});
 });
@@ -1223,11 +1235,12 @@ app.MapGet("/api/admin/users",async(HttpRequest req,MySqlDataSource db,Cancellat
           (SELECT COUNT(*) FROM channels c WHERE c.connected_by=u.telegram_id) AS channels,
           (SELECT COUNT(*) FROM ad_requests a WHERE a.advertiser_id=u.telegram_id) AS purchases,
           EXISTS(SELECT 1 FROM reklio_user_blocks b WHERE b.user_id=u.telegram_id AND (b.blocked_until IS NULL OR b.blocked_until>UTC_TIMESTAMP())),
-          (SELECT b.blocked_until FROM reklio_user_blocks b WHERE b.user_id=u.telegram_id)
+          (SELECT b.blocked_until FROM reklio_user_blocks b WHERE b.user_id=u.telegram_id),
+          u.created_at
         FROM users u
         WHERE @q='' OR CAST(u.telegram_id AS CHAR)=@q
           OR u.display_name LIKE @like OR u.username LIKE @like
-        ORDER BY u.telegram_id DESC LIMIT 100
+        ORDER BY u.created_at DESC,u.telegram_id DESC LIMIT 100
         """);
     cmd.Parameters.Add(new MySqlParameter("@q",term));
     cmd.Parameters.Add(new MySqlParameter("@like","%"+term+"%"));
@@ -1236,7 +1249,7 @@ app.MapGet("/api/admin/users",async(HttpRequest req,MySqlDataSource db,Cancellat
     while(await reader.ReadAsync(ct)) results.Add(new {
       id=reader.GetInt64(0),name=reader.IsDBNull(1)?"":reader.GetString(1),
       username=reader.IsDBNull(2)?null:reader.GetString(2),
-      channels=Convert.ToInt64(reader.GetValue(3)),purchases=Convert.ToInt64(reader.GetValue(4)),blocked=reader.GetInt64(5)!=0,blockedUntil=reader.IsDBNull(6)?(DateTime?)null:reader.GetDateTime(6)});
+      channels=Convert.ToInt64(reader.GetValue(3)),purchases=Convert.ToInt64(reader.GetValue(4)),blocked=reader.GetInt64(5)!=0,blockedUntil=reader.IsDBNull(6)?(DateTime?)null:reader.GetDateTime(6),firstSeen=reader.GetDateTime(7)});
     return Results.Ok(results);
 });
 app.MapGet("/api/admin/orders",async(HttpRequest req,MySqlDataSource db,CancellationToken ct) =>
