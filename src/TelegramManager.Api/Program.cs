@@ -172,7 +172,7 @@ app.MapGet("/api/web/profile", async (HttpContext ctx,MySqlDataSource db,Cancell
        telegramId,name=ctx.User.FindFirst("name")?.Value,
        username=ctx.User.FindFirst("preferred_username")?.Value,
        plan=pro?"PRO":"FREE",proUntil=pro?until:null,
-       channelLimit=pro?10:1,
+       channelLimit=pro?15:1,
        channels=reader.GetInt64(0),purchases=reader.GetInt64(1),
        sales=reader.GetInt64(2),staffRole=role
     });
@@ -739,11 +739,12 @@ long? Authorized(HttpRequest req)
 {
     var initData=req.Headers["X-Telegram-Init-Data"].ToString();
     if(!string.IsNullOrEmpty(initData)) return VerifyTelegram(initData,token);
-    // Browser cookie access is limited to the customer routes the website shares with the Mini App.
+    // Browser cookie access is limited to the routes the website shares with the Mini App.
+    // Staff routes still check the role on every request.
     // Cross-origin requests must carry the exact trusted website Origin (CSRF defense).
     var path=req.Path.Value??"";
     if(!System.Text.RegularExpressions.Regex.IsMatch(path,
-        @"^(?:/api/orders(?:/[0-9]+(?:/(?:schedule|reschedule|dispute|deal|direct-payment|direct-payment/claim|direct-payment/confirm|direct-payment/reject|cancel|republish|approve|reject|image))?)?|/api/my-channels/connect|/api/feedback|/api/subscription|/api/payments/my|/api/payments/checkout/(?:pro|promotion/-?[0-9]+)|/api/channels/-?[0-9]+/(?:rates|history|availability|reviews))$",
+        @"^(?:/api/orders(?:/[0-9]+(?:/(?:schedule|reschedule|dispute|deal|direct-payment|direct-payment/claim|direct-payment/confirm|direct-payment/reject|cancel|republish|approve|reject|image))?)?|/api/my-channels(?:/connect|/-?[0-9]+/(?:rates(?:/[0-9]+/toggle)?|direct-payment|category|listing|alias|analytics))?|/api/feedback|/api/favorites(?:/-?[0-9]+)?|/api/channel-likes(?:/-?[0-9]+)?|/api/subscription|/api/payments/my|/api/payments/checkout/(?:pro|promotion/-?[0-9]+)|/api/channels(?:/-?[0-9]+/(?:rates|history|availability|reviews))?|/api/admin/[a-z0-9/-]+)$",
         System.Text.RegularExpressions.RegexOptions.CultureInvariant)) return null;
     if(req.Headers.Origin.ToString() is not ("https://reklio.site" or "https://www.reklio.site"))return null;
     if(req.HttpContext.User.Identity?.IsAuthenticated!=true)return null;
@@ -1840,7 +1841,7 @@ app.MapPost("/api/my-channels/connect", async (HttpRequest req, MySqlDataSource 
     var ownerId=await existing.ExecuteScalarAsync(ct);
     if(await OwnerIsBlocked(db,userId,ct))return Results.Conflict(new {error="Ваш аккаунт заблокирован администрацией Reklio, подключение каналов недоступно."});
     if(ownerId is not null&&Convert.ToInt64(ownerId)!=userId)return Results.Conflict(new {error="Канал уже подключён другим пользователем"});
-    if(ownerId is null&&total>=(pro?10:1))return Results.BadRequest(new {error="Лимит каналов исчерпан. Для подключения дополнительных каналов нужен PRO"});
+    if(ownerId is null&&total>=(pro?15:1))return Results.BadRequest(new {error="Лимит каналов исчерпан. Для подключения дополнительных каналов нужен PRO"});
     await using var save=new MySqlCommand("INSERT INTO channels (telegram_id,title,username,connected_by) VALUES (@ch,@title,@username,@id) ON DUPLICATE KEY UPDATE title=VALUES(title),username=VALUES(username)",connection,tx);
     save.Parameters.Add(new MySqlParameter("@ch",channelId));
     save.Parameters.Add(new MySqlParameter("@title",title.Length>255?title[..255]:title));
@@ -2422,7 +2423,7 @@ app.MapGet("/api/subscription", async (HttpRequest req,MySqlDataSource db,Cancel
     var isPro=expiry>DateTime.UtcNow;
     decimal price=399m;
     await using(var priceCmd=db.CreateCommand("SELECT price_rub FROM reklio_service_prices WHERE service_key='pro30'"))price=Convert.ToDecimal(await priceCmd.ExecuteScalarAsync(ct));
-    return Results.Ok(new {plan=isPro?"PRO":"FREE",isPro,expiresAt=isPro?expiry:null,channelLimit=isPro?10:1,fullAnalytics=isPro,
+    return Results.Ok(new {plan=isPro?"PRO":"FREE",isPro,expiresAt=isPro?expiry:null,channelLimit=isPro?15:1,fullAnalytics=isPro,
         proPriceRub=price,checkoutAvailable=PayAnyWayConfig() is not null,checkoutMessage="Оплата временно недоступна"});
 });
 // Custom, unique channel links are stored separately from Telegram channel IDs.
