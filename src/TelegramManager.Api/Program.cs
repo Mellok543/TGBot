@@ -2146,7 +2146,7 @@ app.MapPost("/api/public/visit",async(TrafficSourceInput input,HttpRequest req,M
  if(req.Headers.Origin.ToString() is not ("https://reklio.site" or "https://www.reklio.site"))return Results.StatusCode(StatusCodes.Status403Forbidden);
  if(input.Source!="direct"&&!ValidTrafficSource(input.Source))return Results.BadRequest();
  await using var cmd=db.CreateCommand("INSERT INTO reklio_traffic_daily(day,source,visits) VALUES(UTC_DATE(),@source,1) ON DUPLICATE KEY UPDATE visits=visits+1");
- cmd.Parameters.AddWithValue("@source",input.Source);
+ cmd.Parameters.Add(new MySqlParameter("@source",input.Source));
  await cmd.ExecuteNonQueryAsync(ct);
  return Results.NoContent();
 });
@@ -2162,8 +2162,8 @@ app.MapPost("/api/me/source",async(TrafficSourceInput input,HttpRequest req,MySq
    AND NOT EXISTS(SELECT 1 FROM channels WHERE connected_by=@user)
    AND NOT EXISTS(SELECT 1 FROM reklio_payanyway_orders WHERE user_id=@user))
   """);
- cmd.Parameters.AddWithValue("@user",user);
- cmd.Parameters.AddWithValue("@source",input.Source);
+ cmd.Parameters.Add(new MySqlParameter("@user",user));
+ cmd.Parameters.Add(new MySqlParameter("@source",input.Source));
  await cmd.ExecuteNonQueryAsync(ct);
  return Results.Ok(new {saved=true});
 });
