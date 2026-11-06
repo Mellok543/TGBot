@@ -45,7 +45,7 @@ export function PlanCard({ subscription, onChange }: { subscription: Subscriptio
     {subscription?.isPro && subscription.expiresAt
       ? <p>Действует до {date(subscription.expiresAt)}. Новая оплата продлит его на 30 дней.</p>
       : <p>FREE: один канал и статистика за 7 дней. Бесплатно и без ограничения по времени.</p>}
-    <p>PRO: до 10 каналов и статистика за 30 и 90 дней. Автопродления нет.</p>
+    <p>PRO: до 15 каналов и статистика за 30 и 90 дней. Автопродления нет.</p>
     <button className="primary" type="button" disabled={!subscription?.checkoutAvailable || busy} onClick={() => void buyPro()}>
       {subscription?.isPro ? 'Продлить PRO' : 'Подключить PRO'} · {money(subscription?.proPriceRub ?? 399)} / 30 дней
     </button>

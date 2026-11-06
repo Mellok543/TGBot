@@ -212,7 +212,7 @@
 .adminPrices .sellerRate .field{margin:0;flex:1}
 
 /* The Mini App's screens inside the website account. */
-.app.embeddedApp{min-height:0;padding:0;background:transparent;color:#e9edf6}
+.app.embeddedApp{min-height:0;padding:16px;border-radius:16px;background:#121d30;color:#e9edf6}
 .embeddedApp .bookingOverlay{z-index:60}
 .adImagePreview{display:block;max-width:100%;max-height:280px;border-radius:12px;margin:0 0 12px}
 .filePick{display:inline-block;cursor:pointer}

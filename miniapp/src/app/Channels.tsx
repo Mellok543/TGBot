@@ -40,13 +40,13 @@ function ConnectChannel({ onBack, onConnected }: { onBack: () => void; onConnect
   </div></div>;
 }
 
-export function Channels({ subscription }: { subscription: Subscription | null }) {
+export function Channels({ subscription, initialEditId = null }: { subscription: Subscription | null; initialEditId?: number | null }) {
   const [channels, setChannels] = useState<MyChannel[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [retry, setRetry] = useState(0);
   const [connecting, setConnecting] = useState(false);
-  const [editingId, setEditingId] = useState<number | null>(null);
+  const [editingId, setEditingId] = useState<number | null>(initialEditId);
   const [justConnected, setJustConnected] = useState(false);
 
   useEffect(() => {
@@ -85,7 +85,7 @@ export function Channels({ subscription }: { subscription: Subscription | null }
       </div>
       <button type="button" className="primary channelAddButton" disabled={atLimit} onClick={() => setConnecting(true)}>＋ Добавить канал</button>
     </div>
-    {atLimit && <p className="hint">На вашем тарифе можно подключить до {subscription?.channelLimit} каналов. Больше каналов доступно в PRO: откройте «Профиль».</p>}
+    {atLimit && <p className="hint">На вашем тарифе можно подключить до {subscription?.channelLimit} каналов. С PRO можно подключить больше.</p>}
     {error && <ErrorBox message={error} onRetry={() => setRetry(n => n + 1)}/>}
     {loading && channels.length === 0 && <Loading/>}
     {!loading && !error && channels.length === 0 && <Empty title="Каналов пока нет" text="Подключение занимает пару минут: нужно только добавить бота в администраторы канала."/>}
