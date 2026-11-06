@@ -1,5 +1,6 @@
 import {useEffect,useState} from 'react';
 import {openCheckout} from './app/checkout';
+import {Feedback} from './app/Feedback';
 import {SiteBooking,SiteOrders,SitePlan} from './app/SiteSections';
 const orderStatusNames:Record<string,string>={Draft:'Черновик',Pending:'Ожидает подтверждения',PendingPaid:'Ожидает повторного подтверждения',AwaitingPayment:'Ожидает оплаты',Scheduled:'Запланировано',Publishing:'Публикуется',Published:'Опубликовано',Deleted:'Размещение завершено',DeleteFailed:'Ошибка удаления',PaidReschedule:'Нужно выбрать новое время',Rejected:'Отклонено',Disputed:'Открыт спор',DisputeResolved:'Спор рассмотрен',Cancelled:'Отменено',Expired:'Истекло',EarlyDeletionPending:'Пост удалён раньше срока',PublishFailed:'Не опубликовано',Failed:'Ошибка'};
 const statusName=(status:string)=>orderStatusNames[status]||status;
@@ -94,9 +95,10 @@ export default function WebAccount(){
     <div className="lp-account-panel lp-account-identity"><span className="lp-account-avatar">{(profile.name||profile.username||'T').slice(0,1).toUpperCase()}</span><div><h2>{profile.name||'Пользователь Telegram'}</h2><p>{profile.username?'@'+profile.username:'Аккаунт Telegram'} · ID {profile.telegramId}</p></div><span className="lp-account-plan">{profile.plan}</span></div>
     <div className="lp-account-stats"><div><strong>{profile.channels}</strong><span>Мои каналы</span></div><div><strong>{profile.purchases}</strong><span>Покупки</span></div><div><strong>{profile.sales}</strong><span>Продажи</span></div></div>
     <div className="lp-account-panel"><h2>Тариф {profile.plan}</h2><p>Подключено каналов: {profile.channels} из {profile.channelLimit}.</p>{profile.proUntil&&<p>PRO до {new Date(profile.proUntil).toLocaleDateString('ru-RU')}</p>}<a className="lp-account-textlink" href="/account/plan">Подключить или продлить PRO →</a></div>
-    <div className="lp-dashboard-actions"><a href="/account/channels"><strong>Управление каналами</strong><span>Настройки и рекламные тарифы →</span></a><a href="/account/orders"><strong>Все заказы</strong><span>Покупки, продажи и подтверждения →</span></a><a href="/account/plan"><strong>Тариф и платежи</strong><span>PRO и история оплат →</span></a><a href="/catalog"><strong>Найти рекламу</strong><span>Перейти в каталог площадок →</span></a></div>
+    <div className="lp-dashboard-actions"><a href="/account/channels"><strong>Управление каналами</strong><span>Настройки и рекламные тарифы →</span></a><a href="/account/orders"><strong>Все заказы</strong><span>Покупки, продажи и подтверждения →</span></a><a href="/account/plan"><strong>Тариф и платежи</strong><span>PRO и история оплат →</span></a><a href="/catalog"><strong>Найти рекламу</strong><span>Перейти в каталог площадок →</span></a><a href="#feedback"><strong>Связаться с нами</strong><span>Ошибка, идея или вопрос →</span></a></div>
     
     <div className="lp-account-panel"><div className="lp-dashboard-section-title"><h2>Последние заказы</h2><a href="/account/orders">Все заказы →</a></div>{dashboardStatus==='loading'?<p>Загружаем последние заказы…</p>:dashboardOrders.length? <div className="lp-dashboard-orders">{dashboardOrders.slice(0,5).map(order=><a href="/account/orders" key={order.id}><div><strong>#{order.id} · {order.channel}</strong><span>{order.isOwner?'Продажа':'Покупка'} · {new Date(order.createdAt).toLocaleDateString('ru-RU')}</span></div><div><strong>{rub(order.price)}</strong><span>{statusName(order.status)}</span></div></a>)}</div>:dashboardStatus==='partial'?<p>Не удалось загрузить последние заказы.</p>:<p>Заказов пока нет. Можно начать с <a href="/catalog">каталога Telegram-каналов</a>.</p>}</div>
+     <div className="app embeddedApp"><Feedback/></div>
     </>}
    </div>
   </div>}

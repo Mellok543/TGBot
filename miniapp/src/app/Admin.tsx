@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react';
 import { get, post, put } from './api';
 import { blockText, dateTime, errorText, money } from './format';
-import type { AdminDispute, AdminOrder, AdminOverview, AdminUser, AuditItem, ModerationChannel, MtprotoStatus, PublicationIssue, StaffMember } from './types';
+import { FEEDBACK_KINDS } from './Feedback';
+import type { AdminDispute, AdminFeedback, AdminOrder, AdminOverview, AdminUser, AuditItem, ModerationChannel, MtprotoStatus, PublicationIssue, StaffMember } from './types';
 
-type AdminTab = 'overview' | 'disputes' | 'channels' | 'orders' | 'users' | 'team' | 'audit';
+type AdminTab = 'overview' | 'feedback' | 'disputes' | 'channels' | 'orders' | 'users' | 'team' | 'audit';
 type Sanction = { sanction: 'none' | 'temporary' | 'permanent'; days: string; blockOwner: boolean };
 
 const SERVICE_PRICES = [{ key: 'pro30', label: 'PRO · 30 дней' }, { key: 'promotion7', label: 'Продвижение · 7 дней' }];
@@ -32,6 +33,9 @@ export function Admin({ role }: { role: string | null }) {
   const [prices, setPrices] = useState<Record<string, number>>({});
   const [priceDraft, setPriceDraft] = useState<Record<string, string>>({});
   const [priceNotice, setPriceNotice] = useState('');
+  const [feedback, setFeedback] = useState<AdminFeedback[]>([]);
+  const [replies, setReplies] = useState<Record<number, string>>({});
+  const [feedbackNotice, setFeedbackNotice] = useState('');
 
   async function act(action: () => Promise<void>) {
     setBusy(true);
@@ -51,13 +55,15 @@ export function Admin({ role }: { role: string | null }) {
   };
 
   const load = async () => {
-    const [stats, openDisputes, moderation, publication, servicePrices] = await Promise.all([
+    const [stats, openDisputes, moderation, publication, servicePrices, messages] = await Promise.all([
       get<AdminOverview>('/api/admin/overview'),
       get<AdminDispute[]>('/api/admin/disputes'),
       get<ModerationChannel[]>('/api/admin/channels'),
       get<PublicationIssue[]>('/api/admin/publication-issues'),
-      get<Record<string, number>>('/api/service-prices')
+      get<Record<string, number>>('/api/service-prices'),
+      get<AdminFeedback[]>('/api/admin/feedback')
     ]);
+    setFeedback(messages);
     setOverview(stats);
     setDisputes(openDisputes);
     setChannels(moderation);
@@ -123,8 +129,23 @@ export function Admin({ role }: { role: string | null }) {
     setPriceNotice('Цена сохранена.');
   });
 
+  const answerFeedback = (id: number) => act(async () => {
+    setFeedbackNotice('');
+    const result = await post<{ delivered: boolean }>(`/api/admin/feedback/${id}/reply`, { reply: (replies[id] ?? '').trim() });
+    setFeedbackNotice(result.delivered ? 'Ответ отправлен в Telegram.' : 'Бот не смог отправить ответ, но пользователь увидит его в своём профиле.');
+    setReplies(current => ({ ...current, [id]: '' }));
+    setFeedback(await get<AdminFeedback[]>('/api/admin/feedback'));
+  });
+
+  const closeFeedback = (id: number) => act(async () => {
+    setFeedbackNotice('');
+    await post(`/api/admin/feedback/${id}/close`);
+    setFeedback(await get<AdminFeedback[]>('/api/admin/feedback'));
+  });
+
   const tabs: { id: AdminTab; label: string }[] = [
     { id: 'disputes', label: `Споры (${disputes.filter(d => d.status === 'Disputed').length})` },
+    { id: 'feedback', label: `Обращения (${feedback.filter(f => f.status === 'new').length})` },
     { id: 'overview', label: 'Обзор' },
     { id: 'channels', label: 'Каналы' },
     { id: 'orders', label: 'Заказы' },
@@ -152,6 +173,25 @@ export function Admin({ role }: { role: string | null }) {
         </div>)}
         {priceNotice && <p className="hint">{priceNotice}</p>}
       </section>}
+    </>}
+
+    {tab === 'feedback' && <>
+      {feedbackNotice && <div className="notice success" role="status">{feedbackNotice}</div>}
+      {feedback.length === 0 && <p>Обращений нет.</p>}
+      {feedback.map(f => <article className="card" key={f.id}>
+        <strong>#{f.id} · {FEEDBACK_KINDS[f.kind] ?? f.kind}</strong>
+        <p className="hint">{f.name || 'Пользователь'} · {f.username ? '@' + f.username + ' · ' : ''}{f.userId} · {dateTime(f.createdAt)}</p>
+        <p className="description">{f.message}</p>
+        {f.reply && <p className="feedbackReply"><strong>Ответ:</strong> {f.reply}</p>}
+        {f.status === 'closed' && <p className="hint">Закрыто без ответа</p>}
+        {f.status === 'new' && <>
+          <label className="field">Ответ<textarea rows={3} maxLength={2000} value={replies[f.id] ?? ''} onChange={e => { const reply = e.target.value; setReplies(r => ({ ...r, [f.id]: reply })); }}/></label>
+          <div className="orderActions">
+            <button className="primary small" disabled={busy || !(replies[f.id] ?? '').trim()} onClick={() => void answerFeedback(f.id)}>Ответить</button>
+            <button className="secondary small" disabled={busy} onClick={() => void closeFeedback(f.id)}>Закрыть без ответа</button>
+          </div>
+        </>}
+      </article>)}
     </>}
 
     {tab === 'disputes' && <>

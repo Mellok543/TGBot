@@ -88,4 +88,6 @@ export type ModerationChannel = { id: number; title: string; category: string; l
 export type MtprotoStatus = { configured: boolean; checkedOrders: number; present: number; missing: number; lastCheck: string | null; healthy: boolean };
 export type PublicationIssue = { id: number; channel: string; status: string; error: string; scheduledAt: string | null; publishedAt: string | null };
 export type AdminOverview = { channels: number; listed: number; orders: number; openDisputes: number; failedPublications: number };
+export type FeedbackItem = { id: number; kind: string; message: string; status: string; reply: string | null; createdAt: string };
+export type AdminFeedback = FeedbackItem & { userId: number; name: string | null; username: string | null };
 export type AdminDispute = { id: number; channel: string; price: number; text: string; reason: string; openedAt: string | null; status: string; resolution: string | null; paymentStatus: string };

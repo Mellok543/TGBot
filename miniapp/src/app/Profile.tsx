@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { webApp } from './telegram';
 import type { Me, Order, Subscription } from './types';
 import { Admin } from './Admin';
+import { Feedback } from './Feedback';
 import { PlanCard } from './PlanCard';
 import { HowItWorks } from './Welcome';
 
@@ -38,9 +39,10 @@ export function Profile({ me, orders, subscription, onSubscriptionChange }: {
 
     <details className="card aboutPanel"><summary>Как работает Reklio</summary><HowItWorks/></details>
 
+    <Feedback/>
+
     <section className="card">
-      <h3>Помощь</h3>
-      <p className="description">Вопросы и проблемы: support@reklio.site. В письме укажите номер заказа или ваш Telegram ID{me ? `: ${me.id}` : ''}.</p>
+      <h3>Документы</h3>
       <p className="hint">
         <a href="https://reklio.site/terms" target="_blank" rel="noopener noreferrer">Оферта</a> · <a href="https://reklio.site/advertising-rules" target="_blank" rel="noopener noreferrer">Правила размещения</a> · <a href="https://reklio.site/privacy" target="_blank" rel="noopener noreferrer">Конфиденциальность</a>
       </p>

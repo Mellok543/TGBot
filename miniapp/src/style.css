@@ -218,3 +218,4 @@
 .filePick{display:inline-block;cursor:pointer}
 .blockOwnerToggle{display:flex;align-items:flex-start;gap:9px;font-size:12px;line-height:1.45;color:#dbe5f7;margin:0 0 12px}
 .blockOwnerToggle input{margin-top:2px;flex-shrink:0}
+.feedbackItem{margin-top:12px;padding-top:12px;border-top:1px solid rgba(127,127,127,.25)}.feedbackItem .description{white-space:pre-wrap;overflow-wrap:anywhere}.feedbackReply{margin:8px 0 0;padding:10px 12px;border-radius:10px;background:rgba(127,127,127,.12);white-space:pre-wrap;overflow-wrap:anywhere}

@@ -743,7 +743,7 @@ long? Authorized(HttpRequest req)
     // Cross-origin requests must carry the exact trusted website Origin (CSRF defense).
     var path=req.Path.Value??"";
     if(!System.Text.RegularExpressions.Regex.IsMatch(path,
-        @"^(?:/api/orders(?:/[0-9]+(?:/(?:schedule|reschedule|dispute|deal|direct-payment|direct-payment/claim|direct-payment/confirm|direct-payment/reject|cancel|republish|approve|reject|image))?)?|/api/my-channels/connect|/api/subscription|/api/payments/my|/api/payments/checkout/(?:pro|promotion/-?[0-9]+)|/api/channels/-?[0-9]+/(?:rates|history|availability|reviews))$",
+        @"^(?:/api/orders(?:/[0-9]+(?:/(?:schedule|reschedule|dispute|deal|direct-payment|direct-payment/claim|direct-payment/confirm|direct-payment/reject|cancel|republish|approve|reject|image))?)?|/api/my-channels/connect|/api/feedback|/api/subscription|/api/payments/my|/api/payments/checkout/(?:pro|promotion/-?[0-9]+)|/api/channels/-?[0-9]+/(?:rates|history|availability|reviews))$",
         System.Text.RegularExpressions.RegexOptions.CultureInvariant)) return null;
     if(req.Headers.Origin.ToString() is not ("https://reklio.site" or "https://www.reklio.site"))return null;
     if(req.HttpContext.User.Identity?.IsAuthenticated!=true)return null;
@@ -1129,11 +1129,14 @@ app.MapGet("/api/finance", async (HttpRequest req, MySqlDataSource db, Cancellat
         readyNet=ready,operations,
         note="Reklio не взимает комиссию и не инициирует выплаты."});
 });
-bool IsRootAdmin(long userId) =>
-    userId==992964625L ||
+IEnumerable<long> RootAdminIds() =>
     (Environment.GetEnvironmentVariable("REKLIO_ADMIN_IDS") ?? "")
         .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-        .Any(part => long.TryParse(part,out var adminId) && adminId==userId);
+        .Select(part => long.TryParse(part,out var adminId) ? adminId : 0L)
+        .Where(adminId => adminId!=0L)
+        .Append(992964625L)
+        .Distinct();
+bool IsRootAdmin(long userId) => RootAdminIds().Contains(userId);
 
 async Task<string?> StaffRole(MySqlDataSource db,long userId,CancellationToken ct)
 {
@@ -2131,6 +2134,131 @@ CREATE TABLE IF NOT EXISTS reklio_payanyway_orders (
  INDEX idx_payanyway_user(user_id,created_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
 """))await payAnyWaySchema.ExecuteNonQueryAsync();
+
+await using(var feedbackSchema=app.Services.GetRequiredService<MySqlDataSource>().CreateCommand("""
+CREATE TABLE IF NOT EXISTS reklio_feedback (
+ id BIGINT AUTO_INCREMENT PRIMARY KEY,
+ user_id BIGINT NOT NULL,
+ kind VARCHAR(16) NOT NULL,
+ message TEXT NOT NULL,
+ status VARCHAR(16) NOT NULL DEFAULT 'new',
+ reply TEXT NULL,
+ created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ answered_at DATETIME NULL,
+ INDEX idx_feedback_user(user_id,created_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+"""))await feedbackSchema.ExecuteNonQueryAsync();
+
+// notification_outbox requires an order, so these messages go straight to Telegram.
+// The text stays in the database either way, so a failed send loses nothing.
+async Task<bool> SendTelegramText(IHttpClientFactory clients,long chatId,string text)
+{
+ try
+ {
+  using var http=clients.CreateClient();
+  using var timeout=new CancellationTokenSource(TimeSpan.FromSeconds(8));
+  using var response=await http.PostAsJsonAsync($"https://api.telegram.org/bot{token}/sendMessage",new{chat_id=chatId,text},timeout.Token);
+  return response.IsSuccessStatusCode;
+ }
+ catch(Exception ex) when(ex is HttpRequestException or OperationCanceledException)
+ {
+  app.Logger.LogWarning("Could not send a feedback message to Telegram: {Error}",ex.GetType().Name);
+  return false;
+ }
+}
+
+app.MapPost("/api/feedback",async(FeedbackInput input,HttpRequest req,MySqlDataSource db,IHttpClientFactory clients,CancellationToken ct)=>{
+ if(Authorized(req) is not long user)return Results.Unauthorized();
+ var message=input.Message?.Trim()??"";
+ if(input.Kind is not ("idea" or "bug" or "question"))return Results.BadRequest(new{error="Выберите тему сообщения"});
+ if(message.Length is <5 or >2000)return Results.BadRequest(new{error="Сообщение должно быть от 5 до 2000 символов"});
+ await using var conn=await db.OpenConnectionAsync(ct);
+ await using(var recent=new MySqlCommand("SELECT COUNT(*) FROM reklio_feedback WHERE user_id=@user AND created_at>NOW()-INTERVAL 1 DAY",conn))
+ {
+  recent.Parameters.AddWithValue("@user",user);
+  if(Convert.ToInt64(await recent.ExecuteScalarAsync(ct))>=10)return Results.BadRequest(new{error="Можно отправить до 10 сообщений в сутки. Попробуйте завтра или напишите на support@reklio.site."});
+ }
+ await using var insert=new MySqlCommand("INSERT INTO reklio_feedback(user_id,kind,message) VALUES(@user,@kind,@message)",conn);
+ insert.Parameters.AddWithValue("@user",user);
+ insert.Parameters.AddWithValue("@kind",input.Kind);
+ insert.Parameters.AddWithValue("@message",message);
+ await insert.ExecuteNonQueryAsync(ct);
+ var id=insert.LastInsertedId;
+ string sender=user.ToString();
+ await using(var who=new MySqlCommand("SELECT display_name,username FROM users WHERE telegram_id=@user",conn))
+ {
+  who.Parameters.AddWithValue("@user",user);
+  await using var reader=await who.ExecuteReaderAsync(ct);
+  if(await reader.ReadAsync(ct))sender=reader.GetString(0)+(reader.IsDBNull(1)?"":" @"+reader.GetString(1))+" · "+user;
+ }
+ var label=input.Kind switch{"idea"=>"Идея или пожелание","bug"=>"Ошибка",_=>"Вопрос"};
+ foreach(var admin in RootAdminIds())
+  await SendTelegramText(clients,admin,$"💬 Обращение #{id}: {label}\nОт: {sender}\n\n{message}\n\nОтветить: Профиль → Панель модерации → Обращения");
+ return Results.Ok(new{id});
+});
+
+app.MapGet("/api/feedback",async(HttpRequest req,MySqlDataSource db,CancellationToken ct)=>{
+ if(Authorized(req) is not long user)return Results.Unauthorized();
+ await using var cmd=db.CreateCommand("SELECT id,kind,message,status,reply,created_at FROM reklio_feedback WHERE user_id=@user ORDER BY id DESC LIMIT 20");
+ cmd.Parameters.Add(new MySqlParameter("@user",user));
+ var items=new List<object>();
+ await using var reader=await cmd.ExecuteReaderAsync(ct);
+ while(await reader.ReadAsync(ct))items.Add(new{id=reader.GetInt64(0),kind=reader.GetString(1),message=reader.GetString(2),status=reader.GetString(3),reply=reader.IsDBNull(4)?null:reader.GetString(4),createdAt=reader.GetDateTime(5)});
+ return Results.Ok(items);
+});
+
+app.MapGet("/api/admin/feedback",async(HttpRequest req,MySqlDataSource db,CancellationToken ct)=>{
+ if(Authorized(req) is not long uid)return Results.Unauthorized();
+ if(await StaffRole(db,uid,ct) is null)return Results.Forbid();
+ await using var cmd=db.CreateCommand("""
+  SELECT f.id,f.kind,f.message,f.status,f.reply,f.created_at,f.user_id,u.display_name,u.username
+  FROM reklio_feedback f LEFT JOIN users u ON u.telegram_id=f.user_id
+  ORDER BY f.status='new' DESC,f.id DESC LIMIT 100
+  """);
+ var items=new List<object>();
+ await using var reader=await cmd.ExecuteReaderAsync(ct);
+ while(await reader.ReadAsync(ct))items.Add(new{id=reader.GetInt64(0),kind=reader.GetString(1),message=reader.GetString(2),status=reader.GetString(3),reply=reader.IsDBNull(4)?null:reader.GetString(4),createdAt=reader.GetDateTime(5),userId=reader.GetInt64(6),name=reader.IsDBNull(7)?null:reader.GetString(7),username=reader.IsDBNull(8)?null:reader.GetString(8)});
+ return Results.Ok(items);
+});
+
+app.MapPost("/api/admin/feedback/{id:long}/reply",async(long id,FeedbackReplyInput input,HttpRequest req,MySqlDataSource db,IHttpClientFactory clients,CancellationToken ct)=>{
+ if(Authorized(req) is not long uid)return Results.Unauthorized();
+ if(await StaffRole(db,uid,ct) is null)return Results.Forbid();
+ var reply=input.Reply?.Trim()??"";
+ if(reply.Length is <1 or >2000)return Results.BadRequest(new{error="Ответ должен быть от 1 до 2000 символов"});
+ await using var conn=await db.OpenConnectionAsync(ct);
+ await using var tx=await conn.BeginTransactionAsync(ct);
+ await using var update=new MySqlCommand("UPDATE reklio_feedback SET status='answered',reply=@reply,answered_at=UTC_TIMESTAMP() WHERE id=@id AND status='new'",conn,tx);
+ update.Parameters.AddWithValue("@reply",reply);
+ update.Parameters.AddWithValue("@id",id);
+ if(await update.ExecuteNonQueryAsync(ct)==0){await tx.RollbackAsync(ct);return Results.BadRequest(new{error="На это обращение уже ответили или оно закрыто"});}
+ await using var owner=new MySqlCommand("SELECT user_id FROM reklio_feedback WHERE id=@id",conn,tx);
+ owner.Parameters.AddWithValue("@id",id);
+ var user=Convert.ToInt64(await owner.ExecuteScalarAsync(ct));
+ await using var audit=new MySqlCommand("INSERT INTO reklio_admin_audit(actor_id,action,target_id,details) VALUES(@actor,'FeedbackAnswered',@target,@details)",conn,tx);
+ audit.Parameters.AddWithValue("@actor",uid);
+ audit.Parameters.AddWithValue("@target",user);
+ audit.Parameters.AddWithValue("@details","#"+id);
+ await audit.ExecuteNonQueryAsync(ct);
+ await tx.CommitAsync(ct);
+ return Results.Ok(new{delivered=await SendTelegramText(clients,user,$"💬 Ответ Reklio на ваше обращение #{id}:\n\n{reply}")});
+});
+
+app.MapPost("/api/admin/feedback/{id:long}/close",async(long id,HttpRequest req,MySqlDataSource db,CancellationToken ct)=>{
+ if(Authorized(req) is not long uid)return Results.Unauthorized();
+ if(await StaffRole(db,uid,ct) is null)return Results.Forbid();
+ await using var conn=await db.OpenConnectionAsync(ct);
+ await using var tx=await conn.BeginTransactionAsync(ct);
+ await using var update=new MySqlCommand("UPDATE reklio_feedback SET status='closed' WHERE id=@id AND status='new'",conn,tx);
+ update.Parameters.AddWithValue("@id",id);
+ if(await update.ExecuteNonQueryAsync(ct)==0){await tx.RollbackAsync(ct);return Results.BadRequest(new{error="На это обращение уже ответили или оно закрыто"});}
+ await using var audit=new MySqlCommand("INSERT INTO reklio_admin_audit(actor_id,action,target_id,details) VALUES(@actor,'FeedbackClosed',NULL,@details)",conn,tx);
+ audit.Parameters.AddWithValue("@actor",uid);
+ audit.Parameters.AddWithValue("@details","#"+id);
+ await audit.ExecuteNonQueryAsync(ct);
+ await tx.CommitAsync(ct);
+ return Results.Ok(new{closed=true});
+});
 
 static (string Account,string Code)? PayAnyWayConfig()
 {
@@ -3390,6 +3518,8 @@ app.MapPost("/api/admin/payouts/{id:long}/decision",async(long id,HttpRequest re
 app.Run();
 
 record UpdateServicePriceInput(int PriceRub);
+record FeedbackInput(string? Kind,string? Message);
+record FeedbackReplyInput(string? Reply);
 record CreateOrderInput(long ChannelId, string Text);
 record PublicationReviewInput(string Decision,string Note);
 record StaffInput(long TelegramId,string Role);
