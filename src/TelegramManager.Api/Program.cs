@@ -27,13 +27,23 @@ builder.Services.AddRateLimiter(options =>
     options.GlobalLimiter=PartitionedRateLimiter.Create<HttpContext,string>(context =>
     {
         var path=context.Request.Path.Value??"";
+        // Signed provider deliveries must not compete with the shared per-IP bucket.
+        if(path=="/api/payments/payanyway/notification")
+            return RateLimitPartition.GetFixedWindowLimiter("payanyway-notification",_=>new FixedWindowRateLimiterOptions
+            {
+                PermitLimit=300,Window=TimeSpan.FromMinutes(1),
+                QueueLimit=0,AutoReplenishment=true
+            });
         // Keep health checks and YooKassa callbacks available during traffic spikes.
         if(path=="/api/health")
             return RateLimitPartition.GetNoLimiter("health-or-webhook");
         var identity=context.User.FindFirst("id")?.Value;
         var ip=context.Connection.RemoteIpAddress?.ToString()??"unknown";
         var key=(identity is null?"ip:"+ip:"user:"+identity)+
-            (path=="/api/my-channels/connect"?":connect":path.StartsWith("/api/orders/")&&path.EndsWith("/payment")?":payment":":general");
+            // A limiter's options are fixed by the first request for its key, so each limit needs its own key.
+            (path=="/api/my-channels/connect"?":connect":path.StartsWith("/api/auth/")?":auth":
+             path=="/api/payments/yookassa/notification"?":webhook":
+             path.StartsWith("/api/orders/")&&path.EndsWith("/payment")?":payment":":general");
         var isSensitive=path=="/api/my-channels/connect"||path.StartsWith("/api/auth/");
         var isWebhook=path=="/api/payments/yookassa/notification";
         return RateLimitPartition.GetFixedWindowLimiter(key,_=>new FixedWindowRateLimiterOptions
@@ -1917,6 +1927,176 @@ app.MapPost("/api/tribute/promotions/confirm/{orderUuid:guid}",async(Guid orderU
  }catch(HttpRequestException){return Results.Problem("Tribute verification failed",statusCode:502);}
 });
 
+// PayAnyWay sells Reklio's own services. Only the signed Pay URL notification proves a payment:
+// the buyer can edit the form amount, so the amount, currency and mode are checked against the order too.
+await using(var payAnyWaySchema=app.Services.GetRequiredService<MySqlDataSource>().CreateCommand("""
+CREATE TABLE IF NOT EXISTS reklio_payanyway_orders (
+ transaction_id CHAR(36) NOT NULL PRIMARY KEY,
+ user_id BIGINT NOT NULL,
+ product VARCHAR(32) NOT NULL,
+ channel_id BIGINT NULL,
+ days INT NOT NULL,
+ amount_rub DECIMAL(10,2) NOT NULL,
+ test_mode BOOLEAN NOT NULL,
+ status VARCHAR(16) NOT NULL DEFAULT 'pending',
+ operation_id VARCHAR(64) NULL,
+ created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ paid_at DATETIME NULL,
+ INDEX idx_payanyway_user(user_id,created_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+"""))await payAnyWaySchema.ExecuteNonQueryAsync();
+
+static (string Account,string Code)? PayAnyWayConfig()
+{
+ var account=Environment.GetEnvironmentVariable("PAYANYWAY_ACCOUNT_ID");
+ var code=Environment.GetEnvironmentVariable("PAYANYWAY_INTEGRITY_CODE");
+ return string.IsNullOrWhiteSpace(account)||string.IsNullOrWhiteSpace(code)?null:(account,code);
+}
+
+// The price is read on the server and never supplied by the client.
+static async Task<IResult> PayAnyWayCheckout(MySqlDataSource db,long userId,string product,long? channelId,int days,string description,CancellationToken ct)
+{
+ if(PayAnyWayConfig() is not {} config)return Results.Problem("Оплата временно недоступна",statusCode:503);
+ decimal amount;
+ await using(var priceCmd=db.CreateCommand("SELECT price_rub FROM reklio_service_prices WHERE service_key=@key"))
+ {
+  priceCmd.Parameters.Add(new MySqlParameter("@key",product));
+  amount=Convert.ToDecimal(await priceCmd.ExecuteScalarAsync(ct));
+ }
+ var transactionId=Guid.NewGuid().ToString("D");
+ var testMode=Environment.GetEnvironmentVariable("PAYANYWAY_TEST_MODE")=="1";
+ await using var save=db.CreateCommand("""
+  INSERT INTO reklio_payanyway_orders(transaction_id,user_id,product,channel_id,days,amount_rub,test_mode)
+  VALUES(@id,@user,@product,@channel,@days,@amount,@test)
+  """);
+ save.Parameters.Add(new MySqlParameter("@id",transactionId));
+ save.Parameters.Add(new MySqlParameter("@user",userId));
+ save.Parameters.Add(new MySqlParameter("@product",product));
+ save.Parameters.Add(new MySqlParameter("@channel",(object?)channelId??DBNull.Value));
+ save.Parameters.Add(new MySqlParameter("@days",days));
+ save.Parameters.Add(new MySqlParameter("@amount",amount));
+ save.Parameters.Add(new MySqlParameter("@test",testMode));
+ await save.ExecuteNonQueryAsync(ct);
+ return Results.Ok(new{orderUuid=transactionId,paymentUrl=Reklio.Payments.PayAnyWay.PaymentUrl(
+   config.Account,config.Code,transactionId,amount,userId,testMode,description,"https://reklio.site/profile")});
+}
+
+app.MapPost("/api/payments/checkout/pro",async(HttpRequest req,MySqlDataSource db,CancellationToken ct)=>
+{
+ if(Authorized(req) is not long userId)return Results.Unauthorized();
+ return await PayAnyWayCheckout(db,userId,"pro30",null,30,"Reklio Pro, доступ на 30 дней",ct);
+});
+app.MapPost("/api/payments/checkout/promotion/{channelId:long}",async(long channelId,HttpRequest req,MySqlDataSource db,CancellationToken ct)=>
+{
+ if(Authorized(req) is not long owner)return Results.Unauthorized();
+ await using(var check=db.CreateCommand("SELECT COUNT(*) FROM channels WHERE telegram_id=@id AND connected_by=@owner"))
+ {
+  check.Parameters.Add(new MySqlParameter("@id",channelId));
+  check.Parameters.Add(new MySqlParameter("@owner",owner));
+  if(Convert.ToInt64(await check.ExecuteScalarAsync(ct))==0)return Results.NotFound();
+ }
+ return await PayAnyWayCheckout(db,owner,"promotion7",channelId,7,"Продвижение канала в каталоге Reklio на 7 дней",ct);
+});
+// Abandoned checkouts stay payable, but they are hidden from the history after a day.
+app.MapGet("/api/payments/my",async(HttpRequest req,MySqlDataSource db,CancellationToken ct)=>
+{
+ if(Authorized(req) is not long userId)return Results.Unauthorized();
+ await using var cmd=db.CreateCommand("""
+  SELECT transaction_id,product,channel_id,amount_rub,status,created_at,paid_at
+  FROM reklio_payanyway_orders
+  WHERE user_id=@user AND (status<>'pending' OR created_at>UTC_TIMESTAMP()-INTERVAL 1 DAY)
+  ORDER BY created_at DESC LIMIT 20
+  """);
+ cmd.Parameters.Add(new MySqlParameter("@user",userId));
+ var result=new List<object>();
+ await using var reader=await cmd.ExecuteReaderAsync(ct);
+ while(await reader.ReadAsync(ct))result.Add(new{orderUuid=reader.GetString(0),product=reader.GetString(1),
+   channelId=reader.IsDBNull(2)?(long?)null:reader.GetInt64(2),amountKopecks=decimal.ToInt64(reader.GetDecimal(3)*100),
+   status=reader.GetString(4),createdAt=reader.GetDateTime(5),appliedAt=reader.IsDBNull(6)?(DateTime?)null:reader.GetDateTime(6)});
+ return Results.Ok(result);
+});
+// Replying FAIL makes the provider retry for 24 hours, so it is used only when a retry can help.
+app.MapMethods("/api/payments/payanyway/notification",new[]{"GET","POST"},async(HttpRequest req,MySqlDataSource db,CancellationToken ct)=>
+{
+ if(req.ContentLength>65536)return Results.StatusCode(413);
+ if(PayAnyWayConfig() is not {} config)return Results.Text("FAIL",statusCode:503);
+ var form=req.HasFormContentType?await req.ReadFormAsync(ct):null;
+ string Param(string name)=>(form is null?req.Query[name]:form[name]).ToString();
+ var transactionId=Param("MNT_TRANSACTION_ID");
+ var operationId=Param("MNT_OPERATION_ID");
+ var currency=Param("MNT_CURRENCY_CODE");
+ var subscriber=Param("MNT_SUBSCRIBER_ID");
+ var testFlag=Param("MNT_TEST_MODE")=="1"?"1":"0";
+ if(Param("MNT_ID")!=config.Account||transactionId.Length is 0 or >64||operationId.Length>64||
+    !decimal.TryParse(Param("MNT_AMOUNT"),System.Globalization.NumberStyles.Number,System.Globalization.CultureInfo.InvariantCulture,out var paid)||
+    !Reklio.Payments.PayAnyWay.IsValidNotification(config.Account,config.Code,transactionId,operationId,
+      Reklio.Payments.PayAnyWay.Amount(paid),currency,subscriber,testFlag,Param("MNT_SIGNATURE")))
+  return Results.Text("FAIL",statusCode:400);
+ await using var conn=await db.OpenConnectionAsync(ct);
+ await using var tx=await conn.BeginTransactionAsync(ct);
+ long buyer=0;long? channel=null;string? product=null;int days=0;decimal amount=0m;bool orderTest=false;string? state=null;
+ await using(var find=new MySqlCommand("""
+  SELECT user_id,product,channel_id,days,amount_rub,test_mode,status
+  FROM reklio_payanyway_orders WHERE transaction_id=@id FOR UPDATE
+  """,conn,tx))
+ {
+  find.Parameters.AddWithValue("@id",transactionId);
+  await using var reader=await find.ExecuteReaderAsync(ct);
+  if(await reader.ReadAsync(ct))
+  {
+   buyer=reader.GetInt64(0);product=reader.GetString(1);channel=reader.IsDBNull(2)?null:reader.GetInt64(2);
+   days=reader.GetInt32(3);amount=reader.GetDecimal(4);orderTest=reader.GetBoolean(5);state=reader.GetString(6);
+  }
+ }
+ if(state is null)app.Logger.LogError("PayAnyWay paid unknown order {TransactionId}, operation {OperationId}",transactionId,operationId);
+ if(state!="pending")
+ {
+  await tx.RollbackAsync(ct);
+  return Results.Text("SUCCESS");
+ }
+ var matches=paid==amount&&currency=="RUB"&&subscriber==buyer.ToString()&&(testFlag=="1")==orderTest;
+ if(matches&&product=="pro30")
+ {
+  // A buyer may pay before the bot has registered this account.
+  await using var register=new MySqlCommand("INSERT IGNORE INTO users(telegram_id,display_name) VALUES(@user,@name)",conn,tx);
+  register.Parameters.AddWithValue("@user",buyer);
+  register.Parameters.AddWithValue("@name",buyer.ToString());
+  await register.ExecuteNonQueryAsync(ct);
+  await using var extend=new MySqlCommand("""
+   UPDATE users SET subscription_until=DATE_ADD(
+     GREATEST(COALESCE(subscription_until,UTC_TIMESTAMP()),UTC_TIMESTAMP()),INTERVAL @days DAY)
+   WHERE telegram_id=@user
+   """,conn,tx);
+  extend.Parameters.AddWithValue("@user",buyer);
+  extend.Parameters.AddWithValue("@days",days);
+  await extend.ExecuteNonQueryAsync(ct);
+ }
+ else if(matches&&product=="promotion7"&&channel is long promotedChannel)
+ {
+  await using var promote=new MySqlCommand("""
+   INSERT INTO channel_promotions(channel_id,active_until)
+   VALUES(@channel,DATE_ADD(UTC_TIMESTAMP(),INTERVAL @days DAY))
+   ON DUPLICATE KEY UPDATE active_until=DATE_ADD(GREATEST(active_until,UTC_TIMESTAMP()),INTERVAL @days DAY)
+   """,conn,tx);
+  promote.Parameters.AddWithValue("@channel",promotedChannel);
+  promote.Parameters.AddWithValue("@days",days);
+  await promote.ExecuteNonQueryAsync(ct);
+ }
+ else matches=false;
+ await using var mark=new MySqlCommand("""
+  UPDATE reklio_payanyway_orders SET status=@status,operation_id=@operation,paid_at=UTC_TIMESTAMP()
+  WHERE transaction_id=@id
+  """,conn,tx);
+ mark.Parameters.AddWithValue("@status",matches?"paid":"review");
+ mark.Parameters.AddWithValue("@operation",operationId);
+ mark.Parameters.AddWithValue("@id",transactionId);
+ await mark.ExecuteNonQueryAsync(ct);
+ await tx.CommitAsync(ct);
+ if(matches)app.Logger.LogInformation("Applied PayAnyWay order {TransactionId}",transactionId);
+ else app.Logger.LogError("PayAnyWay order {TransactionId} needs manual review: paid {Paid} {Currency}, expected {Amount} RUB",transactionId,paid,currency,amount);
+ return Results.Text("SUCCESS");
+});
+
 app.MapGet("/api/subscription", async (HttpRequest req,MySqlDataSource db,CancellationToken ct) =>
 {
     if(Authorized(req) is not long userId)return Results.Unauthorized();
@@ -1928,7 +2108,7 @@ app.MapGet("/api/subscription", async (HttpRequest req,MySqlDataSource db,Cancel
     decimal price=399m;
     await using(var priceCmd=db.CreateCommand("SELECT price_rub FROM reklio_service_prices WHERE service_key='pro30'"))price=Convert.ToDecimal(await priceCmd.ExecuteScalarAsync(ct));
     return Results.Ok(new {plan=isPro?"PRO":"FREE",isPro,expiresAt=isPro?expiry:null,channelLimit=isPro?10:1,commissionPercent=isPro?2.5m:5m,fullAnalytics=isPro,
-        proPriceRub=price,checkoutAvailable=!string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("TRIBUTE_API_KEY")),checkoutMessage="Оплата через Tribute"});
+        proPriceRub=price,checkoutAvailable=PayAnyWayConfig() is not null,checkoutMessage="Оплата временно недоступна"});
 });
 // Custom, unique channel links are stored separately from Telegram channel IDs.
 await using (var aliasDb=app.Services.GetRequiredService<MySqlDataSource>().CreateCommand("""
