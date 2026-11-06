@@ -815,8 +815,8 @@ public sealed class BotHandlers(Database database)
             case "subscription_status":
                 var plan = await database.GetPlanAsync(actor.Id, ct);
                 var planText = plan.Pro
-                    ? $"PRO действует до {plan.ProEnds!.Value.Add(DisplayOffset):dd.MM.yyyy HH:mm} (UTC+3).\\nДо 10 каналов, расширенная статистика, комиссия 2,5%."
-                    : "FREE: 1 канал без ограничения по времени, базовая статистика, комиссия 5%.\\nPRO: до 10 каналов, расширенная статистика, комиссия 2,5%.";
+                    ? $"PRO действует до {plan.ProEnds!.Value.Add(DisplayOffset):dd.MM.yyyy HH:mm} (UTC+3).\\nДо 10 каналов, расширенная статистика."
+                    : "FREE: 1 канал без ограничения по времени, базовая статистика.\\nPRO: до 10 каналов, расширенная статистика.";
                 await bot.EditMessageText(origin.Chat.Id, origin.MessageId, planText,
                     replyMarkup:Home(), cancellationToken: ct);
                 break;

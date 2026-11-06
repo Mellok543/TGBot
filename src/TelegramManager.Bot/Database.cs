@@ -375,7 +375,7 @@ public sealed class Database(string connectionString) : IAsyncDisposable
 
     public async Task<bool> SetChannelListedAsync(long id, long owner, bool listed, CancellationToken ct)
     {
-        await using var cmd = _source.CreateCommand("UPDATE channels c JOIN users u ON u.telegram_id=c.connected_by SET c.is_listed=@listed WHERE c.telegram_id=@id AND c.connected_by=@owner AND (@listed=FALSE OR (u.subscription_until>UTC_TIMESTAMP() OR u.pro_granted_until>UTC_TIMESTAMP()) OR (u.first_channel_at IS NULL OR u.first_channel_at>UTC_TIMESTAMP()-INTERVAL 30 DAY))");
+        await using var cmd = _source.CreateCommand("UPDATE channels c JOIN users u ON u.telegram_id=c.connected_by SET c.is_listed=@listed WHERE c.telegram_id=@id AND c.connected_by=@owner AND (@listed=FALSE OR (((u.subscription_until>UTC_TIMESTAMP() OR u.pro_granted_until>UTC_TIMESTAMP()) OR (u.first_channel_at IS NULL OR u.first_channel_at>UTC_TIMESTAMP()-INTERVAL 30 DAY)) AND NOT EXISTS(SELECT 1 FROM reklio_channel_blocks b WHERE b.channel_id=c.telegram_id AND (b.blocked_until IS NULL OR b.blocked_until>UTC_TIMESTAMP()))))");
         cmd.Parameters.Add(new MySqlParameter("@listed", listed));
         cmd.Parameters.Add(new MySqlParameter("@id", id));
         cmd.Parameters.Add(new MySqlParameter("@owner", owner));
@@ -577,7 +577,7 @@ public sealed class Database(string connectionString) : IAsyncDisposable
                 published_message_id=NULL,published_at=NULL,
                 payout_status=IF(is_test_order=TRUE,'NotEligible','Blocked')
             WHERE id=@order AND owner_id=@owner AND status='EarlyDeletionPending'
-              AND paid_confirmed=TRUE AND payment_status IN ('Paid','TestPaid')
+              AND paid_confirmed=TRUE AND payment_status IN ('Paid','TestPaid','DirectPaid')
             """ : """
             UPDATE ad_requests
             SET status='Disputed',dispute_reason='Досрочное удаление рекламной публикации',
@@ -592,6 +592,10 @@ public sealed class Database(string connectionString) : IAsyncDisposable
             await using var reset=new MySqlCommand("DELETE FROM reklio_post_monitor WHERE order_id=@order",connection,tx);
             reset.Parameters.AddWithValue("@order",orderId);
             await reset.ExecuteNonQueryAsync(ct);
+            // The API's publication worker claims an order only once, so the old attempt has to go.
+            await using var attempt=new MySqlCommand("DELETE FROM reklio_publications WHERE order_id=@order",connection,tx);
+            attempt.Parameters.AddWithValue("@order",orderId);
+            await attempt.ExecuteNonQueryAsync(ct);
         }
         await using var audit=new MySqlCommand("""
             INSERT INTO ad_order_events(order_id,actor_id,event_type,details)

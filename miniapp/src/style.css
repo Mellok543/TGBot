@@ -28,7 +28,6 @@
 
 .sellerDashboard{border:1px solid #355075;background:#18263b;border-radius:16px;padding:15px;margin:0 0 16px}.sellerDashboard h3{font-size:16px;margin:0 0 14px}.dashboardGrid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px}.dashboardGrid>div{background:#25364f;border-radius:12px;padding:13px 10px;display:flex;flex-direction:column;gap:8px;min-width:0}.dashboardGrid small{font-size:11px;color:#a5b8d2}.dashboardGrid strong{font-size:18px;color:#f3f7ff;overflow-wrap:anywhere}.sellerDashboard>p{font-size:11px;color:#91a4bd;line-height:1.5;margin:14px 0 0}
 
-.dealTimeline{margin-top:16px;border-top:1px solid #40516b;padding-top:14px}.dealTimeline>strong{display:block;color:#e4efff;margin-bottom:12px}.dealStep{display:flex;align-items:center;gap:10px;margin:10px 0;color:#93a5bc}.dealStep>span{display:grid;place-items:center;flex:0 0 25px;height:25px;border-radius:50%;border:1px solid #536783;font-size:12px}.dealStep.done>span{background:#2b6c58;border-color:#49a481;color:#f1fff8}.dealStep.done{color:#e6f5ed}.dealStep small{font-size:12px}.dealTimeline>p{background:#283b55;border-radius:10px;padding:10px;margin:15px 0;color:#e7eeff;font-size:12px}.dealTimeline>small{font-size:11px;color:#8fa0b8}
 
 .aboutTrigger{display:flex;align-items:center;justify-content:space-between;width:100%;border:1px solid #42618a;background:linear-gradient(110deg,#233956,#1a304b);border-radius:13px;color:#eaf2ff;font-weight:700;font-size:13px;padding:13px 15px;margin-top:18px;text-align:left}.aboutTrigger span{font-size:20px;color:#96c4ff}.aboutPanel{line-height:1.55}.aboutPanel h3{margin:25px 0 10px;font-size:16px;color:#e9f2ff}.aboutHero{background:linear-gradient(145deg,#243e62,#192a42);padding:22px 18px;border-radius:16px;border:1px solid #476389}.aboutHero h2{font-size:23px;margin:10px 0}.aboutHero p,.aboutPanel>p{font-size:13px;color:#bfcde0;line-height:1.65}.aboutPanel ol{padding-left:20px;margin:8px 0}.aboutPanel li{font-size:13px;color:#dbe6f5;padding:5px 0;line-height:1.55}.aboutNote{border-left:3px solid #7ca9db;background:#22364f;border-radius:7px;padding:13px;font-size:12px;color:#c2d2ea;margin:20px 0}
 
@@ -46,12 +45,6 @@
 .brandLine .eyebrow{margin-top:6px;color:#67d9ff;font-size:9px}
 
 /* Catalog and account redesign */
-.catalogIntro{padding:21px 19px;margin:4px 0 17px;background:radial-gradient(circle at 95% 5%,#224f98 0,transparent 55%),linear-gradient(135deg,#142c53,#111d39);border:1px solid #36609a66;border-radius:22px;box-shadow:0 16px 38px #080e2455}
-.catalogEyebrow{font-size:10px;font-weight:800;letter-spacing:1.6px;color:#67d9ff}
-.catalogIntro h2{font-size:24px;line-height:1.17;letter-spacing:-.7px;margin:10px 0}
-.catalogIntro p{font-size:13px;line-height:1.65;color:#b5c8e2;margin:0 0 14px}
-.catalogPills{display:flex;flex-wrap:wrap;gap:8px}
-.catalogPills span{background:#24446b99;color:#d6eaff;border:1px solid #5475a366;padding:7px 10px;border-radius:99px;font-size:11px;font-weight:650}
 .catalogCard{background:linear-gradient(160deg,#172b48,#121d32);border:1px solid #37577e7d;border-radius:20px;padding:17px;margin-bottom:12px;box-shadow:0 10px 28px #060c1f44}
 .catalogCard .cardTop{align-items:center;gap:11px}
 .catalogAvatar{width:52px;height:52px;min-width:52px;border-radius:15px;background:linear-gradient(145deg,#258be9,#7458e9);color:white;font-size:23px;box-shadow:0 7px 17px #225cf750}
@@ -70,20 +63,14 @@
 .profileAvatar{width:60px;height:60px;display:flex;align-items:center;justify-content:center;flex-shrink:0;border-radius:20px;background:linear-gradient(145deg,#2db4ef,#6650ea);font-size:27px;font-weight:800;color:white}
 .profileIdentity h2{font-size:22px;margin:6px 0 3px;color:#f8fbff}
 .profileIdentity p{margin:0;color:#a8bed8;font-size:12px}
-.profileSwitch{display:grid;grid-template-columns:1fr 1fr;gap:5px;padding:5px;border-radius:15px;background:#101e32;border:1px solid #344b66}
-.profileSwitch button{padding:11px 7px;border:0;border-radius:11px;background:transparent;color:#b0c5df;font-size:13px;font-weight:750}
-.profileSwitch button.active{color:white;background:linear-gradient(100deg,#1b6cba,#3f5ed5);box-shadow:0 3px 12px #1147ad33}
 .profileStats{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
 .profileStats>div{display:flex;flex-direction:column;gap:10px;padding:16px 13px;min-height:98px;background:linear-gradient(140deg,#1b3050,#131f35);border:1px solid #37577b77;border-radius:16px}
 .profileStats span{color:#aabfdd;font-size:11px;line-height:1.4}
 .profileStats strong{font-size:23px;letter-spacing:-.5px;color:#f4f9ff;overflow-wrap:anywhere}
 .profileQuick{background:#162740;border-radius:18px;padding:17px;border:1px solid #38557677}
-.profileQuick h3{margin:0 0 13px;font-size:15px}
 .profileQuickLine{display:flex;justify-content:space-between;align-items:center;gap:14px;padding:11px 0;border-top:1px solid #42597755;font-size:12px}
 .profileQuickLine span{min-width:0;overflow-wrap:anywhere}
 .profileQuickLine small{color:#9db7d4;text-align:right;flex-shrink:0}
-.profileQuick .secondary{margin-top:14px}
-.profileQuick p,.profileFootnote{color:#a6bad4;font-size:11px;line-height:1.5}
 @media(max-width:365px){.catalogCardFoot{align-items:stretch;flex-direction:column}.catalogCardFoot button{width:100%}.profileIdentity h2{font-size:19px}.profileStats strong{font-size:20px}}
 
 /* Favorites and verified reviews */
@@ -102,15 +89,6 @@
 .reviewItem b{color:#f1c865;letter-spacing:2px}
 .reviewItem p{margin:5px 0}
 
-/* Analytics and comparisons */
-.comparePanel{margin:14px 0 20px;padding:17px;background:linear-gradient(135deg,#1b3557,#13263f);border:1px solid #47739d;border-radius:17px}
-.comparePanel h3{font-size:16px;margin:0 0 12px}
-.compareGrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(115px,1fr));gap:9px;margin-bottom:13px}
-.compareGrid>div{display:flex;flex-direction:column;gap:9px;border-radius:12px;padding:11px;background:#0e1e34;border:1px solid #355474}
-.compareGrid strong{font-size:13px;overflow-wrap:anywhere}
-.compareGrid small{font-size:11px;color:#bad0e8}
-.compareToggle{display:flex;align-items:center;gap:8px;color:#afc9e5;font-size:12px;padding-top:7px;cursor:pointer}
-.compareToggle input{accent-color:#57a3fc;width:16px;height:16px}
 
 .analyticsPanel{padding:17px;margin:17px 0;background:linear-gradient(155deg,#172d4a,#101e33);border:1px solid #3a638b;border-radius:19px}
 .analyticsPanel>h3{margin:0 0 12px;font-size:17px}
@@ -138,9 +116,6 @@
 
 .channelPromotionPanel{margin:16px 0;padding:18px;border:1px solid rgba(154,120,255,.35);border-radius:16px;background:linear-gradient(125deg,rgba(116,70,210,.15),rgba(38,54,91,.2))}
 .channelPromotionPanel h3{margin:0 0 8px;font-size:17px}.channelPromotionPanel p{font-size:13px;line-height:1.55;margin:0 0 13px}
-.promotionPrices{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin:12px 0}
-.promotionPrices>div{padding:13px;border:1px solid rgba(154,120,255,.25);border-radius:12px;display:flex;flex-direction:column;gap:4px}
-.promotionPrices span{font-size:20px;font-weight:800}.channelPromotionPanel button{width:100%;margin:8px 0}.channelPromotionPanel .hint{display:block}
 
 .channelLikeRow{display:flex;align-items:center;gap:10px;margin:12px 0;color:#a9bed9;font-size:13px}
 .channelLikeButton{border:1px solid rgba(155,172,211,.4);background:rgba(100,128,173,.1);color:#e1ebff;border-radius:999px;padding:7px 13px;font-weight:700;cursor:pointer}
@@ -154,11 +129,7 @@
 .channelDirectLinks{margin:16px 0;padding:17px;border:1px solid rgba(125,170,215,.35);border-radius:15px;background:rgba(75,125,175,.07)}
 .channelDirectLinks h3{margin:0 0 8px}.channelDirectLinks p,.channelDirectLinks small{font-size:13px;line-height:1.5;color:var(--muted,#aab8d0)}
 .channelDirectLinks input{box-sizing:border-box;display:block;width:100%;padding:12px;margin:12px 0;border:1px solid rgba(155,172,211,.3);border-radius:10px;background:rgba(10,15,28,.28);color:inherit;min-width:0}
-.channelDirectActions{display:flex;flex-wrap:wrap;gap:9px;margin-bottom:8px}.channelDirectActions button{flex:1;min-width:145px}
 
-.fastOrderIntro{padding:16px;margin:16px 0;border:1px solid rgba(105,168,234,.32);background:rgba(68,117,170,.09);border-radius:14px}
-.fastOrderIntro strong{display:block;margin-bottom:7px}.fastOrderIntro p{margin:0 0 12px;font-size:13px;line-height:1.6}.fastOrderIntro .primary{width:100%}
-#reklio-order-steps{scroll-margin-top:20px}
 
 .purchaseStepper{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px;margin:24px 0 12px;scroll-margin-top:16px}
 .purchaseStepper span{border:1px solid rgba(140,157,187,.26);border-radius:9px;padding:9px 4px;text-align:center;font-size:12px;color:var(--muted,#aab8d0)}
@@ -185,15 +156,57 @@
 .app button.secondary:active{background:#2c4162}
 .app button.secondary:disabled{opacity:.5;cursor:not-allowed}
 .app button.secondary.small{padding:8px 12px;font-size:12px}
-.channelDirectActions button{margin-top:8px}
 
 
-/* Seller earnings and manual payout requests in Telegram Mini App. */
-.ownerPayoutCard{display:grid;gap:11px}
-.ownerPayoutCard h3,.ownerPayoutCard h4,.ownerPayoutCard p{margin:0}
-.ownerPayoutAmount{font-size:clamp(26px,7vw,36px);font-weight:850;letter-spacing:-.035em}
-.ownerPayoutRequest{display:flex;gap:10px;flex-wrap:wrap}
-.ownerPayoutRequest input{flex:1 1 145px;min-width:0;border:1px solid var(--border,#54637b);background:var(--surface,#172237);color:inherit;border-radius:11px;padding:12px}
-.ownerPayoutRequest button{flex:1 1 145px}
-.ownerPayoutRequest button:disabled{opacity:.55;cursor:not-allowed}
-.ownerPayoutRow{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 0;border-bottom:1px solid var(--border,#526076)}
+
+/* Order state, written from the point of view of the person looking at the order. */
+.orderHead{display:flex;align-items:flex-start;gap:12px;width:100%;padding:0;border:0;background:transparent;color:inherit;font:inherit;text-align:left;cursor:pointer}
+.orderHeadSide{display:flex;flex-direction:column;align-items:flex-end;gap:7px;flex-shrink:0}
+.statusBadge{padding:4px 9px;border-radius:99px;font-size:11px;font-weight:700;background:#2a3a53;color:#b4c8eb}
+.statusBadge.tone-action{background:#1f4f8f;color:#e5f0ff}
+.statusBadge.tone-problem{background:#5a3324;color:#ffd3b8}
+.statusBadge.tone-done{background:#23483b;color:#c5f0dd}
+.orderCard.tone-action{border-color:#4f86d8}
+.orderCard.tone-problem{border-color:#a4693f}
+.orderState{margin-top:13px}
+.orderState strong{display:block;font-size:15px;color:#f1f5ff}
+.orderState p{margin:6px 0 0;font-size:13px;line-height:1.5;color:#b6c4d9}
+.orderActions.centered{justify-content:center}
+.payBox{margin-top:13px;padding:13px;border:1px solid #4f86d8;border-radius:13px;background:#1b2f4d}
+.payBox>p{margin:0;font-size:13px;line-height:1.5}
+.payBox .primary{margin-top:13px}
+.copyRow{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:9px 0;border-bottom:1px solid #2f4566}
+.copyRow>div{display:flex;flex-direction:column;gap:4px;min-width:0}
+.copyRow small{font-size:11px;color:#9fb2cd}
+.copyRow strong{font-size:15px;color:#fff;overflow-wrap:anywhere}
+.copyRow button{flex-shrink:0}
+.confirmBox{flex-basis:100%;padding:12px;border:1px solid #62738d;border-radius:12px;background:#1c2d45}
+.confirmBox p{margin:0;font-size:13px;line-height:1.5;color:#e3ecff}
+.inlineLink{padding:0;border:0;background:transparent;color:#91bfff;font:inherit;font-weight:650;cursor:pointer}
+.notice.success{padding:14px 16px;border-style:solid;border-color:#3f7f66;background:#1d3a30;color:#cfeee0;margin-bottom:14px;text-align:left}
+.empty .emptyTitle{display:block;font-size:15px;color:#e3ecff}
+.empty p{margin:8px 0 0;font-size:13px;line-height:1.5}
+
+/* Navigation */
+.navIcon{position:relative;display:inline-flex}
+.navBadge{position:absolute;top:-6px;right:-11px;min-width:17px;height:17px;padding:0 4px;display:grid;place-items:center;border-radius:99px;background:#e0533f;color:#fff;font-size:10px;font-weight:800}
+
+/* Catalog */
+.catalogFilters{margin:0 0 12px}
+.catalogFilters summary,.channelMore summary,.analyticsPanel summary,.monthlyTopPanel summary,details.aboutPanel summary{cursor:pointer;font-size:13px;font-weight:700;color:#91bcff;padding:6px 0}
+.catalogFilters .catalogControls{margin:10px 0 0}
+.catalogSummary{margin:0 0 12px}
+.channelMore{margin:16px 0}
+.nextSteps{padding-left:20px;margin:14px 0}
+.nextSteps li{font-size:13px;line-height:1.55;color:#dbe6f5;padding:4px 0}
+.welcomeSecond{display:block;width:100%;margin-top:10px}
+.aboutPanel ul{padding-left:20px;margin:8px 0}
+.aboutPanel ul li{font-size:13px;color:#dbe6f5;padding:5px 0;line-height:1.55}
+
+/* Channel settings */
+.bookingPanel .card h3,.planCard h3{margin:0 0 8px;font-size:16px}
+.rateForm{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.rateForm .field{margin:14px 0 4px;min-width:0}
+.ownerChecklist div.done{color:#a9e6cb}
+.adminPrices{margin-top:14px}
+.adminPrices .sellerRate .field{margin:0;flex:1}
