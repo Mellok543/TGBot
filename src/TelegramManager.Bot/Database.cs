@@ -375,7 +375,7 @@ public sealed class Database(string connectionString) : IAsyncDisposable
 
     public async Task<bool> SetChannelListedAsync(long id, long owner, bool listed, CancellationToken ct)
     {
-        await using var cmd = _source.CreateCommand("UPDATE channels c JOIN users u ON u.telegram_id=c.connected_by SET c.is_listed=@listed WHERE c.telegram_id=@id AND c.connected_by=@owner AND (@listed=FALSE OR (u.subscription_until>UTC_TIMESTAMP() OR u.pro_granted_until>UTC_TIMESTAMP()) OR (u.first_channel_at IS NULL OR u.first_channel_at>UTC_TIMESTAMP()-INTERVAL 30 DAY))");
+        await using var cmd = _source.CreateCommand("UPDATE channels c JOIN users u ON u.telegram_id=c.connected_by SET c.is_listed=@listed WHERE c.telegram_id=@id AND c.connected_by=@owner AND (@listed=FALSE OR (((u.subscription_until>UTC_TIMESTAMP() OR u.pro_granted_until>UTC_TIMESTAMP()) OR (u.first_channel_at IS NULL OR u.first_channel_at>UTC_TIMESTAMP()-INTERVAL 30 DAY)) AND NOT EXISTS(SELECT 1 FROM reklio_channel_blocks b WHERE b.channel_id=c.telegram_id AND (b.blocked_until IS NULL OR b.blocked_until>UTC_TIMESTAMP()))))");
         cmd.Parameters.Add(new MySqlParameter("@listed", listed));
         cmd.Parameters.Add(new MySqlParameter("@id", id));
         cmd.Parameters.Add(new MySqlParameter("@owner", owner));
