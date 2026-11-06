@@ -21,7 +21,7 @@
 6. Implement payout onboarding via YooKassa-hosted card widget and API payout lifecycle. Never collect or save raw PAN/CVV in Reklio.
 
 ## Current deployment state
-- Existing `/api/orders/{id}/payment` remains *test-only* and does not create a Safe Deal.
+- Ad placements are paid directly to the channel owner. The earlier test checkout endpoints were removed.
 - The Safe Deal client has idempotent create and lookup helpers; they are not yet wired to production routes.
 - The migration stores immutable settlement snapshots and future payout references; it must not be interpreted as proof of transferred funds.
 - No automated real-money payouts are activated by this change.
@@ -31,12 +31,3 @@
 - https://yookassa.ru/developers/solutions-for-platforms/safe-deal/integration/deals
 - https://yookassa.ru/developers/solutions-for-platforms/safe-deal/integration/payments
 - https://yookassa.ru/developers/solutions-for-platforms/safe-deal/integration/payouts
-
-## Test payment notifications (current working integration)
-- Configure YooKassa HTTP notification URL: `https://api.reklio.site/api/payments/yookassa/notification` with event `payment.succeeded`.
-- This route only runs with `YOOKASSA_MODE=test`. Incoming JSON is untrusted; the API fetches the payment from YooKassa and verifies provider ID, paid status, order metadata and amount against the persisted attempt before a state transition.
-- Successful *test* payments set `ad_requests.paid_confirmed=TRUE`, `payment_status=TestPaid`, `is_test_order=TRUE`, `payout_status=NotEligible` and `status=Scheduled` so the existing publishing worker can proceed without pretending money is real.
-- The legacy manual `payment/check` endpoint remains as fallback; both paths are idempotent for the order transition.
-- The Mini App refreshes the Orders tab every 15 seconds while open.
-- The notification handler requires HTTPS ingress and YooKassa webhook configuration. A server deployment alone does not activate webhook delivery.
-- This webhook is **not** production Safe Deal support; live payout, refund, contract activation and real-money reconciliation remain separate work.
