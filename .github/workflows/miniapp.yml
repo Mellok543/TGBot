@@ -23,6 +23,9 @@ jobs:
       - name: Install dependencies
         working-directory: miniapp
         run: npm install --no-audit --no-fund
+      - name: Test order flow
+        working-directory: miniapp
+        run: npm test
       - name: Type-check and build
         working-directory: miniapp
         run: npm run build
