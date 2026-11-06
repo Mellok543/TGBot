@@ -3,6 +3,7 @@ import type { Channel } from './types';
 
 export const API = import.meta.env.VITE_API_URL || '';
 const REQUEST_TIMEOUT_MS = 12000;
+const UPLOAD_TIMEOUT_MS = 60000;
 
 const authHeaders = () => ({ 'X-Telegram-Init-Data': webApp()?.initData || '' });
 
@@ -13,9 +14,11 @@ async function errorMessage(response: Response): Promise<string> {
   return detail.error || 'Сервер не смог выполнить запрос. Попробуйте ещё раз.';
 }
 
+// credentials: the website signs in with a cookie, the Mini App with the Telegram header above.
 function send(path: string, method: string, body?: unknown): Promise<Response> {
   return fetch(API + path, {
     method,
+    credentials: 'include',
     signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     headers: body === undefined ? authHeaders() : { 'Content-Type': 'application/json', ...authHeaders() },
     body: body === undefined ? undefined : JSON.stringify(body)
@@ -65,6 +68,24 @@ export async function getPublicChannel(id: number): Promise<Channel> {
   if (!response.ok) throw new Error('Канал по этой ссылке не найден или сейчас скрыт.');
   const channel = await response.json() as Channel;
   return { ...channel, posts30d: channel.posts30d ?? 0, viewsSamples: channel.viewsSamples ?? 0, likes: channel.likes ?? 0 };
+}
+
+export async function uploadOrderImage(orderId: number, image: Blob): Promise<void> {
+  const response = await fetch(`${API}/api/orders/${orderId}/image`, {
+    method: 'POST',
+    credentials: 'include',
+    signal: AbortSignal.timeout(UPLOAD_TIMEOUT_MS),
+    headers: { 'Content-Type': 'image/jpeg', ...authHeaders() },
+    body: image
+  });
+  if (!response.ok) throw new Error(await errorMessage(response));
+}
+
+// An <img> tag cannot send the Telegram header, so protected pictures are fetched first.
+export async function getOrderImageUrl(orderId: number): Promise<string> {
+  const response = await send(`/api/orders/${orderId}/image`, 'GET');
+  if (!response.ok) throw new Error(await errorMessage(response));
+  return URL.createObjectURL(await response.blob());
 }
 
 export const avatarUrl = (channelId: number) => API + '/api/public/channels/' + channelId + '/avatar';

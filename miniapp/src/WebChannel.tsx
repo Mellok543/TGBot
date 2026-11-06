@@ -6,7 +6,7 @@ type Analytics={days:number;orders:number;published:number;pending:number;revenu
 const api=import.meta.env.VITE_API_URL||'https://api.reklio.site';
 const categories=['Технологии','Игры','Новости','Бизнес','Финансы','Образование','Развлечения','Юмор','Спорт','Путешествия','Авто','Красота и стиль','Здоровье','Кулинария','Музыка','Кино','Другое'];
 const rub=(v:number)=>v.toLocaleString('ru-RU')+' ₽';
-const status:Record<string,string>={Pending:'На подтверждении',PendingPaid:'Повторное подтверждение',AwaitingPayment:'Ожидает оплаты',Scheduled:'Запланирован',Published:'Опубликован',Deleted:'Завершён',Rejected:'Отклонён',Disputed:'Спор',Draft:'Черновик'};
+const status:Record<string,string>={Pending:'На подтверждении',PendingPaid:'Повторное подтверждение',AwaitingPayment:'Ожидает оплаты',Scheduled:'Запланирован',Published:'Опубликован',Deleted:'Завершён',Rejected:'Отклонён',Disputed:'Спор',DisputeResolved:'Спор рассмотрен',Cancelled:'Отменён',Expired:'Истёк',EarlyDeletionPending:'Пост удалён раньше срока',PublishFailed:'Не опубликован',Draft:'Черновик'};
 export default function WebChannel(){
  const id=Number(window.location.pathname.split('/').pop());
  const [channel,setChannel]=useState<Channel|null>(null);

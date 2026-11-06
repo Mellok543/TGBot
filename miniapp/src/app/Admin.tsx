@@ -4,10 +4,10 @@ import { blockText, dateTime, errorText, money } from './format';
 import type { AdminDispute, AdminOrder, AdminOverview, AdminUser, AuditItem, ModerationChannel, MtprotoStatus, PublicationIssue, StaffMember } from './types';
 
 type AdminTab = 'overview' | 'disputes' | 'channels' | 'orders' | 'users' | 'team' | 'audit';
-type Sanction = { sanction: 'none' | 'temporary' | 'permanent'; days: string };
+type Sanction = { sanction: 'none' | 'temporary' | 'permanent'; days: string; blockOwner: boolean };
 
 const SERVICE_PRICES = [{ key: 'pro30', label: 'PRO · 30 дней' }, { key: 'promotion7', label: 'Продвижение · 7 дней' }];
-const NO_SANCTION: Sanction = { sanction: 'none', days: '7' };
+const NO_SANCTION: Sanction = { sanction: 'none', days: '7', blockOwner: false };
 
 export function Admin({ role }: { role: string | null }) {
   const canManageTeam = role === 'owner' || role === 'admin';
@@ -75,7 +75,7 @@ export function Admin({ role }: { role: string | null }) {
 
   const resolveDispute = (id: number, decision: 'BuyerRight' | 'OwnerRight') => act(async () => {
     const choice = sanctions[id] ?? NO_SANCTION;
-    await post(`/api/admin/disputes/${id}/resolve`, { decision, sanction: choice.sanction, days: choice.sanction === 'temporary' ? Number(choice.days) : null });
+    await post(`/api/admin/disputes/${id}/resolve`, { decision, sanction: choice.sanction, days: choice.sanction === 'temporary' ? Number(choice.days) : null, blockOwner: choice.blockOwner });
     await load();
   });
 
@@ -86,6 +86,11 @@ export function Admin({ role }: { role: string | null }) {
 
   const unblock = (id: number) => act(async () => {
     await post(`/api/admin/channels/${id}/unblock`);
+    await load();
+  });
+
+  const unblockOwner = (id: number) => act(async () => {
+    await post(`/api/admin/users/${id}/unblock`);
     await load();
   });
 
@@ -167,6 +172,10 @@ export function Admin({ role }: { role: string | null }) {
             {choice.sanction === 'temporary' && <label className="field">Срок блокировки, дней
               <input type="number" min="1" max="365" inputMode="numeric" value={choice.days} onChange={e => { const days = e.target.value; setSanctions(s => ({ ...s, [d.id]: { ...choice, days } })); }}/>
             </label>}
+            {choice.sanction !== 'none' && <label className="blockOwnerToggle">
+              <input type="checkbox" checked={choice.blockOwner} onChange={e => { const blockOwner = e.target.checked; setSanctions(s => ({ ...s, [d.id]: { ...choice, blockOwner } })); }}/>
+              Заблокировать и самого владельца: все его каналы и подключение новых
+            </label>}
             <div className="orderActions">
               <button className="primary small" disabled={busy} onClick={() => void resolveDispute(d.id, 'BuyerRight')}>Покупатель прав</button>
               <button className="secondary small" disabled={busy} onClick={() => void resolveDispute(d.id, 'OwnerRight')}>Нарушения нет</button>
@@ -192,7 +201,8 @@ export function Admin({ role }: { role: string | null }) {
     </div>}
 
     {tab === 'users' && users.map(u => <div className="sellerRate" key={u.id}>
-      <div><strong>{u.name || 'Пользователь'} · {u.id}</strong><small>{u.username ? '@' + u.username + ' · ' : ''}Каналов: {u.channels} · Покупок: {u.purchases}</small></div>
+      <div><strong>{u.name || 'Пользователь'} · {u.id}</strong><small>{u.username ? '@' + u.username + ' · ' : ''}Каналов: {u.channels} · Покупок: {u.purchases}{u.blocked ? ' · ' + blockText(u.blockedUntil) : ''}</small></div>
+      {u.blocked && <button className="secondary small" disabled={busy} onClick={() => void unblockOwner(u.id)}>Снять блокировку</button>}
     </div>)}
 
     {tab === 'orders' && <>
