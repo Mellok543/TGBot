@@ -1,9 +1,9 @@
 import { useEffect, useState } from 'react';
 import { get, post, put } from './api';
 import { blockText, dateTime, errorText, money } from './format';
-import type { AdminDispute, AdminOrder, AdminOverview, AdminUser, AuditItem, ModerationChannel, MtprotoStatus, PublicationIssue, StaffMember } from './types';
+import type { AdminDispute, AdminOrder, AdminOverview, AdminUser, AuditItem, ModerationChannel, MtprotoStatus, PublicationIssue, StaffMember, TrafficReport } from './types';
 
-type AdminTab = 'overview' | 'disputes' | 'channels' | 'orders' | 'users' | 'team' | 'audit';
+type AdminTab = 'overview' | 'traffic' | 'disputes' | 'channels' | 'orders' | 'users' | 'team' | 'audit';
 type Sanction = { sanction: 'none' | 'temporary' | 'permanent'; days: string; blockOwner: boolean };
 
 const SERVICE_PRICES = [{ key: 'pro30', label: 'PRO · 30 дней' }, { key: 'promotion7', label: 'Продвижение · 7 дней' }];
@@ -32,6 +32,8 @@ export function Admin({ role }: { role: string | null }) {
   const [prices, setPrices] = useState<Record<string, number>>({});
   const [priceDraft, setPriceDraft] = useState<Record<string, string>>({});
   const [priceNotice, setPriceNotice] = useState('');
+  const [traffic, setTraffic] = useState<TrafficReport | null>(null);
+  const [trafficDays, setTrafficDays] = useState(30);
 
   async function act(action: () => Promise<void>) {
     setBusy(true);
@@ -72,6 +74,10 @@ export function Admin({ role }: { role: string | null }) {
   };
 
   useEffect(() => { void act(load); }, []);
+
+  useEffect(() => {
+    if (tab === 'traffic') void act(async () => setTraffic(await get<TrafficReport>('/api/admin/traffic?days=' + trafficDays)));
+  }, [tab, trafficDays]);
 
   const resolveDispute = (id: number, decision: 'BuyerRight' | 'OwnerRight') => act(async () => {
     const choice = sanctions[id] ?? NO_SANCTION;
@@ -126,6 +132,7 @@ export function Admin({ role }: { role: string | null }) {
   const tabs: { id: AdminTab; label: string }[] = [
     { id: 'disputes', label: `Споры (${disputes.filter(d => d.status === 'Disputed').length})` },
     { id: 'overview', label: 'Обзор' },
+    { id: 'traffic', label: 'Переходы' },
     { id: 'channels', label: 'Каналы' },
     { id: 'orders', label: 'Заказы' },
     { id: 'users', label: 'Пользователи' },
@@ -152,6 +159,19 @@ export function Admin({ role }: { role: string | null }) {
         </div>)}
         {priceNotice && <p className="hint">{priceNotice}</p>}
       </section>}
+    </>}
+
+    {tab === 'traffic' && <>
+      <p className="description">Ссылка для видео: reklio.site/?src=tiktok. Для отдельного ролика добавьте номер: reklio.site/?src=tiktok_2. Также работают youtube, vk, telegram и instagram.</p>
+      <label className="field">Период<select value={trafficDays} onChange={e => setTrafficDays(Number(e.target.value))}>
+        <option value={1}>Сегодня</option><option value={7}>7 дней</option><option value={30}>30 дней</option><option value={365}>Год</option>
+      </select></label>
+      {traffic?.sources.length === 0 && <p>Переходов за этот период нет.</p>}
+      {traffic?.sources.map(s => <article className="card" key={s.source}>
+        <strong>{s.source === 'direct' ? 'Без метки' : s.source}</strong>
+        <p className="description">Заходы на сайт: {s.visits} · Вошли в Reklio: {s.users}, из них новых: {s.newUsers}</p>
+        <p className="hint">Заказы рекламы: {s.orders} · Оплаты PRO и продвижения: {s.payments} на {money(s.revenue)}</p>
+      </article>)}
     </>}
 
     {tab === 'disputes' && <>

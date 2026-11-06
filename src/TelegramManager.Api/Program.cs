@@ -743,7 +743,7 @@ long? Authorized(HttpRequest req)
     // Cross-origin requests must carry the exact trusted website Origin (CSRF defense).
     var path=req.Path.Value??"";
     if(!System.Text.RegularExpressions.Regex.IsMatch(path,
-        @"^(?:/api/orders(?:/[0-9]+(?:/(?:schedule|reschedule|dispute|deal|direct-payment|direct-payment/claim|direct-payment/confirm|direct-payment/reject|cancel|republish|approve|reject|image))?)?|/api/my-channels/connect|/api/subscription|/api/payments/my|/api/payments/checkout/(?:pro|promotion/-?[0-9]+)|/api/channels/-?[0-9]+/(?:rates|history|availability|reviews))$",
+        @"^(?:/api/orders(?:/[0-9]+(?:/(?:schedule|reschedule|dispute|deal|direct-payment|direct-payment/claim|direct-payment/confirm|direct-payment/reject|cancel|republish|approve|reject|image))?)?|/api/my-channels/connect|/api/me/source|/api/subscription|/api/payments/my|/api/payments/checkout/(?:pro|promotion/-?[0-9]+)|/api/channels/-?[0-9]+/(?:rates|history|availability|reviews))$",
         System.Text.RegularExpressions.RegexOptions.CultureInvariant)) return null;
     if(req.Headers.Origin.ToString() is not ("https://reklio.site" or "https://www.reklio.site"))return null;
     if(req.HttpContext.User.Identity?.IsAuthenticated!=true)return null;
@@ -2119,6 +2119,88 @@ CREATE TABLE IF NOT EXISTS reklio_payanyway_orders (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
 """))await payAnyWaySchema.ExecuteNonQueryAsync();
 
+// Website visits are stored as daily totals with no personal data. A signed-in user keeps only their first source.
+await using(var trafficSchema=app.Services.GetRequiredService<MySqlDataSource>().CreateCommand("""
+CREATE TABLE IF NOT EXISTS reklio_traffic_daily (
+ day DATE NOT NULL,
+ source VARCHAR(16) NOT NULL,
+ visits INT NOT NULL DEFAULT 0,
+ PRIMARY KEY(day,source)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+"""))await trafficSchema.ExecuteNonQueryAsync();
+await using(var sourceSchema=app.Services.GetRequiredService<MySqlDataSource>().CreateCommand("""
+CREATE TABLE IF NOT EXISTS reklio_user_sources (
+ user_id BIGINT NOT NULL PRIMARY KEY,
+ source VARCHAR(16) NOT NULL,
+ is_new BOOLEAN NOT NULL,
+ created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ INDEX idx_user_sources_created(created_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+"""))await sourceSchema.ExecuteNonQueryAsync();
+
+// A closed list keeps anonymous requests from filling the table with made-up sources.
+static bool ValidTrafficSource(string? source)=>source is not null&&
+ System.Text.RegularExpressions.Regex.IsMatch(source,@"^(?:tiktok|youtube|vk|telegram|instagram)(?:_[0-9]{1,3})?$",System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+
+app.MapPost("/api/public/visit",async(TrafficSourceInput input,HttpRequest req,MySqlDataSource db,CancellationToken ct)=>{
+ if(req.Headers.Origin.ToString() is not ("https://reklio.site" or "https://www.reklio.site"))return Results.StatusCode(StatusCodes.Status403Forbidden);
+ if(input.Source!="direct"&&!ValidTrafficSource(input.Source))return Results.BadRequest();
+ await using var cmd=db.CreateCommand("INSERT INTO reklio_traffic_daily(day,source,visits) VALUES(UTC_DATE(),@source,1) ON DUPLICATE KEY UPDATE visits=visits+1");
+ cmd.Parameters.AddWithValue("@source",input.Source);
+ await cmd.ExecuteNonQueryAsync(ct);
+ return Results.NoContent();
+});
+
+app.MapPost("/api/me/source",async(TrafficSourceInput input,HttpRequest req,MySqlDataSource db,CancellationToken ct)=>{
+ if(Authorized(req) is not long user)return Results.Unauthorized();
+ if(!ValidTrafficSource(input.Source))return Results.BadRequest();
+ // Existing customers may tap a video link too, so only people with no earlier activity count as new.
+ await using var cmd=db.CreateCommand("""
+  INSERT IGNORE INTO reklio_user_sources(user_id,source,is_new)
+  VALUES(@user,@source,
+   NOT EXISTS(SELECT 1 FROM ad_requests WHERE advertiser_id=@user)
+   AND NOT EXISTS(SELECT 1 FROM channels WHERE connected_by=@user)
+   AND NOT EXISTS(SELECT 1 FROM reklio_payanyway_orders WHERE user_id=@user))
+  """);
+ cmd.Parameters.AddWithValue("@user",user);
+ cmd.Parameters.AddWithValue("@source",input.Source);
+ await cmd.ExecuteNonQueryAsync(ct);
+ return Results.Ok(new {saved=true});
+});
+
+app.MapGet("/api/admin/traffic",async(HttpRequest req,MySqlDataSource db,CancellationToken ct)=>{
+ if(Authorized(req) is not long uid)return Results.Unauthorized();
+ if(await StaffRole(db,uid,ct) is null)return Results.Forbid();
+ var days=int.TryParse(req.Query["days"],out var parsed)?Math.Clamp(parsed,1,365):30;
+ var rows=new Dictionary<string,(long Visits,long Users,long NewUsers,long Orders,long Payments,decimal Revenue)>();
+ await using var conn=await db.OpenConnectionAsync(ct);
+ await using(var visits=new MySqlCommand("SELECT source,SUM(visits) FROM reklio_traffic_daily WHERE day>UTC_DATE()-INTERVAL @days DAY GROUP BY source",conn))
+ {
+  visits.Parameters.AddWithValue("@days",days);
+  await using var reader=await visits.ExecuteReaderAsync(ct);
+  while(await reader.ReadAsync(ct))rows[reader.GetString(0)]=(Convert.ToInt64(reader.GetValue(1)),0,0,0,0,0m);
+ }
+ await using(var users=new MySqlCommand("""
+  SELECT s.source,COUNT(*),COALESCE(SUM(s.is_new),0),
+   COALESCE(SUM((SELECT COUNT(*) FROM ad_requests a WHERE a.advertiser_id=s.user_id AND a.created_at>=s.created_at)),0),
+   COALESCE(SUM((SELECT COUNT(*) FROM reklio_payanyway_orders p WHERE p.user_id=s.user_id AND p.status='paid' AND p.test_mode=FALSE AND p.created_at>=s.created_at)),0),
+   COALESCE(SUM((SELECT SUM(p.amount_rub) FROM reklio_payanyway_orders p WHERE p.user_id=s.user_id AND p.status='paid' AND p.test_mode=FALSE AND p.created_at>=s.created_at)),0)
+  FROM reklio_user_sources s
+  WHERE s.created_at>NOW()-INTERVAL @days DAY
+  GROUP BY s.source
+  """,conn))
+ {
+  users.Parameters.AddWithValue("@days",days);
+  await using var reader=await users.ExecuteReaderAsync(ct);
+  while(await reader.ReadAsync(ct))
+  {
+   rows.TryGetValue(reader.GetString(0),out var row);
+   rows[reader.GetString(0)]=(row.Visits,Convert.ToInt64(reader.GetValue(1)),Convert.ToInt64(reader.GetValue(2)),Convert.ToInt64(reader.GetValue(3)),Convert.ToInt64(reader.GetValue(4)),Convert.ToDecimal(reader.GetValue(5)));
+  }
+ }
+ return Results.Ok(new {days,sources=rows.OrderByDescending(x=>x.Value.Visits).ThenByDescending(x=>x.Value.Users).Select(x=>new {source=x.Key,visits=x.Value.Visits,users=x.Value.Users,newUsers=x.Value.NewUsers,orders=x.Value.Orders,payments=x.Value.Payments,revenue=x.Value.Revenue})});
+});
+
 static (string Account,string Code)? PayAnyWayConfig()
 {
  var account=Environment.GetEnvironmentVariable("PAYANYWAY_ACCOUNT_ID");
@@ -3377,6 +3459,7 @@ app.MapPost("/api/admin/payouts/{id:long}/decision",async(long id,HttpRequest re
 app.Run();
 
 record UpdateServicePriceInput(int PriceRub);
+record TrafficSourceInput(string? Source);
 record CreateOrderInput(long ChannelId, string Text);
 record PublicationReviewInput(string Decision,string Note);
 record StaffInput(long TelegramId,string Role);

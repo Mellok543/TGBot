@@ -1,6 +1,7 @@
 import React from 'react';
 import { createRoot } from 'react-dom/client';
 import { App } from './app/App';
+import { trackSiteVisit } from './app/traffic';
 import './style.css';
 
 const root = createRoot(document.getElementById('root')!);
@@ -18,6 +19,7 @@ function boot() {
     root.render(<React.StrictMode><App/></React.StrictMode>);
     return;
   }
+  trackSiteVisit();
   import('./Landing')
     .then(({ default: Landing }) => root.render(<React.StrictMode><Landing/></React.StrictMode>))
     .catch(() => {
