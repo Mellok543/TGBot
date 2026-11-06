@@ -577,7 +577,7 @@ public sealed class Database(string connectionString) : IAsyncDisposable
                 published_message_id=NULL,published_at=NULL,
                 payout_status=IF(is_test_order=TRUE,'NotEligible','Blocked')
             WHERE id=@order AND owner_id=@owner AND status='EarlyDeletionPending'
-              AND paid_confirmed=TRUE AND payment_status IN ('Paid','TestPaid')
+              AND paid_confirmed=TRUE AND payment_status IN ('Paid','TestPaid','DirectPaid')
             """ : """
             UPDATE ad_requests
             SET status='Disputed',dispute_reason='Досрочное удаление рекламной публикации',
@@ -592,6 +592,10 @@ public sealed class Database(string connectionString) : IAsyncDisposable
             await using var reset=new MySqlCommand("DELETE FROM reklio_post_monitor WHERE order_id=@order",connection,tx);
             reset.Parameters.AddWithValue("@order",orderId);
             await reset.ExecuteNonQueryAsync(ct);
+            // The API's publication worker claims an order only once, so the old attempt has to go.
+            await using var attempt=new MySqlCommand("DELETE FROM reklio_publications WHERE order_id=@order",connection,tx);
+            attempt.Parameters.AddWithValue("@order",orderId);
+            await attempt.ExecuteNonQueryAsync(ct);
         }
         await using var audit=new MySqlCommand("""
             INSERT INTO ad_order_events(order_id,actor_id,event_type,details)

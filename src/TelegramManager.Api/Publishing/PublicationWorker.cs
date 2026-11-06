@@ -107,6 +107,12 @@ public sealed class PublicationWorker(MySqlDataSource database, IHttpClientFacto
                 $"https://api.telegram.org/bot{token}/sendMessage",
                 new { chat_id = channel, text = message, disable_web_page_preview = true }, ct);
             using var json = await JsonDocument.ParseAsync(await response.Content.ReadAsStreamAsync(ct), cancellationToken: ct);
+            // A clear refusal, such as the bot losing its admin rights, sent nothing and is safe to retry.
+            if ((int)response.StatusCode is >= 400 and < 500 and not 429)
+            {
+                await MarkRefusedAsync(conn, id);
+                return;
+            }
             if (!response.IsSuccessStatusCode || !json.RootElement.GetProperty("ok").GetBoolean())
                 throw new InvalidOperationException("Telegram rejected sendMessage");
             var messageId = json.RootElement.GetProperty("result").GetProperty("message_id").GetInt64();
@@ -259,6 +265,22 @@ public sealed class PublicationWorker(MySqlDataSource database, IHttpClientFacto
             await notice.ExecuteNonQueryAsync(ct);
         }
         await tx.CommitAsync(ct);
+    }
+
+    private async Task MarkRefusedAsync(MySqlConnection conn, long orderId)
+    {
+        log.LogWarning("Telegram refused publication of order {OrderId}", orderId);
+        await using var refused = new MySqlCommand("""
+            UPDATE reklio_publications SET state='Refused',last_error='Telegram refused the message' WHERE order_id=@id AND state='Sending';
+            UPDATE ad_requests SET status='PublishFailed',last_error='Telegram не принял публикацию. Проверьте, что бот остаётся администратором канала с правом публикации.'
+            WHERE id=@id AND status='Publishing';
+            INSERT IGNORE INTO notification_outbox(recipient_id,order_id,body)
+            SELECT owner_id,id,CONCAT('⚠️ Реклама не опубликована · заказ #',id,CHAR(10),'Проверьте, что бот остаётся администратором канала, и нажмите «Опубликовать снова» в разделе «Заказы».') FROM ad_requests WHERE id=@id
+            UNION ALL
+            SELECT advertiser_id,id,CONCAT('⚠️ Реклама пока не опубликована · заказ #',id,CHAR(10),'Telegram не принял публикацию. Владелец канала может опубликовать её снова, либо вы можете открыть спор.') FROM ad_requests WHERE id=@id;
+            """, conn);
+        refused.Parameters.AddWithValue("@id", orderId);
+        await refused.ExecuteNonQueryAsync(CancellationToken.None);
     }
 
     private static async Task QueueReviewNoticeAsync(MySqlConnection conn, long orderId, string operation, ILogger log)
