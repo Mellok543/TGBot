@@ -29,7 +29,7 @@ type Order = { id: number; channel: string; price: number; status: string; creat
 type ChannelAnalytics={days:number;points:HistoryPoint[];orders:number;published:number;revenue:number;pending:number};
 type Mine = { id: number; title: string; listed: boolean; price: number; category: string; alias?:string|null };
 type SellerRate = Rate & { active: boolean };
-type TributePayment={orderUuid:string;product:string;channelId?:number;amountKopecks:number;status:string;createdAt:string;appliedAt:string|null};
+type PaymentRecord={orderUuid:string;product:string;channelId?:number;amountKopecks:number;status:string;createdAt:string;appliedAt:string|null};
 type Subscription={plan:'FREE'|'PRO';isPro:boolean;expiresAt:string|null;channelLimit:number;commissionPercent:number;fullAnalytics:boolean;proPriceRub:number|null;checkoutAvailable:boolean;checkoutMessage:string};
 type Tab = 'catalog' | 'orders' | 'channels' | 'profile';
 const CHANNEL_CATEGORIES=['Технологии','Игры','Новости','Бизнес','Финансы','Образование','Развлечения','Юмор','Спорт','Путешествия','Авто','Красота и стиль','Здоровье','Кулинария','Музыка','Кино','Другое'];
@@ -363,40 +363,25 @@ function App() {
       try { setOrders(await get<Order[]>('/api/orders')); } catch { /* Preserve the last known list. */ }
     } finally { setProcessingOrder(null); }
   }
-  const [tributePayments,setTributePayments]=useState<TributePayment[]>([]);
-  const [tributeChecking,setTributeChecking]=useState(false);
-  async function refreshTributePayments(){
-    try{setTributePayments(await get<TributePayment[]>('/api/tribute/my-payments'));}
+  const [paymentHistory,setPaymentHistory]=useState<PaymentRecord[]>([]);
+  async function refreshPayments(){
+    try{setPaymentHistory(await get<PaymentRecord[]>('/api/payments/my'));}
     catch{/* Payment history is optional if API is temporarily unavailable. */}
   }
-  useEffect(()=>{if(tab==='profile')void refreshTributePayments();},[tab]);
-  async function confirmTributePayment(payment:TributePayment,silent=false){
-    if(tributeChecking)return;
-    setTributeChecking(true);if(!silent)setTributeNotice('');
-    try{
-      const endpoint=payment.product==='pro30'?'/api/tribute/pro/confirm/':'/api/tribute/promotions/confirm/';
-      const result=await post<{status:string}>(endpoint+encodeURIComponent(payment.orderUuid),{});
-      if(!silent||result.status==='paid')setTributeNotice(result.status==='paid'?'Оплата подтверждена. Услуга активирована.':'Платёж ещё не подтверждён: '+result.status);
-      await refreshTributePayments();
-      setSubscription(await get<Subscription>('/api/subscription'));
-    }catch(e){if(!silent)setTributeNotice(e instanceof Error?e.message:'Не удалось проверить оплату');}
-    finally{setTributeChecking(false);}
-  }
-  // Confirm pending orders automatically while the profile is open.
-  // Server verification remains authoritative; the browser never marks a payment paid itself.
+  useEffect(()=>{if(tab==='profile')void refreshPayments();},[tab]);
+  // The server activates a service after PayAnyWay's signed notification; keep a recent checkout's profile current.
   useEffect(()=>{
-    if(tab!=='profile'||tributeChecking)return;
-    const pending=tributePayments.find(p=>p.status==='pending');
-    if(!pending)return;
-    let cancelled=false;
+    const isRecent=(p:PaymentRecord)=>p.status==='pending'&&Date.now()-Date.parse(p.createdAt.endsWith('Z')?p.createdAt:p.createdAt+'Z')<30*60*1000;
+    if(tab!=='profile'||!paymentHistory.some(isRecent))return;
     const timer=window.setTimeout(async()=>{
-      if(cancelled)return;
-      await confirmTributePayment(pending,true);
+      await refreshPayments();
+      try{setSubscription(await get<Subscription>('/api/subscription'));}
+      catch{/* Retried on the next tick. */}
     },5000);
-    return()=>{cancelled=true;window.clearTimeout(timer);};
-  },[tab,tributePayments,tributeChecking]);
-  const [tributeBusy,setTributeBusy]=useState(false);
-  const [tributeNotice,setTributeNotice]=useState('');
+    return()=>window.clearTimeout(timer);
+  },[tab,paymentHistory]);
+  const [checkoutBusy,setCheckoutBusy]=useState(false);
+  const [checkoutNotice,setCheckoutNotice]=useState('');
   const [servicePrices,setServicePrices]=useState<Record<string,number>>({});
   const [priceDraft,setPriceDraft]=useState<Record<string,string>>({});
   const [priceBusy,setPriceBusy]=useState(false);
@@ -416,25 +401,19 @@ function App() {
   }
 
   useEffect(()=>{get<Record<string,number>>('/api/service-prices').then(setServicePrices).catch(()=>{});},[]);
-  async function startTributeCheckout(product:'pro30'|'promotion7',channelId?:number){
-    if(tributeBusy)return;
-    setTributeBusy(true);setTributeNotice('');
+  async function startCheckout(product:'pro30'|'promotion7',channelId?:number){
+    if(checkoutBusy)return;
+    setCheckoutBusy(true);setCheckoutNotice('');
     try{
-      if(product==='pro30'){
-        // Tribute product checkout is a static link. No Shop API order is created here.
-        // Do not claim automatic activation until buyer attribution is implemented.
-        const paymentUrl='https://web.tribute.tg/p/Jhy';
-        const telegramWebApp=window.Telegram?.WebApp as ({openLink?:(url:string)=>void})|undefined;
-        if(telegramWebApp?.openLink)telegramWebApp.openLink(paymentUrl);
-        else window.open(paymentUrl,'_blank','noopener,noreferrer');
-        setTributeNotice('Открыта оплата Reklio Pro. Автоматическая активация покупок по этой ссылке пока не подключена. Не оплачивайте товар до завершения интеграции.');
-        return;
-      }
-      const order=await post<{orderUuid:string;paymentUrl:string}>(`/api/tribute/promotions/${channelId}/checkout`,{});
+      const order=await post<{orderUuid:string;paymentUrl:string}>(product==='pro30'?'/api/payments/checkout/pro':`/api/payments/checkout/promotion/${channelId}`,{});
       if(!order.paymentUrl.startsWith('https://'))throw new Error('Некорректная ссылка оплаты');
-      window.location.assign(order.paymentUrl);
-    }catch(e){setTributeNotice(e instanceof Error?e.message:'Не удалось открыть оплату');}
-    finally{setTributeBusy(false);}
+      const telegramWebApp=window.Telegram?.WebApp as ({openLink?:(url:string)=>void})|undefined;
+      if(telegramWebApp?.openLink)telegramWebApp.openLink(order.paymentUrl);
+      else window.open(order.paymentUrl,'_blank','noopener,noreferrer');
+      setCheckoutNotice('Открыта страница оплаты. После оплаты услуга включится автоматически, обычно в течение минуты.');
+      await refreshPayments();
+    }catch(e){setCheckoutNotice(e instanceof Error?e.message:'Не удалось открыть оплату');}
+    finally{setCheckoutBusy(false);}
   }
   const [subscription,setSubscription]=useState<Subscription|null>(null);
   useEffect(()=>{get<Subscription>('/api/subscription').then(setSubscription).catch(()=>{});},[tab]);
@@ -784,7 +763,7 @@ function App() {
           <span>{editingChannel.alias?'reklio.site/ad/'+editingChannel.alias:'t.me/ReklioBot?startapp=ad_'+editingChannel.id}</span>
         </div>
         <small>Можно изменить имя в любое время. Старый персональный адрес перестанет работать, ссылка с ID останется доступной.</small>
-        </section>}{(!sellerRates.some(r=>r.active)||!editingChannel.listed)&&<p className="notice">Ссылка для покупателей появится после добавления активного тарифа и публикации канала.</p>}<section className="channelPromotionPanel"><h3>🚀 Продвижение канала</h3><p>Выделение карточки и приоритет в каталоге Reklio. Доступно на тарифах FREE и PRO.</p><div className="promotionPrices"><div><strong>7 дней</strong><span>{servicePrices.promotion7??199} ₽</span></div></div><button className="primary" type="button" disabled={tributeBusy} onClick={()=>void startTributeCheckout("promotion7",editingChannel.id)}>{tributeBusy?"Создаём платёж…":"Оплатить продвижение на 7 дней"}</button>{tributeNotice&&<small className="hint">{tributeNotice}</small>}</section>
+        </section>}{(!sellerRates.some(r=>r.active)||!editingChannel.listed)&&<p className="notice">Ссылка для покупателей появится после добавления активного тарифа и публикации канала.</p>}<section className="channelPromotionPanel"><h3>🚀 Продвижение канала</h3><p>Выделение карточки и приоритет в каталоге Reklio. Доступно на тарифах FREE и PRO.</p><div className="promotionPrices"><div><strong>7 дней</strong><span>{servicePrices.promotion7??199} ₽</span></div></div><button className="primary" type="button" disabled={checkoutBusy} onClick={()=>void startCheckout("promotion7",editingChannel.id)}>{checkoutBusy?"Создаём платёж…":"Оплатить продвижение на 7 дней"}</button>{checkoutNotice&&<small className="hint">{checkoutNotice}</small>}</section>
         <div className="analyticsPanel"><h3>Аналитика канала</h3>{!subscription?.isPro&&<p className="hint">FREE: базовая статистика за 7 дней. Расширенные периоды и аналитика доступны в PRO.</p>}<div className="analyticsPeriods">{(subscription?.isPro?[7,30,90] as const:[7] as const).map(d=><button key={d} className={analyticsPeriod===d?'active':''} onClick={()=>{setAnalyticsPeriod(d);void loadChannelAnalytics(editingChannel.id,d);}}>{d} дней</button>)}</div>
         {analyticsLoading&&<p className="description">Загрузка аналитики…</p>}
         {analyticsError&&<p className="notice">{analyticsError}</p>}
@@ -811,9 +790,9 @@ function App() {
           <p>{subscription?.isPro?'Расширенная статистика': 'FREE без ограничения по времени · базовая статистика'}</p>
           {subscription?.isPro&&subscription.expiresAt&&<p>Действует до {new Date(subscription.expiresAt).toLocaleDateString('ru-RU')}</p>}
           {!subscription?.isPro&&<p>PRO: до 10 каналов, расширенная статистика, комиссия 2,5%.</p>}
-          <button className="primary" type="button" disabled={!subscription?.checkoutAvailable||tributeBusy} onClick={()=>void startTributeCheckout("pro30")}>PRO · {subscription?.proPriceRub??399} ₽ / 30 дней</button>{tributeNotice&&<p className="hint">{tributeNotice}</p>}
+          <button className="primary" type="button" disabled={!subscription?.checkoutAvailable||checkoutBusy} onClick={()=>void startCheckout("pro30")}>PRO · {subscription?.proPriceRub??399} ₽ / 30 дней</button>{checkoutNotice&&<p className="hint">{checkoutNotice}</p>}
           {!subscription?.checkoutAvailable&&<p className="hint">{subscription?.checkoutMessage??'Подключение кассы ожидается'}</p>}
-          {tributePayments.length>0&&<div className="tributePaymentHistory"><strong>Последние платежи</strong>{tributePayments.slice(0,8).map(payment=><div key={payment.orderUuid} className="notice"><span>{payment.product==='pro30'?'PRO':'Продвижение'} · {(payment.amountKopecks/100).toLocaleString('ru-RU')} ₽ · {payment.status==='paid'?'Оплачено':'Ожидает подтверждения'}</span>{payment.status!=='paid'&&<button className="secondary" type="button" disabled={tributeChecking} onClick={()=>void confirmTributePayment(payment)}>Проверить оплату</button>}</div>)}</div>}
+          {paymentHistory.length>0&&<div className="tributePaymentHistory"><strong>Последние платежи</strong>{paymentHistory.slice(0,8).map(payment=><div key={payment.orderUuid} className="notice"><span>{payment.product==='pro30'?'PRO':'Продвижение'} · {(payment.amountKopecks/100).toLocaleString('ru-RU')} ₽ · {payment.status==='paid'?'Оплачено':payment.status==='review'?'На проверке, напишите в поддержку':'Ожидает оплаты'}</span></div>)}</div>}
 
         </section>
         <div className="profileIdentity"><div className="profileAvatar">{(telegramUser?.first_name || 'R').slice(0,1).toUpperCase()}</div><div><span className="catalogEyebrow">ЛИЧНЫЙ КАБИНЕТ</span><h2>{telegramUser?.first_name || 'Пользователь Reklio'}</h2><p>{telegramUser?.username ? '@'+telegramUser.username : 'Управление рекламой и каналами'}</p></div></div>
