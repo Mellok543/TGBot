@@ -3,6 +3,7 @@ import { ClipboardList, Megaphone, Search, UserRound } from 'lucide-react';
 import { get } from './api';
 import { needsAttention } from './orderFlow';
 import { startChannelId, webApp } from './telegram';
+import { reportUserSource } from './traffic';
 import type { Me, Subscription, Tab } from './types';
 import { useOrders } from './useOrders';
 import { Catalog } from './Catalog';
@@ -35,6 +36,7 @@ export function App() {
     app?.expand();
     get<Me>('/api/me').then(setMe).catch(() => {});
     get<Subscription>('/api/subscription').then(setSubscription).catch(() => {});
+    reportUserSource();
   }, []);
 
   const current = TABS.find(item => item.id === tab)!;
