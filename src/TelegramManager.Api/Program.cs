@@ -35,21 +35,19 @@ builder.Services.AddRateLimiter(options =>
                 PermitLimit=300,Window=TimeSpan.FromMinutes(1),
                 QueueLimit=0,AutoReplenishment=true
             });
-        // Keep health checks and YooKassa callbacks available during traffic spikes.
+        // Keep health checks available during traffic spikes.
         if(path=="/api/health")
-            return RateLimitPartition.GetNoLimiter("health-or-webhook");
+            return RateLimitPartition.GetNoLimiter("health");
         var identity=context.User.FindFirst("id")?.Value;
         var ip=context.Connection.RemoteIpAddress?.ToString()??"unknown";
         var key=(identity is null?"ip:"+ip:"user:"+identity)+
             // A limiter's options are fixed by the first request for its key, so each limit needs its own key.
             (path=="/api/my-channels/connect"?":connect":path.StartsWith("/api/auth/")?":auth":
-             path=="/api/payments/yookassa/notification"?":webhook":
-             path.StartsWith("/api/orders/")&&path.EndsWith("/payment")?":payment":":general");
+             ":general");
         var isSensitive=path=="/api/my-channels/connect"||path.StartsWith("/api/auth/");
-        var isWebhook=path=="/api/payments/yookassa/notification";
         return RateLimitPartition.GetFixedWindowLimiter(key,_=>new FixedWindowRateLimiterOptions
         {
-            PermitLimit=isWebhook?60:isSensitive?12:180,Window=TimeSpan.FromMinutes(1),
+            PermitLimit=isSensitive?12:180,Window=TimeSpan.FromMinutes(1),
             QueueLimit=0,AutoReplenishment=true
         });
     });
@@ -745,7 +743,7 @@ long? Authorized(HttpRequest req)
     // Cross-origin requests must carry the exact trusted website Origin (CSRF defense).
     var path=req.Path.Value??"";
     if(!System.Text.RegularExpressions.Regex.IsMatch(path,
-        @"^(?:/api/orders(?:/[0-9]+(?:/(?:schedule|reschedule|dispute|payment|payment/check|deal|direct-payment|direct-payment/claim|direct-payment/confirm|direct-payment/reject|cancel|republish|approve|reject|image))?)?|/api/my-channels/connect|/api/subscription|/api/payments/my|/api/payments/checkout/(?:pro|promotion/-?[0-9]+)|/api/channels/-?[0-9]+/(?:rates|history|availability|reviews))$",
+        @"^(?:/api/orders(?:/[0-9]+(?:/(?:schedule|reschedule|dispute|deal|direct-payment|direct-payment/claim|direct-payment/confirm|direct-payment/reject|cancel|republish|approve|reject|image))?)?|/api/my-channels/connect|/api/subscription|/api/payments/my|/api/payments/checkout/(?:pro|promotion/-?[0-9]+)|/api/channels/-?[0-9]+/(?:rates|history|availability|reviews))$",
         System.Text.RegularExpressions.RegexOptions.CultureInvariant)) return null;
     if(req.Headers.Origin.ToString() is not ("https://reklio.site" or "https://www.reklio.site"))return null;
     if(req.HttpContext.User.Identity?.IsAuthenticated!=true)return null;
@@ -2209,9 +2207,9 @@ app.MapMethods("/api/payments/payanyway/notification",new[]{"GET","POST"},async(
   return Results.Text("FAIL",statusCode:400);
  await using var conn=await db.OpenConnectionAsync(ct);
  await using var tx=await conn.BeginTransactionAsync(ct);
- long buyer=0;long? channel=null;string? product=null;int days=0;decimal amount=0m;bool orderTest=false;string? state=null;
+ long buyer=0;long? channel=null;string? product=null;int days=0;decimal amount=0m;bool orderTest=false;string? state=null;bool fresh=false;
  await using(var find=new MySqlCommand("""
-  SELECT user_id,product,channel_id,days,amount_rub,test_mode,status
+  SELECT user_id,product,channel_id,days,amount_rub,test_mode,status,created_at>NOW()-INTERVAL 24 HOUR
   FROM reklio_payanyway_orders WHERE transaction_id=@id FOR UPDATE
   """,conn,tx))
  {
@@ -2220,7 +2218,7 @@ app.MapMethods("/api/payments/payanyway/notification",new[]{"GET","POST"},async(
   if(await reader.ReadAsync(ct))
   {
    buyer=reader.GetInt64(0);product=reader.GetString(1);channel=reader.IsDBNull(2)?null:reader.GetInt64(2);
-   days=reader.GetInt32(3);amount=reader.GetDecimal(4);orderTest=reader.GetBoolean(5);state=reader.GetString(6);
+   days=reader.GetInt32(3);amount=reader.GetDecimal(4);orderTest=reader.GetBoolean(5);state=reader.GetString(6);fresh=reader.GetInt64(7)!=0;
   }
  }
  if(state is null)app.Logger.LogError("PayAnyWay paid unknown order {TransactionId}, operation {OperationId}",transactionId,operationId);
@@ -2229,7 +2227,8 @@ app.MapMethods("/api/payments/payanyway/notification",new[]{"GET","POST"},async(
   await tx.RollbackAsync(ct);
   return Results.Text("SUCCESS");
  }
- var matches=paid==amount&&currency=="RUB"&&subscriber==buyer.ToString()&&(testFlag=="1")==orderTest;
+  // The money really arrived on a late or altered payment, so it goes to manual review rather than being lost.
+ var matches=fresh&&paid==amount&&currency=="RUB"&&subscriber==buyer.ToString()&&(testFlag=="1")==orderTest;
  if(matches&&product=="pro30")
  {
   // A buyer may pay before the bot has registered this account.
@@ -2638,313 +2637,6 @@ app.MapPost("/api/orders/{orderId:long}/reject", async (long orderId, HttpReques
     await tx.CommitAsync(ct);
     return Results.Ok(new { id = orderId, status = "Rejected" });
 });
-
-// Payment endpoints are deliberately test-only. Standard test payments are not escrow.
-// The service must be configured with test-shop credentials before this feature is enabled.
-app.MapPost("/api/orders/{orderId:long}/payment", async (long orderId, HttpRequest req, MySqlDataSource db, IHttpClientFactory clients, CancellationToken ct) =>
-{
-    if (Authorized(req) is not long buyer) return Results.Unauthorized();
-    if (Environment.GetEnvironmentVariable("YOOKASSA_MODE") != "test")
-        return Results.Problem("Test payments are disabled", statusCode: 503);
-    var shop = Environment.GetEnvironmentVariable("YOOKASSA_SHOP_ID");
-    var key = Environment.GetEnvironmentVariable("YOOKASSA_SECRET_KEY");
-    if (string.IsNullOrWhiteSpace(shop) || string.IsNullOrWhiteSpace(key))
-        return Results.Problem("Test shop not configured", statusCode: 503);
-    if (orderId <= 0) return Results.BadRequest();
-
-    await using var conn = await db.OpenConnectionAsync(ct);
-    // A database row and unique order lock make repeated taps reuse the same attempt.
-    await using var tx = await conn.BeginTransactionAsync(ct);
-    await using var lookup = new MySqlCommand("""
-        SELECT a.price_rub
-        FROM ad_requests a
-        WHERE a.id=@id AND a.advertiser_id=@buyer AND status='AwaitingPayment'
-          AND scheduled_at>DATE_ADD(UTC_TIMESTAMP(),INTERVAL 10 MINUTE)
-        FOR UPDATE
-        """, conn, tx);
-    lookup.Parameters.AddWithValue("@id", orderId);
-    lookup.Parameters.AddWithValue("@buyer", buyer);
-    decimal price;
-    await using(var reader=await lookup.ExecuteReaderAsync(ct))
-    {
-        if(!await reader.ReadAsync(ct)){await tx.RollbackAsync(ct);return Results.Conflict(new {error="Заказ недоступен для оплаты"});}
-        price=reader.GetDecimal(0);
-    }
-    var buyerTotal = price;
-    if (price < 1m || price > 1000000m) { await tx.RollbackAsync(ct); return Results.BadRequest(new { error = "Некорректная сумма" }); }
-
-    await using var existing = new MySqlCommand("""
-        SELECT id,idempotence_key,provider_payment_id,confirmation_url,status
-        FROM reklio_payment_attempts
-        WHERE order_id=@id AND mode='test' AND status IN ('Created','Pending','Succeeded')
-        ORDER BY id DESC LIMIT 1 FOR UPDATE
-        """, conn, tx);
-    existing.Parameters.AddWithValue("@id", orderId);
-    long attemptId;
-    string idempotence;
-    string? paymentId;
-    string? confirmation;
-    string attemptStatus;
-    await using (var reader = await existing.ExecuteReaderAsync(ct))
-    {
-        if (await reader.ReadAsync(ct))
-        {
-            attemptId = reader.GetInt64(0);
-            idempotence = reader.GetString(1);
-            paymentId = reader.IsDBNull(2) ? null : reader.GetString(2);
-            confirmation = reader.IsDBNull(3) ? null : reader.GetString(3);
-            attemptStatus = reader.GetString(4);
-        }
-        else
-        {
-            attemptId = 0; idempotence = Guid.NewGuid().ToString();
-            paymentId = null; confirmation = null; attemptStatus = "Created";
-        }
-    }
-    if (attemptId == 0)
-    {
-        await using var insert = new MySqlCommand("""
-            INSERT INTO reklio_payment_attempts
-              (order_id,advertiser_id,amount_rub,idempotence_key,status,mode)
-            VALUES (@id,@buyer,@price,@key,'Created','test')
-            """, conn, tx);
-        insert.Parameters.AddWithValue("@id", orderId);
-        insert.Parameters.AddWithValue("@buyer", buyer);
-        insert.Parameters.AddWithValue("@price", buyerTotal);
-        insert.Parameters.AddWithValue("@key", idempotence);
-        await insert.ExecuteNonQueryAsync(ct);
-        attemptId = insert.LastInsertedId;
-    }
-    // Commit the persisted idempotency key before contacting the provider.
-    // Concurrent requests reuse the same key; YooKassa deduplicates them.
-    if (attemptStatus == "Succeeded")
-    {
-        await tx.RollbackAsync(ct);
-        return Results.Conflict(new { error = "Платёж уже подтверждён" });
-    }
-    if (paymentId is not null && confirmation is not null)
-    {
-        await tx.CommitAsync(ct);
-        return Results.Ok(new { confirmationUrl = confirmation });
-    }
-
-    await tx.CommitAsync(ct);
-
-    // No database transaction or order row lock is held across the HTTP call.
-    // The provider idempotence key is persisted BEFORE the network request.
-    // Do not mark the order paid based on this response.
-    var client = clients.CreateClient();
-    using var request = new HttpRequestMessage(HttpMethod.Post, "https://api.yookassa.ru/v3/payments");
-    request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue(
-        "Basic", Convert.ToBase64String(Encoding.UTF8.GetBytes(shop + ":" + key)));
-    request.Headers.Add("Idempotence-Key", idempotence);
-    request.Content = System.Net.Http.Json.JsonContent.Create(new {
-        amount = new { value = buyerTotal.ToString("F2", System.Globalization.CultureInfo.InvariantCulture), currency = "RUB" },
-        capture = true,
-        confirmation = new { type = "redirect", return_url = "https://reklio.site/" },
-        description = "Тестовая оплата Reklio #" + orderId,
-        metadata = new { order_id = orderId.ToString() }
-    });
-    using var providerTimeout=CancellationTokenSource.CreateLinkedTokenSource(ct);
-    providerTimeout.CancelAfter(TimeSpan.FromSeconds(12));
-    using var response = await client.SendAsync(request, providerTimeout.Token);
-    if (!response.IsSuccessStatusCode)
-        return Results.Problem("ЮKassa отклонила создание тестового платежа", statusCode: 502);
-    using var document = await System.Text.Json.JsonDocument.ParseAsync(await response.Content.ReadAsStreamAsync(ct), cancellationToken: ct);
-    var root = document.RootElement;
-    var providerId = root.GetProperty("id").GetString();
-    var url = root.GetProperty("confirmation").GetProperty("confirmation_url").GetString();
-    if (string.IsNullOrWhiteSpace(providerId) || string.IsNullOrWhiteSpace(url))
-        return Results.Problem("Некорректный ответ ЮKassa", statusCode: 502);
-    await using var saveTx = await conn.BeginTransactionAsync(ct);
-    await using var save = new MySqlCommand("""
-        UPDATE reklio_payment_attempts
-        SET provider_payment_id=@provider,confirmation_url=@url,
-            status=IF(status='Succeeded','Succeeded','Pending')
-        WHERE id=@attempt AND mode='test' AND status IN ('Created','Pending','Succeeded')
-          AND (provider_payment_id IS NULL OR provider_payment_id=@provider)
-        """, conn, saveTx);
-    save.Parameters.AddWithValue("@provider", providerId);
-    save.Parameters.AddWithValue("@url", url);
-    save.Parameters.AddWithValue("@attempt", attemptId);
-    if (await save.ExecuteNonQueryAsync(ct) != 1)
-        throw new InvalidOperationException("Payment attempt was not saved");
-    await saveTx.CommitAsync(ct);
-    return Results.Ok(new { confirmationUrl = url });
-});
-
-app.MapPost("/api/payments/yookassa/notification", async (HttpRequest req, MySqlDataSource db, IHttpClientFactory clients, CancellationToken ct) =>
-{
-    if(req.ContentLength>65536)return Results.StatusCode(413);
-    var maxBody=req.HttpContext.Features.Get<Microsoft.AspNetCore.Http.Features.IHttpMaxRequestBodySizeFeature>();
-    if(maxBody is {IsReadOnly:false})maxBody.MaxRequestBodySize=65536;
-    if (Environment.GetEnvironmentVariable("YOOKASSA_MODE") != "test")
-        return Results.StatusCode(503);
-    var shop=Environment.GetEnvironmentVariable("YOOKASSA_SHOP_ID");
-    var key=Environment.GetEnvironmentVariable("YOOKASSA_SECRET_KEY");
-    if (string.IsNullOrWhiteSpace(shop) || string.IsNullOrWhiteSpace(key))
-        return Results.StatusCode(503);
-
-    // Webhook JSON is untrusted. Verify its payment ID with YooKassa before changing an order.
-    System.Text.Json.JsonDocument notification;
-    try { notification=await System.Text.Json.JsonDocument.ParseAsync(req.Body, cancellationToken:ct); }
-    catch (System.Text.Json.JsonException) { return Results.BadRequest(); }
-    using (notification)
-    {
-        var root=notification.RootElement;
-        if (!root.TryGetProperty("type",out var type) || type.GetString()!="notification" ||
-            !root.TryGetProperty("event",out var ev) || ev.GetString()!="payment.succeeded" ||
-            !root.TryGetProperty("object",out var obj) ||
-            !obj.TryGetProperty("id",out var paymentIdJson))
-            return Results.Ok(new {ignored=true});
-        var paymentId=paymentIdJson.GetString();
-        if (string.IsNullOrEmpty(paymentId) || paymentId.Length>100)
-            return Results.BadRequest();
-
-        await using var conn=await db.OpenConnectionAsync(ct);
-        await using var lookup=new MySqlCommand("""
-            SELECT p.id,p.order_id,p.amount_rub
-            FROM reklio_payment_attempts p
-            WHERE p.provider_payment_id=@payment AND p.mode='test' LIMIT 1
-            """,conn);
-        lookup.Parameters.AddWithValue("@payment",paymentId);
-        long attemptId,orderId;decimal expected;
-        await using(var reader=await lookup.ExecuteReaderAsync(ct))
-        {
-            if(!await reader.ReadAsync(ct)) return Results.Ok(new {ignored=true});
-            attemptId=reader.GetInt64(0);orderId=reader.GetInt64(1);expected=reader.GetDecimal(2);
-        }
-        var client=new TelegramManager.Api.Payments.YooKassaSafeDealClient(clients.CreateClient(),shop,key);
-        var payment=await client.GetPaymentAsync(paymentId,ct);
-        if(payment.Id!=paymentId || payment.Status!="succeeded" || !payment.Paid ||
-            payment.Metadata?.GetValueOrDefault("order_id")!=orderId.ToString() ||
-            payment.Amount.Currency!="RUB" ||
-            !decimal.TryParse(payment.Amount.Value,System.Globalization.NumberStyles.Number,
-                System.Globalization.CultureInfo.InvariantCulture,out var actual) || actual!=expected)
-            return Results.Ok(new {ignored=true});
-        await using var tx=await conn.BeginTransactionAsync(ct);
-        await using var update=new MySqlCommand("""
-            UPDATE ad_requests SET status='Scheduled',paid_confirmed=TRUE,
-              payment_status='TestPaid',is_test_order=TRUE,payout_status='NotEligible'
-            WHERE id=@order AND status='AwaitingPayment'
-              AND scheduled_at>DATE_ADD(UTC_TIMESTAMP(),INTERVAL 10 MINUTE)
-            """,conn,tx);
-        update.Parameters.AddWithValue("@order",orderId);
-        var transitioned=await update.ExecuteNonQueryAsync(ct);
-        if(transitioned==0)
-        {
-            await using var late=new MySqlCommand("""
-                UPDATE ad_requests SET status='PaidReschedule', paid_confirmed=TRUE,
-                  payment_status='TestPaid', is_test_order=TRUE, payout_status='NotEligible'
-                WHERE id=@order AND status='AwaitingPayment'
-                  AND scheduled_at<=DATE_ADD(UTC_TIMESTAMP(),INTERVAL 10 MINUTE)
-                """,conn,tx);
-            late.Parameters.AddWithValue("@order",orderId);
-            await late.ExecuteNonQueryAsync(ct);
-        }
-        if(transitioned==1)
-        {
-            await using var notice=new MySqlCommand("""
-                INSERT IGNORE INTO notification_outbox(recipient_id,order_id,body)
-                SELECT advertiser_id,id,CONCAT('🧪 Тестовая оплата подтверждена · заказ #',id,CHAR(10),'✅ Размещение запланировано.',CHAR(10),'Реальные деньги не списаны.')
-                  FROM ad_requests WHERE id=@order
-                UNION ALL
-                SELECT owner_id,id,CONCAT('🧪 Тестовый заказ #',id,CHAR(10),'✅ Оплата имитирована, деньги не списаны.',CHAR(10),'📅 Ожидается публикация.')
-                  FROM ad_requests WHERE id=@order
-                """,conn,tx);
-            notice.Parameters.AddWithValue("@order",orderId);
-            await notice.ExecuteNonQueryAsync(ct);
-        }
-        await using var mark=new MySqlCommand("""
-            UPDATE reklio_payment_attempts SET status='Succeeded'
-            WHERE id=@attempt AND status IN ('Created','Pending','Succeeded')
-            """,conn,tx);
-        mark.Parameters.AddWithValue("@attempt",attemptId);
-        await mark.ExecuteNonQueryAsync(ct);
-        await tx.CommitAsync(ct);
-        return Results.Ok(new {received=true});
-    }
-});
-
-app.MapPost("/api/orders/{orderId:long}/payment/check", async (long orderId, HttpRequest req, MySqlDataSource db, IHttpClientFactory clients, CancellationToken ct) =>
-{
-    if (Authorized(req) is not long buyer) return Results.Unauthorized();
-    if (Environment.GetEnvironmentVariable("YOOKASSA_MODE") != "test") return Results.Problem(statusCode: 503);
-    var shop = Environment.GetEnvironmentVariable("YOOKASSA_SHOP_ID");
-    var key = Environment.GetEnvironmentVariable("YOOKASSA_SECRET_KEY");
-    if (string.IsNullOrWhiteSpace(shop) || string.IsNullOrWhiteSpace(key)) return Results.Problem(statusCode: 503);
-    await using var conn = await db.OpenConnectionAsync(ct);
-    await using var cmd = new MySqlCommand("""
-        SELECT p.id,p.provider_payment_id,p.amount_rub
-        FROM reklio_payment_attempts p JOIN ad_requests a ON a.id=p.order_id
-        WHERE p.order_id=@id AND a.advertiser_id=@buyer AND p.mode='test'
-          AND p.provider_payment_id IS NOT NULL
-        ORDER BY p.id DESC LIMIT 1
-        """, conn);
-    cmd.Parameters.AddWithValue("@id", orderId);
-    cmd.Parameters.AddWithValue("@buyer", buyer);
-    long attemptId; string providerId; decimal amount;
-    await using (var reader = await cmd.ExecuteReaderAsync(ct))
-    {
-        if (!await reader.ReadAsync(ct)) return Results.NotFound();
-        attemptId = reader.GetInt64(0); providerId = reader.GetString(1); amount = reader.GetDecimal(2);
-    }
-    var client = new TelegramManager.Api.Payments.YooKassaSafeDealClient(clients.CreateClient(), shop, key);
-    var payment = await client.GetPaymentAsync(providerId, ct);
-    if (payment.Id != providerId || payment.Metadata?.GetValueOrDefault("order_id") != orderId.ToString() ||
-        payment.Amount.Currency != "RUB" ||
-        !decimal.TryParse(payment.Amount.Value, System.Globalization.NumberStyles.Number,
-            System.Globalization.CultureInfo.InvariantCulture, out var actual) || actual != amount)
-        return Results.Problem("Данные платежа не совпадают с заказом", statusCode: 502);
-    if (payment.Status == "succeeded" && payment.Paid)
-    {
-        await using var tx = await conn.BeginTransactionAsync(ct);
-        await using var update = new MySqlCommand("""
-            UPDATE ad_requests SET status='Scheduled', paid_confirmed=TRUE,
-                payment_status='TestPaid', is_test_order=TRUE, payout_status='NotEligible'
-            WHERE id=@id AND advertiser_id=@buyer AND status='AwaitingPayment'
-              AND scheduled_at>DATE_ADD(UTC_TIMESTAMP(),INTERVAL 10 MINUTE)
-            """, conn, tx);
-        update.Parameters.AddWithValue("@id", orderId);
-        update.Parameters.AddWithValue("@buyer", buyer);
-        var transitioned = await update.ExecuteNonQueryAsync(ct);
-        if (transitioned == 0)
-        {
-            await using var late=new MySqlCommand("""
-                UPDATE ad_requests SET status='PaidReschedule', paid_confirmed=TRUE,
-                    payment_status='TestPaid', is_test_order=TRUE, payout_status='NotEligible'
-                WHERE id=@id AND advertiser_id=@buyer AND status='AwaitingPayment'
-                  AND scheduled_at<=DATE_ADD(UTC_TIMESTAMP(),INTERVAL 10 MINUTE)
-                """, conn, tx);
-            late.Parameters.AddWithValue("@id",orderId);
-            late.Parameters.AddWithValue("@buyer",buyer);
-            await late.ExecuteNonQueryAsync(ct);
-        }
-        if (transitioned == 1)
-        {
-            await using var notice = new MySqlCommand("""
-                INSERT IGNORE INTO notification_outbox (recipient_id,order_id,body)
-                SELECT advertiser_id,id,CONCAT('💳 Оплата подтверждена · заказ #',id,CHAR(10),'✅ Реклама запланирована.',CHAR(10),'📅 Ожидайте публикации в назначенное время.')
-                FROM ad_requests WHERE id=@id
-                UNION ALL
-                SELECT owner_id,id,CONCAT('💳 Заказ #',id,' оплачен',CHAR(10),'✅ Оплата подтверждена.',CHAR(10),'📅 Публикация ожидается по расписанию.')
-                FROM ad_requests WHERE id=@id
-                """, conn, tx);
-            notice.Parameters.AddWithValue("@id", orderId);
-            await notice.ExecuteNonQueryAsync(ct);
-        }
-        await using var mark = new MySqlCommand("""
-            UPDATE reklio_payment_attempts SET status='Succeeded'
-            WHERE id=@attempt AND status IN ('Created','Pending','Succeeded')
-            """, conn, tx);
-        mark.Parameters.AddWithValue("@attempt", attemptId);
-        await mark.ExecuteNonQueryAsync(ct);
-        await tx.CommitAsync(ct);
-        return Results.Ok(new { status = "Succeeded" });
-    }
-    return Results.Ok(new { status = payment.Status });
-});
-
 
 // Owner earnings are bookkeeping entries, not stored-value accounts or customer deposits.
 // Only externally verified real payments and completed, payout-reviewed orders qualify.
