@@ -272,7 +272,6 @@ public sealed class BotHandlers(Database database)
 
     private const int ProPriceStars = 299;
     private static string ProPayload(long userId) => $"pro30:{userId}";
-    private static string PromotionPayload(long owner,long channel,int days) => $"boost:{owner}:{channel}:{days}";
     private static bool TryPromotion(string payload,long owner,out long channel,out int days)
     {
         channel=0;days=0;
@@ -293,12 +292,8 @@ public sealed class BotHandlers(Database database)
 
         if (update.PreCheckoutQuery is { } pre)
         {
-            var valid = pre.Currency == "XTR" && pre.TotalAmount == ProPriceStars &&
-                        pre.InvoicePayload == ProPayload(pre.From.Id);
-            if(!valid && TryPromotion(pre.InvoicePayload,pre.From.Id,out var boostChannel,out var boostDays))
-                valid=pre.Currency=="XTR" && pre.TotalAmount==(boostDays==7?99:299)
-                    && await database.OwnsListedChannelAsync(pre.From.Id,boostChannel,ct);
-            await bot.AnswerPreCheckoutQuery(pre.Id, errorMessage: valid ? null : "Некорректный платёж. Создайте новый счёт в профиле.",
+            // Stars are no longer sold. Invoices already sitting in a chat can still be tapped, so refuse them here.
+            await bot.AnswerPreCheckoutQuery(pre.Id, errorMessage: "Оплата звёздами больше не принимается. PRO и продвижение можно оплатить в профиле Reklio.",
                 cancellationToken: ct);
             return;
         }
@@ -566,17 +561,9 @@ public sealed class BotHandlers(Database database)
                         "📺 Подключение канала\\n\\n1. Добавьте @ReklioBot в администраторы канала с разрешением публиковать сообщения.\\n2. Нажмите «Выбрать канал».\\n3. Подтвердите подключение.",
                         replyMarkup:Connect(),cancellationToken:ct);
                 }
-                else if(payload.Length==2 && payload[1].StartsWith("boost_") &&
-                    long.TryParse(payload[1][6..],out var channelToBoost))
+                else if(payload.Length==2 && payload[1].StartsWith("boost_"))
                 {
-                    if(!await database.OwnsListedChannelAsync(user.Id,channelToBoost,ct))
-                        await bot.SendMessage(message.Chat.Id,"Канал не найден среди ваших опубликованных площадок.",cancellationToken:ct);
-                    else
-                        await bot.SendMessage(message.Chat.Id,"🚀 Продвижение канала в каталоге Reklio. Выберите срок:",
-                            replyMarkup:new InlineKeyboardMarkup(new[]{
-                                new[]{InlineKeyboardButton.WithCallbackData("7 дней · 99 ⭐",$"boost:7:{channelToBoost}")},
-                                new[]{InlineKeyboardButton.WithCallbackData("30 дней · 299 ⭐",$"boost:30:{channelToBoost}")}
-                            }),cancellationToken:ct);
+                    await bot.SendMessage(message.Chat.Id,"🚀 Продвижение теперь оплачивается в Reklio: откройте Mini App, раздел «Каналы», и выберите канал.",cancellationToken:ct);
                 }
                 else if (payload.Length == 2 && payload[1].StartsWith("ad_") && long.TryParse(payload[1][3..], out var directId))
                 {
@@ -615,23 +602,10 @@ public sealed class BotHandlers(Database database)
         await database.RegisterAsync(actor.Id, actor.Username, actor.FirstName + (actor.LastName is null ? "" : " " + actor.LastName), ct);
 
         var data = query.Data ?? "";
+        // Buttons from old messages must keep answering after Stars checkout was removed.
         if (data.StartsWith("boost:",StringComparison.Ordinal))
         {
-            var parts=data.Split(':');
-            if(parts.Length==3 && int.TryParse(parts[1],out var days)
-                && days is 7 or 30 && long.TryParse(parts[2],out var channelId)
-                && await database.OwnsListedChannelAsync(actor.Id,channelId,ct))
-            {
-                var price=days==7?99:299;
-                await bot.SendInvoice(origin.Chat.Id,
-                    title:$"Продвижение канала · {days} дней",
-                    description:"Приоритетное место и цветная карточка в каталоге Reklio.",
-                    payload:PromotionPayload(actor.Id,channelId,days),
-                    currency:"XTR",
-                    prices:new[]{new LabeledPrice($"Продвижение · {days} дней",price)},
-                    providerToken:"",cancellationToken:ct);
-            }
-            else await bot.SendMessage(origin.Chat.Id,"Канал недоступен для продвижения.",cancellationToken:ct);
+            await bot.SendMessage(origin.Chat.Id,"🚀 Продвижение теперь оплачивается в Reklio: откройте Mini App, раздел «Каналы», и выберите канал.",cancellationToken:ct);
             return;
         }
         if (data.StartsWith("early:", StringComparison.Ordinal))
@@ -815,8 +789,8 @@ public sealed class BotHandlers(Database database)
             case "subscription_status":
                 var plan = await database.GetPlanAsync(actor.Id, ct);
                 var planText = plan.Pro
-                    ? $"PRO действует до {plan.ProEnds!.Value.Add(DisplayOffset):dd.MM.yyyy HH:mm} (UTC+3).\\nДо 10 каналов, расширенная статистика."
-                    : "FREE: 1 канал без ограничения по времени, базовая статистика.\\nPRO: до 10 каналов, расширенная статистика.";
+                    ? $"PRO действует до {plan.ProEnds!.Value.Add(DisplayOffset):dd.MM.yyyy HH:mm} (UTC+3).\\nДо 15 каналов, расширенная статистика."
+                    : "FREE: 1 канал без ограничения по времени, базовая статистика.\\nPRO: до 15 каналов, расширенная статистика.";
                 await bot.EditMessageText(origin.Chat.Id, origin.MessageId, planText,
                     replyMarkup:Home(), cancellationToken: ct);
                 break;

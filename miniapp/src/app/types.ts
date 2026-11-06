@@ -40,6 +40,7 @@ export type Order = {
   resolution: string | null;
   counterpart: string | null;
   canDispute: boolean;
+  hasImage: boolean;
 };
 
 export type DirectPayment = {
@@ -80,11 +81,13 @@ export type PaymentRecord = { orderUuid: string; product: string; amountKopecks:
 export type Me = { id: number; isDisputeAdmin: boolean; adminRole: string | null };
 
 export type StaffMember = { id: number; role: string; grantedBy: number; createdAt: string };
-export type AdminUser = { id: number; name: string; username: string | null; channels: number; purchases: number };
+export type AdminUser = { id: number; name: string; username: string | null; channels: number; purchases: number; blocked: boolean; blockedUntil: string | null; firstSeen: string };
 export type AdminOrder = { id: number; channel: string; status: string; price: number; buyerId: number; ownerId: number; createdAt: string };
 export type AuditItem = { id: number; actorId: number; action: string; targetId: number | null; details: string | null; createdAt: string };
 export type ModerationChannel = { id: number; title: string; category: string; listed: boolean; ownerId: number; price: number; blocked: boolean; blockedUntil: string | null };
 export type MtprotoStatus = { configured: boolean; checkedOrders: number; present: number; missing: number; lastCheck: string | null; healthy: boolean };
 export type PublicationIssue = { id: number; channel: string; status: string; error: string; scheduledAt: string | null; publishedAt: string | null };
 export type AdminOverview = { channels: number; listed: number; orders: number; openDisputes: number; failedPublications: number };
+export type FeedbackItem = { id: number; kind: string; message: string; status: string; reply: string | null; createdAt: string };
+export type AdminFeedback = FeedbackItem & { userId: number; name: string | null; username: string | null };
 export type AdminDispute = { id: number; channel: string; price: number; text: string; reason: string; openedAt: string | null; status: string; resolution: string | null; paymentStatus: string };

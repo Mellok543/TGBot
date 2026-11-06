@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { get, post } from './api';
+import { get, getOrderImageUrl, post } from './api';
 import { dateTime, duration, errorText, formatCard, money, parseUtc } from './format';
 import { orderView, type OrderAction } from './orderFlow';
 import { openChannelInTelegram } from './telegram';
@@ -24,6 +24,17 @@ export function OrderCard({ order, onChanged }: { order: Order; onChanged: (mess
   const [newTime, setNewTime] = useState('');
   const [payment, setPayment] = useState<DirectPayment | null>(null);
   const canPay = view.actions.includes('pay');
+  const [imageUrl, setImageUrl] = useState('');
+
+  useEffect(() => {
+    if (!open || !order.hasImage) return;
+    let active = true;
+    let url = '';
+    getOrderImageUrl(order.id)
+      .then(value => { url = value; if (active) setImageUrl(value); else URL.revokeObjectURL(value); })
+      .catch(() => {});
+    return () => { active = false; if (url) URL.revokeObjectURL(url); };
+  }, [open, order.hasImage, order.id]);
 
   useEffect(() => {
     if (!canPay) return;
@@ -131,6 +142,7 @@ export function OrderCard({ order, onChanged }: { order: Order; onChanged: (mess
     </div>}
 
     {open && <div className="orderDetails">
+      {imageUrl && <img className="adImagePreview" src={imageUrl} alt="Картинка рекламы"/>}
       <strong>Текст рекламы</strong><p>{order.text || 'Текст не указан'}</p>
       <strong>Публикация</strong><p>{order.scheduledAt ? dateTime(order.scheduledAt) : 'Не назначена'}</p>
       <strong>Срок размещения</strong><p>{duration(order.durationHours)}</p>

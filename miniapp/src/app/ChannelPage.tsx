@@ -1,13 +1,16 @@
 import { useEffect, useMemo, useState } from 'react';
 import { ArrowUpRight } from 'lucide-react';
-import { get, post } from './api';
+import { get, post, uploadOrderImage } from './api';
 import { count, cpm, duration, errorText, money, parseUtc } from './format';
+import { prepareImage } from './image';
 import { openChannelInTelegram } from './telegram';
 import type { Channel, ChannelReview, HistoryPoint, Rate } from './types';
 import { ChannelAvatar, ErrorBox, LineChart } from './ui';
 
 const HOUR = 60 * 60 * 1000;
 const DAY = 24 * HOUR;
+const TEXT_LIMIT = 4096;
+const CAPTION_LIMIT = 1024;
 const pad = (n: number) => String(n).padStart(2, '0');
 const HOURS = Array.from({ length: 24 }, (_, i) => pad(i));
 const MINUTES = Array.from({ length: 12 }, (_, i) => pad(i * 5));
@@ -22,10 +25,10 @@ function upcomingDays(): string[] {
   });
 }
 
-export function ChannelPage({ channel, voted, onVote, onBack, onOrderCreated }: {
+export function ChannelPage({ channel, voted = false, onVote, onBack, onOrderCreated }: {
   channel: Channel;
-  voted: boolean;
-  onVote: () => Promise<void>;
+  voted?: boolean;
+  onVote?: () => Promise<void>;
   onBack: () => void;
   onOrderCreated: (message: string) => void;
 }) {
@@ -42,6 +45,27 @@ export function ChannelPage({ channel, voted, onVote, onBack, onOrderCreated }: 
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
   const [voteBusy, setVoteBusy] = useState(false);
+  const [image, setImage] = useState<Blob | null>(null);
+  const [imageUrl, setImageUrl] = useState('');
+  const [imageBusy, setImageBusy] = useState(false);
+  const textLimit = image ? CAPTION_LIMIT : TEXT_LIMIT;
+
+  useEffect(() => () => { if (imageUrl) URL.revokeObjectURL(imageUrl); }, [imageUrl]);
+
+  async function chooseImage(file: File | undefined) {
+    if (!file) return;
+    setImageBusy(true);
+    setMessage('');
+    try {
+      const prepared = await prepareImage(file);
+      setImage(prepared);
+      setImageUrl(URL.createObjectURL(prepared));
+    } catch (e) {
+      setMessage(errorText(e, 'Не удалось обработать картинку'));
+    } finally {
+      setImageBusy(false);
+    }
+  }
 
   useEffect(() => {
     let active = true;
@@ -81,6 +105,7 @@ export function ChannelPage({ channel, voted, onVote, onBack, onOrderCreated }: 
     setMessage('');
     try {
       const draft = await post<{ id: number }>('/api/orders', { channelId: channel.id, text: text.trim() });
+      if (image) await uploadOrderImage(draft.id, image);
       await post('/api/orders/' + draft.id + '/schedule', { rateId: rate.id, scheduledAt: when.toISOString() });
       onOrderCreated(`Заявка #${draft.id} отправлена. Платить пока не нужно: сначала владелец канала её рассмотрит, и мы сразу сообщим о решении.`);
     } catch (e) {
@@ -92,7 +117,7 @@ export function ChannelPage({ channel, voted, onVote, onBack, onOrderCreated }: 
 
   async function vote() {
     setVoteBusy(true);
-    try { await onVote(); }
+    try { await onVote?.(); }
     catch (e) { setMessage(errorText(e, 'Не удалось учесть голос')); }
     finally { setVoteBusy(false); }
   }
@@ -109,10 +134,10 @@ export function ChannelPage({ channel, voted, onVote, onBack, onOrderCreated }: 
     </div>
     {channel.username && <button className="link" onClick={() => openChannelInTelegram(channel.username!)}>Открыть канал <ArrowUpRight size={15}/></button>}
     {channel.description && <p className="description">{channel.description}</p>}
-    <div className="channelLikeRow">
+    {onVote && <div className="channelLikeRow">
       <button type="button" className={'channelLikeButton' + (voted ? ' active' : '')} disabled={voted || voteBusy} onClick={() => void vote()}>{voted ? '✓ Голос учтён' : '♡ Голосовать'}</button>
       <span>{channel.likes ?? 0} голосов за месяц</span>
-    </div>
+    </div>}
 
     <div className="detailStats">
       <div><small>Подписчики</small><strong>{count(channel.subscribers)}</strong></div>
@@ -159,9 +184,18 @@ export function ChannelPage({ channel, voted, onVote, onBack, onOrderCreated }: 
     {step === 2 && <>
       <h3 className="detailSubtitle">Что и когда публикуем?</h3>
       <label className="field">Текст рекламного поста
-        <textarea value={text} maxLength={4096} rows={5} onChange={e => setText(e.target.value)} placeholder="Опишите предложение и добавьте ссылку"/>
-        <small className="hint">Только текст и ссылки, картинки пока не поддерживаются. Реклама выйдет именно в таком виде. {text.length}/4096</small>
+        <textarea value={text} maxLength={textLimit} rows={5} onChange={e => setText(e.target.value)} placeholder="Опишите предложение и добавьте ссылку"/>
+        <small className={text.length > textLimit ? 'slotWarning' : 'hint'}>Реклама выйдет именно в таком виде. {text.length}/{textLimit}{image ? ' — Telegram ограничивает подпись к картинке' : ''}</small>
       </label>
+      <div className="field"><span>Картинка (необязательно)</span>
+        {imageUrl && <img className="adImagePreview" src={imageUrl} alt="Выбранная картинка"/>}
+        <div className="orderActions">
+          <label className="secondary small filePick">{imageBusy ? 'Обрабатываем…' : imageUrl ? 'Заменить' : 'Выбрать картинку'}
+            <input type="file" accept="image/*" hidden disabled={imageBusy} onChange={e => { void chooseImage(e.target.files?.[0]); e.target.value = ''; }}/>
+          </label>
+          {imageUrl && <button type="button" className="secondary small" onClick={() => { setImage(null); setImageUrl(''); }}>Убрать</button>}
+        </div>
+      </div>
       {days.length === 0 ? <div className="notice">Свободных дат нет. Выберите другой канал.</div> : <>
         <div className="field"><span>Дата публикации</span><div className="dayScroller">{days.map(d => {
           const value = new Date(d + 'T12:00:00');
@@ -179,7 +213,7 @@ export function ChannelPage({ channel, voted, onVote, onBack, onOrderCreated }: 
       </>}
       <div className="purchaseNavigation">
         <button type="button" className="secondary" onClick={() => setStep(1)}>← Назад</button>
-        <button type="button" className="primary" disabled={!text.trim() || !when} onClick={() => setStep(3)}>Проверить →</button>
+        <button type="button" className="primary" disabled={!text.trim() || text.length > textLimit || !when || imageBusy} onClick={() => setStep(3)}>Проверить →</button>
       </div>
     </>}
 
@@ -191,7 +225,7 @@ export function ChannelPage({ channel, voted, onVote, onBack, onOrderCreated }: 
         <div><span>Публикация</span><b>{when.toLocaleString('ru-RU', { day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' })}</b></div>
         <div className="previewTotal"><span>К оплате владельцу</span><strong>{money(rate.price)}</strong></div>
       </div>
-      <div className="orderDetails"><strong>Текст</strong><p>{text.trim()}</p></div>
+      <div className="orderDetails">{imageUrl && <img className="adImagePreview" src={imageUrl} alt="Картинка рекламы"/>}<strong>Текст</strong><p>{text.trim()}</p></div>
       <ol className="nextSteps">
         <li>Владелец канала рассмотрит заявку. <b>Платить пока не нужно.</b></li>
         <li>После одобрения вы увидите его реквизиты и переведёте деньги напрямую ему.</li>

@@ -1,10 +1,10 @@
 import { useEffect, useState } from 'react';
 import { ClipboardList, Megaphone, Search, UserRound } from 'lucide-react';
 import { get } from './api';
-import { errorText } from './format';
 import { needsAttention } from './orderFlow';
 import { startChannelId, webApp } from './telegram';
-import type { Me, Order, Subscription, Tab } from './types';
+import type { Me, Subscription, Tab } from './types';
+import { useOrders } from './useOrders';
 import { Catalog } from './Catalog';
 import { Channels } from './Channels';
 import { Orders } from './Orders';
@@ -26,22 +26,8 @@ export function App() {
   const [welcome, setWelcome] = useState(() => !welcomeSeen() && startChannelId() === null);
   const [me, setMe] = useState<Me | null>(null);
   const [subscription, setSubscription] = useState<Subscription | null>(null);
-  const [orders, setOrders] = useState<Order[]>([]);
-  const [ordersLoading, setOrdersLoading] = useState(true);
-  const [ordersError, setOrdersError] = useState('');
-  const [orderMessage, setOrderMessage] = useState('');
-
-  async function reloadOrders(message?: string) {
-    if (message !== undefined) setOrderMessage(message);
-    try {
-      setOrders(await get<Order[]>('/api/orders'));
-      setOrdersError('');
-    } catch (e) {
-      setOrdersError(errorText(e, 'Не удалось загрузить заказы'));
-    } finally {
-      setOrdersLoading(false);
-    }
-  }
+  // Keeps the attention badge honest on every tab; the orders tab needs fresher data.
+  const { orders, loading: ordersLoading, error: ordersError, message: orderMessage, setMessage: setOrderMessage, reload: reloadOrders } = useOrders(tab === 'orders' ? ORDERS_POLL_MS : ORDERS_POLL_MS * 4);
 
   useEffect(() => {
     const app = webApp();
@@ -50,13 +36,6 @@ export function App() {
     get<Me>('/api/me').then(setMe).catch(() => {});
     get<Subscription>('/api/subscription').then(setSubscription).catch(() => {});
   }, []);
-
-  // Keeps the attention badge honest on every tab; the orders tab needs fresher data.
-  useEffect(() => {
-    void reloadOrders();
-    const timer = window.setInterval(() => void reloadOrders(), tab === 'orders' ? ORDERS_POLL_MS : ORDERS_POLL_MS * 4);
-    return () => window.clearInterval(timer);
-  }, [tab]);
 
   const current = TABS.find(item => item.id === tab)!;
   const attention = needsAttention(orders);

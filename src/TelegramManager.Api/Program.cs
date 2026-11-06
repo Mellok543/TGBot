@@ -35,21 +35,19 @@ builder.Services.AddRateLimiter(options =>
                 PermitLimit=300,Window=TimeSpan.FromMinutes(1),
                 QueueLimit=0,AutoReplenishment=true
             });
-        // Keep health checks and YooKassa callbacks available during traffic spikes.
+        // Keep health checks available during traffic spikes.
         if(path=="/api/health")
-            return RateLimitPartition.GetNoLimiter("health-or-webhook");
+            return RateLimitPartition.GetNoLimiter("health");
         var identity=context.User.FindFirst("id")?.Value;
         var ip=context.Connection.RemoteIpAddress?.ToString()??"unknown";
         var key=(identity is null?"ip:"+ip:"user:"+identity)+
             // A limiter's options are fixed by the first request for its key, so each limit needs its own key.
             (path=="/api/my-channels/connect"?":connect":path.StartsWith("/api/auth/")?":auth":
-             path=="/api/payments/yookassa/notification"?":webhook":
-             path.StartsWith("/api/orders/")&&path.EndsWith("/payment")?":payment":":general");
+             ":general");
         var isSensitive=path=="/api/my-channels/connect"||path.StartsWith("/api/auth/");
-        var isWebhook=path=="/api/payments/yookassa/notification";
         return RateLimitPartition.GetFixedWindowLimiter(key,_=>new FixedWindowRateLimiterOptions
         {
-            PermitLimit=isWebhook?60:isSensitive?12:180,Window=TimeSpan.FromMinutes(1),
+            PermitLimit=isSensitive?12:180,Window=TimeSpan.FromMinutes(1),
             QueueLimit=0,AutoReplenishment=true
         });
     });
@@ -174,7 +172,7 @@ app.MapGet("/api/web/profile", async (HttpContext ctx,MySqlDataSource db,Cancell
        telegramId,name=ctx.User.FindFirst("name")?.Value,
        username=ctx.User.FindFirst("preferred_username")?.Value,
        plan=pro?"PRO":"FREE",proUntil=pro?until:null,
-       channelLimit=pro?10:1,
+       channelLimit=pro?15:1,
        channels=reader.GetInt64(0),purchases=reader.GetInt64(1),
        sales=reader.GetInt64(2),staffRole=role
     });
@@ -588,6 +586,24 @@ try
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
         """);
     await channelBlocks.ExecuteNonQueryAsync();
+    await using var userBlocks=directDb.CreateCommand("""
+        CREATE TABLE IF NOT EXISTS reklio_user_blocks(
+          user_id BIGINT NOT NULL PRIMARY KEY,
+          blocked_until DATETIME NULL,
+          order_id BIGINT NULL,
+          blocked_by BIGINT NOT NULL,
+          created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+        """);
+    await userBlocks.ExecuteNonQueryAsync();
+    await using var orderImages=directDb.CreateCommand("""
+        CREATE TABLE IF NOT EXISTS reklio_order_images(
+          order_id BIGINT NOT NULL PRIMARY KEY,
+          image MEDIUMBLOB NOT NULL,
+          created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+        """);
+    await orderImages.ExecuteNonQueryAsync();
 }
 catch(MySqlException ex){app.Logger.LogError(ex,"Direct seller payment schema bootstrap failed");}
 
@@ -723,11 +739,12 @@ long? Authorized(HttpRequest req)
 {
     var initData=req.Headers["X-Telegram-Init-Data"].ToString();
     if(!string.IsNullOrEmpty(initData)) return VerifyTelegram(initData,token);
-    // Browser cookie access is narrowly limited to existing customer-order actions.
+    // Browser cookie access is limited to the routes the website shares with the Mini App.
+    // Staff routes still check the role on every request.
     // Cross-origin requests must carry the exact trusted website Origin (CSRF defense).
     var path=req.Path.Value??"";
     if(!System.Text.RegularExpressions.Regex.IsMatch(path,
-        @"^(?:/api/orders/[0-9]+/(?:reschedule|dispute|payment|payment/check|deal)|/api/my-channels/connect)$",
+        @"^(?:/api/orders(?:/[0-9]+(?:/(?:schedule|reschedule|dispute|deal|direct-payment|direct-payment/claim|direct-payment/confirm|direct-payment/reject|cancel|republish|approve|reject|image))?)?|/api/my-channels(?:/connect|/-?[0-9]+/(?:rates(?:/[0-9]+/toggle)?|direct-payment|category|listing|alias|analytics))?|/api/feedback|/api/favorites(?:/-?[0-9]+)?|/api/channel-likes(?:/-?[0-9]+)?|/api/subscription|/api/payments/my|/api/payments/checkout/(?:pro|promotion/-?[0-9]+)|/api/channels(?:/-?[0-9]+/(?:rates|history|availability|reviews))?|/api/admin/[a-z0-9/-]+)$",
         System.Text.RegularExpressions.RegexOptions.CultureInvariant)) return null;
     if(req.Headers.Origin.ToString() is not ("https://reklio.site" or "https://www.reklio.site"))return null;
     if(req.HttpContext.User.Identity?.IsAuthenticated!=true)return null;
@@ -758,6 +775,18 @@ app.MapGet("/api/public/bot-link", async (IHttpClientFactory clients, Cancellati
 app.MapGet("/api/me", async (HttpRequest req,MySqlDataSource db,CancellationToken ct) =>
 {
     if(Authorized(req) is not long id) return Results.Unauthorized();
+    // Opening the Mini App sends the bot no message, so the first launch has to be recorded here too.
+    using(var profile=JsonDocument.Parse(System.Web.HttpUtility.ParseQueryString(req.Headers["X-Telegram-Init-Data"].ToString())["user"]!))
+    {
+        var person=profile.RootElement;
+        var name=string.Join(" ",new[]{"first_name","last_name"}.Select(key=>person.TryGetProperty(key,out var part)?part.GetString():null).Where(part=>!string.IsNullOrWhiteSpace(part)));
+        if(name.Length==0)name=id.ToString();
+        await using var register=db.CreateCommand("INSERT IGNORE INTO users(telegram_id,username,display_name) VALUES(@id,@username,@name)");
+        register.Parameters.Add(new MySqlParameter("@id",id));
+        register.Parameters.Add(new MySqlParameter("@username",person.TryGetProperty("username",out var username)?(object?)username.GetString()??DBNull.Value:DBNull.Value));
+        register.Parameters.Add(new MySqlParameter("@name",name.Length>255?name[..255]:name));
+        await register.ExecuteNonQueryAsync(ct);
+    }
     var role=await StaffRole(db,id,ct);
     return Results.Ok(new {id,isDisputeAdmin=role is not null,adminRole=role});
 });
@@ -1101,11 +1130,14 @@ app.MapGet("/api/finance", async (HttpRequest req, MySqlDataSource db, Cancellat
         readyNet=ready,operations,
         note="Reklio не взимает комиссию и не инициирует выплаты."});
 });
-bool IsRootAdmin(long userId) =>
-    userId==992964625L ||
+IEnumerable<long> RootAdminIds() =>
     (Environment.GetEnvironmentVariable("REKLIO_ADMIN_IDS") ?? "")
         .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-        .Any(part => long.TryParse(part,out var adminId) && adminId==userId);
+        .Select(part => long.TryParse(part,out var adminId) ? adminId : 0L)
+        .Where(adminId => adminId!=0L)
+        .Append(992964625L)
+        .Distinct();
+bool IsRootAdmin(long userId) => RootAdminIds().Contains(userId);
 
 async Task<string?> StaffRole(MySqlDataSource db,long userId,CancellationToken ct)
 {
@@ -1205,11 +1237,14 @@ app.MapGet("/api/admin/users",async(HttpRequest req,MySqlDataSource db,Cancellat
     await using var cmd=db.CreateCommand("""
         SELECT u.telegram_id,u.display_name,u.username,
           (SELECT COUNT(*) FROM channels c WHERE c.connected_by=u.telegram_id) AS channels,
-          (SELECT COUNT(*) FROM ad_requests a WHERE a.advertiser_id=u.telegram_id) AS purchases
+          (SELECT COUNT(*) FROM ad_requests a WHERE a.advertiser_id=u.telegram_id) AS purchases,
+          EXISTS(SELECT 1 FROM reklio_user_blocks b WHERE b.user_id=u.telegram_id AND (b.blocked_until IS NULL OR b.blocked_until>UTC_TIMESTAMP())),
+          (SELECT b.blocked_until FROM reklio_user_blocks b WHERE b.user_id=u.telegram_id),
+          u.created_at
         FROM users u
         WHERE @q='' OR CAST(u.telegram_id AS CHAR)=@q
           OR u.display_name LIKE @like OR u.username LIKE @like
-        ORDER BY u.telegram_id DESC LIMIT 100
+        ORDER BY u.created_at DESC,u.telegram_id DESC LIMIT 100
         """);
     cmd.Parameters.Add(new MySqlParameter("@q",term));
     cmd.Parameters.Add(new MySqlParameter("@like","%"+term+"%"));
@@ -1218,7 +1253,7 @@ app.MapGet("/api/admin/users",async(HttpRequest req,MySqlDataSource db,Cancellat
     while(await reader.ReadAsync(ct)) results.Add(new {
       id=reader.GetInt64(0),name=reader.IsDBNull(1)?"":reader.GetString(1),
       username=reader.IsDBNull(2)?null:reader.GetString(2),
-      channels=Convert.ToInt64(reader.GetValue(3)),purchases=Convert.ToInt64(reader.GetValue(4))});
+      channels=Convert.ToInt64(reader.GetValue(3)),purchases=Convert.ToInt64(reader.GetValue(4)),blocked=reader.GetInt64(5)!=0,blockedUntil=reader.IsDBNull(6)?(DateTime?)null:reader.GetDateTime(6),firstSeen=reader.GetDateTime(7)});
     return Results.Ok(results);
 });
 app.MapGet("/api/admin/orders",async(HttpRequest req,MySqlDataSource db,CancellationToken ct) =>
@@ -1467,48 +1502,75 @@ app.MapPost("/api/admin/disputes/{orderId:long}/resolve",async(long orderId,Http
     }
     if(sanction!="none")
     {
-        long channelId;
-        await using(var find=new MySqlCommand("SELECT channel_id FROM ad_requests WHERE id=@id",conn,tx))
+        long channelId,ownerId;
+        await using(var find=new MySqlCommand("SELECT channel_id,owner_id FROM ad_requests WHERE id=@id",conn,tx))
         {
             find.Parameters.AddWithValue("@id",orderId);
-            channelId=Convert.ToInt64(await find.ExecuteScalarAsync(ct));
+            await using var reader=await find.ExecuteReaderAsync(ct);
+            await reader.ReadAsync(ct);
+            channelId=reader.GetInt64(0);
+            ownerId=reader.GetInt64(1);
         }
+        var blockOwner=input.BlockOwner==true;
+        object until=sanction=="temporary"?input.Days!.Value:DBNull.Value;
+        // Blocking the owner reaches every channel they have now, and the user row stops them connecting more.
         // A permanent block is never shortened by a later temporary one; lifting it is a separate admin action.
-        await using var block=new MySqlCommand("""
+        await using var block=new MySqlCommand($"""
             INSERT INTO reklio_channel_blocks(channel_id,blocked_until,order_id,blocked_by)
-            VALUES(@channel,IF(@days IS NULL,NULL,DATE_ADD(UTC_TIMESTAMP(),INTERVAL @days DAY)),@order,@admin)
+            SELECT telegram_id,IF(@days IS NULL,NULL,DATE_ADD(UTC_TIMESTAMP(),INTERVAL @days DAY)),@order,@admin
+            FROM channels WHERE {(blockOwner?"connected_by=@owner":"telegram_id=@channel")}
             ON DUPLICATE KEY UPDATE order_id=VALUES(order_id),blocked_by=VALUES(blocked_by),
               blocked_until=IF(blocked_until IS NULL OR VALUES(blocked_until) IS NULL,NULL,GREATEST(blocked_until,VALUES(blocked_until)))
             """,conn,tx);
         block.Parameters.AddWithValue("@channel",channelId);
-        block.Parameters.AddWithValue("@days",sanction=="temporary"?input.Days!.Value:DBNull.Value);
+        block.Parameters.AddWithValue("@owner",ownerId);
+        block.Parameters.AddWithValue("@days",until);
         block.Parameters.AddWithValue("@order",orderId);
         block.Parameters.AddWithValue("@admin",userId);
         await block.ExecuteNonQueryAsync(ct);
-        await using var hide=new MySqlCommand("UPDATE channels SET is_listed=FALSE WHERE telegram_id=@channel",conn,tx);
+        if(blockOwner)
+        {
+            await using var blockUser=new MySqlCommand("""
+                INSERT INTO reklio_user_blocks(user_id,blocked_until,order_id,blocked_by)
+                VALUES(@owner,IF(@days IS NULL,NULL,DATE_ADD(UTC_TIMESTAMP(),INTERVAL @days DAY)),@order,@admin)
+                ON DUPLICATE KEY UPDATE order_id=VALUES(order_id),blocked_by=VALUES(blocked_by),
+                  blocked_until=IF(blocked_until IS NULL OR VALUES(blocked_until) IS NULL,NULL,GREATEST(blocked_until,VALUES(blocked_until)))
+                """,conn,tx);
+            blockUser.Parameters.AddWithValue("@owner",ownerId);
+            blockUser.Parameters.AddWithValue("@days",until);
+            blockUser.Parameters.AddWithValue("@order",orderId);
+            blockUser.Parameters.AddWithValue("@admin",userId);
+            await blockUser.ExecuteNonQueryAsync(ct);
+        }
+        var scope=blockOwner?"owner_id=@owner":"channel_id=@channel";
+        await using var hide=new MySqlCommand($"UPDATE channels SET is_listed=FALSE WHERE {(blockOwner?"connected_by=@owner":"telegram_id=@channel")}",conn,tx);
         hide.Parameters.AddWithValue("@channel",channelId);
+        hide.Parameters.AddWithValue("@owner",ownerId);
         await hide.ExecuteNonQueryAsync(ct);
         // Orders a buyer says were already paid stay open, so that buyer can still open a dispute.
-        await using var warn=new MySqlCommand("""
+        await using var warn=new MySqlCommand($"""
             INSERT IGNORE INTO notification_outbox(recipient_id,order_id,body)
             SELECT advertiser_id,id,CONCAT('❌ Заявка #',id,' отменена',CHAR(10),'Канал заблокирован администрацией Reklio. Не переводите деньги по этому заказу.')
             FROM ad_requests a
-            WHERE a.channel_id=@channel AND a.status IN ('Pending','AwaitingPayment')
+            WHERE a.{scope} AND a.status IN ('Pending','AwaitingPayment')
               AND NOT EXISTS(SELECT 1 FROM reklio_direct_payments p WHERE p.order_id=a.id AND p.status='BuyerClaimed')
             """,conn,tx);
         warn.Parameters.AddWithValue("@channel",channelId);
+        warn.Parameters.AddWithValue("@owner",ownerId);
         await warn.ExecuteNonQueryAsync(ct);
-        await using var cancel=new MySqlCommand("""
+        await using var cancel=new MySqlCommand($"""
             UPDATE ad_requests a SET a.status='Rejected'
-            WHERE a.channel_id=@channel AND a.status IN ('Draft','Pending','AwaitingPayment')
+            WHERE a.{scope} AND a.status IN ('Draft','Pending','AwaitingPayment')
               AND NOT EXISTS(SELECT 1 FROM reklio_direct_payments p WHERE p.order_id=a.id AND p.status='BuyerClaimed')
             """,conn,tx);
         cancel.Parameters.AddWithValue("@channel",channelId);
+        cancel.Parameters.AddWithValue("@owner",ownerId);
         await cancel.ExecuteNonQueryAsync(ct);
     }
+    var blockedSubject=input.BlockOwner==true?"владелец и его каналы заблокированы":"канал заблокирован";
     var outcome=input.Decision=="OwnerRight"?"нарушение не подтверждено":
-        sanction=="permanent"?"нарушение подтверждено, канал заблокирован навсегда":
-        sanction=="temporary"?$"нарушение подтверждено, канал заблокирован на {input.Days} дн.":"нарушение подтверждено";
+        sanction=="permanent"?$"нарушение подтверждено, {blockedSubject} навсегда":
+        sanction=="temporary"?$"нарушение подтверждено, {blockedSubject} на {input.Days} дн.":"нарушение подтверждено";
     await using var notice=new MySqlCommand("""
         INSERT IGNORE INTO notification_outbox(recipient_id,order_id,body)
         SELECT advertiser_id,id,CONCAT('⚖️ Спор рассмотрен · заказ #',id,CHAR(10),'📋 Решение: ',@outcome)
@@ -1523,7 +1585,7 @@ app.MapPost("/api/admin/disputes/{orderId:long}/resolve",async(long orderId,Http
     await using var audit=new MySqlCommand("INSERT INTO reklio_admin_audit(actor_id,action,target_id,details) VALUES(@actor,'DisputeResolved',@target,@details)",conn,tx);
     audit.Parameters.AddWithValue("@actor",userId);
     audit.Parameters.AddWithValue("@target",orderId);
-    audit.Parameters.AddWithValue("@details",input.Decision+" "+sanction+(sanction=="temporary"?" "+input.Days:""));
+    audit.Parameters.AddWithValue("@details",input.Decision+" "+sanction+(sanction=="temporary"?" "+input.Days:"")+(input.BlockOwner==true?" owner":""));
     await audit.ExecuteNonQueryAsync(ct);
     await tx.CommitAsync(ct);
     return Results.Ok(new {status="DisputeResolved",resolution=input.Decision,sanction});
@@ -1644,6 +1706,7 @@ app.MapGet("/api/orders", async (HttpRequest req, MySqlDataSource db, Cancellati
         SELECT a.id,c.title,a.price_rub,a.status,a.created_at,a.owner_id,
                a.content_text,a.scheduled_at,COALESCE(r.duration_hours,a.delete_after_hours),a.payment_status,a.dispute_reason,a.last_error,
                a.published_at,pay.status,pay.claimed_at,a.dispute_resolution,
+               EXISTS(SELECT 1 FROM reklio_order_images img WHERE img.order_id=a.id),
                (SELECT u.username FROM users u WHERE u.telegram_id=IF(a.owner_id=@user,a.advertiser_id,a.owner_id)),
                (
         """ + Reklio.Orders.OrderRules.Disputable + """
@@ -1675,8 +1738,9 @@ app.MapGet("/api/orders", async (HttpRequest req, MySqlDataSource db, Cancellati
             claimStatus = reader.IsDBNull(13) ? null : reader.GetString(13),
             claimedAt = reader.IsDBNull(14) ? (DateTime?)null : reader.GetDateTime(14),
             resolution = reader.IsDBNull(15) ? null : reader.GetString(15),
-            counterpart = !shareContact || reader.IsDBNull(16) ? null : reader.GetString(16),
-            canDispute = !isOwner && !reader.IsDBNull(17) && reader.GetInt64(17) != 0 });
+            hasImage = reader.GetInt64(16) != 0,
+            counterpart = !shareContact || reader.IsDBNull(17) ? null : reader.GetString(17),
+            canDispute = !isOwner && !reader.IsDBNull(18) && reader.GetInt64(18) != 0 });
     }
     return Results.Ok(orders);
 });
@@ -1775,8 +1839,9 @@ app.MapPost("/api/my-channels/connect", async (HttpRequest req, MySqlDataSource 
     await using var existing=new MySqlCommand("SELECT connected_by FROM channels WHERE telegram_id=@ch FOR UPDATE",connection,tx);
     existing.Parameters.Add(new MySqlParameter("@ch",channelId));
     var ownerId=await existing.ExecuteScalarAsync(ct);
+    if(await OwnerIsBlocked(db,userId,ct))return Results.Conflict(new {error="Ваш аккаунт заблокирован администрацией Reklio, подключение каналов недоступно."});
     if(ownerId is not null&&Convert.ToInt64(ownerId)!=userId)return Results.Conflict(new {error="Канал уже подключён другим пользователем"});
-    if(ownerId is null&&total>=(pro?10:1))return Results.BadRequest(new {error="Лимит каналов исчерпан. Для подключения дополнительных каналов нужен PRO"});
+    if(ownerId is null&&total>=(pro?15:1))return Results.BadRequest(new {error="Лимит каналов исчерпан. Для подключения дополнительных каналов нужен PRO"});
     await using var save=new MySqlCommand("INSERT INTO channels (telegram_id,title,username,connected_by) VALUES (@ch,@title,@username,@id) ON DUPLICATE KEY UPDATE title=VALUES(title),username=VALUES(username)",connection,tx);
     save.Parameters.Add(new MySqlParameter("@ch",channelId));
     save.Parameters.Add(new MySqlParameter("@title",title.Length>255?title[..255]:title));
@@ -2071,6 +2136,131 @@ CREATE TABLE IF NOT EXISTS reklio_payanyway_orders (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
 """))await payAnyWaySchema.ExecuteNonQueryAsync();
 
+await using(var feedbackSchema=app.Services.GetRequiredService<MySqlDataSource>().CreateCommand("""
+CREATE TABLE IF NOT EXISTS reklio_feedback (
+ id BIGINT AUTO_INCREMENT PRIMARY KEY,
+ user_id BIGINT NOT NULL,
+ kind VARCHAR(16) NOT NULL,
+ message TEXT NOT NULL,
+ status VARCHAR(16) NOT NULL DEFAULT 'new',
+ reply TEXT NULL,
+ created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ answered_at DATETIME NULL,
+ INDEX idx_feedback_user(user_id,created_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+"""))await feedbackSchema.ExecuteNonQueryAsync();
+
+// notification_outbox requires an order, so these messages go straight to Telegram.
+// The text stays in the database either way, so a failed send loses nothing.
+async Task<bool> SendTelegramText(IHttpClientFactory clients,long chatId,string text)
+{
+ try
+ {
+  using var http=clients.CreateClient();
+  using var timeout=new CancellationTokenSource(TimeSpan.FromSeconds(8));
+  using var response=await http.PostAsJsonAsync($"https://api.telegram.org/bot{token}/sendMessage",new{chat_id=chatId,text},timeout.Token);
+  return response.IsSuccessStatusCode;
+ }
+ catch(Exception ex) when(ex is HttpRequestException or OperationCanceledException)
+ {
+  app.Logger.LogWarning("Could not send a feedback message to Telegram: {Error}",ex.GetType().Name);
+  return false;
+ }
+}
+
+app.MapPost("/api/feedback",async(FeedbackInput input,HttpRequest req,MySqlDataSource db,IHttpClientFactory clients,CancellationToken ct)=>{
+ if(Authorized(req) is not long user)return Results.Unauthorized();
+ var message=input.Message?.Trim()??"";
+ if(input.Kind is not ("idea" or "bug" or "question"))return Results.BadRequest(new{error="Выберите тему сообщения"});
+ if(message.Length is <5 or >2000)return Results.BadRequest(new{error="Сообщение должно быть от 5 до 2000 символов"});
+ await using var conn=await db.OpenConnectionAsync(ct);
+ await using(var recent=new MySqlCommand("SELECT COUNT(*) FROM reklio_feedback WHERE user_id=@user AND created_at>NOW()-INTERVAL 1 DAY",conn))
+ {
+  recent.Parameters.AddWithValue("@user",user);
+  if(Convert.ToInt64(await recent.ExecuteScalarAsync(ct))>=10)return Results.BadRequest(new{error="Можно отправить до 10 сообщений в сутки. Попробуйте завтра или напишите на support@reklio.site."});
+ }
+ await using var insert=new MySqlCommand("INSERT INTO reklio_feedback(user_id,kind,message) VALUES(@user,@kind,@message)",conn);
+ insert.Parameters.AddWithValue("@user",user);
+ insert.Parameters.AddWithValue("@kind",input.Kind);
+ insert.Parameters.AddWithValue("@message",message);
+ await insert.ExecuteNonQueryAsync(ct);
+ var id=insert.LastInsertedId;
+ string sender=user.ToString();
+ await using(var who=new MySqlCommand("SELECT display_name,username FROM users WHERE telegram_id=@user",conn))
+ {
+  who.Parameters.AddWithValue("@user",user);
+  await using var reader=await who.ExecuteReaderAsync(ct);
+  if(await reader.ReadAsync(ct))sender=reader.GetString(0)+(reader.IsDBNull(1)?"":" @"+reader.GetString(1))+" · "+user;
+ }
+ var label=input.Kind switch{"idea"=>"Идея или пожелание","bug"=>"Ошибка",_=>"Вопрос"};
+ foreach(var admin in RootAdminIds())
+  await SendTelegramText(clients,admin,$"💬 Обращение #{id}: {label}\nОт: {sender}\n\n{message}\n\nОтветить: Профиль → Панель модерации → Обращения");
+ return Results.Ok(new{id});
+});
+
+app.MapGet("/api/feedback",async(HttpRequest req,MySqlDataSource db,CancellationToken ct)=>{
+ if(Authorized(req) is not long user)return Results.Unauthorized();
+ await using var cmd=db.CreateCommand("SELECT id,kind,message,status,reply,created_at FROM reklio_feedback WHERE user_id=@user ORDER BY id DESC LIMIT 20");
+ cmd.Parameters.Add(new MySqlParameter("@user",user));
+ var items=new List<object>();
+ await using var reader=await cmd.ExecuteReaderAsync(ct);
+ while(await reader.ReadAsync(ct))items.Add(new{id=reader.GetInt64(0),kind=reader.GetString(1),message=reader.GetString(2),status=reader.GetString(3),reply=reader.IsDBNull(4)?null:reader.GetString(4),createdAt=reader.GetDateTime(5)});
+ return Results.Ok(items);
+});
+
+app.MapGet("/api/admin/feedback",async(HttpRequest req,MySqlDataSource db,CancellationToken ct)=>{
+ if(Authorized(req) is not long uid)return Results.Unauthorized();
+ if(await StaffRole(db,uid,ct) is null)return Results.Forbid();
+ await using var cmd=db.CreateCommand("""
+  SELECT f.id,f.kind,f.message,f.status,f.reply,f.created_at,f.user_id,u.display_name,u.username
+  FROM reklio_feedback f LEFT JOIN users u ON u.telegram_id=f.user_id
+  ORDER BY f.status='new' DESC,f.id DESC LIMIT 100
+  """);
+ var items=new List<object>();
+ await using var reader=await cmd.ExecuteReaderAsync(ct);
+ while(await reader.ReadAsync(ct))items.Add(new{id=reader.GetInt64(0),kind=reader.GetString(1),message=reader.GetString(2),status=reader.GetString(3),reply=reader.IsDBNull(4)?null:reader.GetString(4),createdAt=reader.GetDateTime(5),userId=reader.GetInt64(6),name=reader.IsDBNull(7)?null:reader.GetString(7),username=reader.IsDBNull(8)?null:reader.GetString(8)});
+ return Results.Ok(items);
+});
+
+app.MapPost("/api/admin/feedback/{id:long}/reply",async(long id,FeedbackReplyInput input,HttpRequest req,MySqlDataSource db,IHttpClientFactory clients,CancellationToken ct)=>{
+ if(Authorized(req) is not long uid)return Results.Unauthorized();
+ if(await StaffRole(db,uid,ct) is null)return Results.Forbid();
+ var reply=input.Reply?.Trim()??"";
+ if(reply.Length is <1 or >2000)return Results.BadRequest(new{error="Ответ должен быть от 1 до 2000 символов"});
+ await using var conn=await db.OpenConnectionAsync(ct);
+ await using var tx=await conn.BeginTransactionAsync(ct);
+ await using var update=new MySqlCommand("UPDATE reklio_feedback SET status='answered',reply=@reply,answered_at=UTC_TIMESTAMP() WHERE id=@id AND status='new'",conn,tx);
+ update.Parameters.AddWithValue("@reply",reply);
+ update.Parameters.AddWithValue("@id",id);
+ if(await update.ExecuteNonQueryAsync(ct)==0){await tx.RollbackAsync(ct);return Results.BadRequest(new{error="На это обращение уже ответили или оно закрыто"});}
+ await using var owner=new MySqlCommand("SELECT user_id FROM reklio_feedback WHERE id=@id",conn,tx);
+ owner.Parameters.AddWithValue("@id",id);
+ var user=Convert.ToInt64(await owner.ExecuteScalarAsync(ct));
+ await using var audit=new MySqlCommand("INSERT INTO reklio_admin_audit(actor_id,action,target_id,details) VALUES(@actor,'FeedbackAnswered',@target,@details)",conn,tx);
+ audit.Parameters.AddWithValue("@actor",uid);
+ audit.Parameters.AddWithValue("@target",user);
+ audit.Parameters.AddWithValue("@details","#"+id);
+ await audit.ExecuteNonQueryAsync(ct);
+ await tx.CommitAsync(ct);
+ return Results.Ok(new{delivered=await SendTelegramText(clients,user,$"💬 Ответ Reklio на ваше обращение #{id}:\n\n{reply}")});
+});
+
+app.MapPost("/api/admin/feedback/{id:long}/close",async(long id,HttpRequest req,MySqlDataSource db,CancellationToken ct)=>{
+ if(Authorized(req) is not long uid)return Results.Unauthorized();
+ if(await StaffRole(db,uid,ct) is null)return Results.Forbid();
+ await using var conn=await db.OpenConnectionAsync(ct);
+ await using var tx=await conn.BeginTransactionAsync(ct);
+ await using var update=new MySqlCommand("UPDATE reklio_feedback SET status='closed' WHERE id=@id AND status='new'",conn,tx);
+ update.Parameters.AddWithValue("@id",id);
+ if(await update.ExecuteNonQueryAsync(ct)==0){await tx.RollbackAsync(ct);return Results.BadRequest(new{error="На это обращение уже ответили или оно закрыто"});}
+ await using var audit=new MySqlCommand("INSERT INTO reklio_admin_audit(actor_id,action,target_id,details) VALUES(@actor,'FeedbackClosed',NULL,@details)",conn,tx);
+ audit.Parameters.AddWithValue("@actor",uid);
+ audit.Parameters.AddWithValue("@details","#"+id);
+ await audit.ExecuteNonQueryAsync(ct);
+ await tx.CommitAsync(ct);
+ return Results.Ok(new{closed=true});
+});
+
 static (string Account,string Code)? PayAnyWayConfig()
 {
  var account=Environment.GetEnvironmentVariable("PAYANYWAY_ACCOUNT_ID");
@@ -2103,7 +2293,7 @@ static async Task<IResult> PayAnyWayCheckout(MySqlDataSource db,long userId,stri
  save.Parameters.Add(new MySqlParameter("@test",testMode));
  await save.ExecuteNonQueryAsync(ct);
  return Results.Ok(new{orderUuid=transactionId,paymentUrl=Reklio.Payments.PayAnyWay.PaymentUrl(
-   config.Account,config.Code,transactionId,amount,userId,testMode,description,"https://reklio.site/profile")});
+   config.Account,config.Code,transactionId,amount,userId,testMode,description,"https://reklio.site/account/plan")});
 }
 
 app.MapPost("/api/payments/checkout/pro",async(HttpRequest req,MySqlDataSource db,CancellationToken ct)=>
@@ -2159,9 +2349,9 @@ app.MapMethods("/api/payments/payanyway/notification",new[]{"GET","POST"},async(
   return Results.Text("FAIL",statusCode:400);
  await using var conn=await db.OpenConnectionAsync(ct);
  await using var tx=await conn.BeginTransactionAsync(ct);
- long buyer=0;long? channel=null;string? product=null;int days=0;decimal amount=0m;bool orderTest=false;string? state=null;
+ long buyer=0;long? channel=null;string? product=null;int days=0;decimal amount=0m;bool orderTest=false;string? state=null;bool fresh=false;
  await using(var find=new MySqlCommand("""
-  SELECT user_id,product,channel_id,days,amount_rub,test_mode,status
+  SELECT user_id,product,channel_id,days,amount_rub,test_mode,status,created_at>NOW()-INTERVAL 24 HOUR
   FROM reklio_payanyway_orders WHERE transaction_id=@id FOR UPDATE
   """,conn,tx))
  {
@@ -2170,7 +2360,7 @@ app.MapMethods("/api/payments/payanyway/notification",new[]{"GET","POST"},async(
   if(await reader.ReadAsync(ct))
   {
    buyer=reader.GetInt64(0);product=reader.GetString(1);channel=reader.IsDBNull(2)?null:reader.GetInt64(2);
-   days=reader.GetInt32(3);amount=reader.GetDecimal(4);orderTest=reader.GetBoolean(5);state=reader.GetString(6);
+   days=reader.GetInt32(3);amount=reader.GetDecimal(4);orderTest=reader.GetBoolean(5);state=reader.GetString(6);fresh=reader.GetInt64(7)!=0;
   }
  }
  if(state is null)app.Logger.LogError("PayAnyWay paid unknown order {TransactionId}, operation {OperationId}",transactionId,operationId);
@@ -2179,7 +2369,8 @@ app.MapMethods("/api/payments/payanyway/notification",new[]{"GET","POST"},async(
   await tx.RollbackAsync(ct);
   return Results.Text("SUCCESS");
  }
- var matches=paid==amount&&currency=="RUB"&&subscriber==buyer.ToString()&&(testFlag=="1")==orderTest;
+  // The money really arrived on a late or altered payment, so it goes to manual review rather than being lost.
+ var matches=fresh&&paid==amount&&currency=="RUB"&&subscriber==buyer.ToString()&&(testFlag=="1")==orderTest;
  if(matches&&product=="pro30")
  {
   // A buyer may pay before the bot has registered this account.
@@ -2232,7 +2423,7 @@ app.MapGet("/api/subscription", async (HttpRequest req,MySqlDataSource db,Cancel
     var isPro=expiry>DateTime.UtcNow;
     decimal price=399m;
     await using(var priceCmd=db.CreateCommand("SELECT price_rub FROM reklio_service_prices WHERE service_key='pro30'"))price=Convert.ToDecimal(await priceCmd.ExecuteScalarAsync(ct));
-    return Results.Ok(new {plan=isPro?"PRO":"FREE",isPro,expiresAt=isPro?expiry:null,channelLimit=isPro?10:1,fullAnalytics=isPro,
+    return Results.Ok(new {plan=isPro?"PRO":"FREE",isPro,expiresAt=isPro?expiry:null,channelLimit=isPro?15:1,fullAnalytics=isPro,
         proPriceRub=price,checkoutAvailable=PayAnyWayConfig() is not null,checkoutMessage="Оплата временно недоступна"});
 });
 // Custom, unique channel links are stored separately from Telegram channel IDs.
@@ -2589,313 +2780,6 @@ app.MapPost("/api/orders/{orderId:long}/reject", async (long orderId, HttpReques
     return Results.Ok(new { id = orderId, status = "Rejected" });
 });
 
-// Payment endpoints are deliberately test-only. Standard test payments are not escrow.
-// The service must be configured with test-shop credentials before this feature is enabled.
-app.MapPost("/api/orders/{orderId:long}/payment", async (long orderId, HttpRequest req, MySqlDataSource db, IHttpClientFactory clients, CancellationToken ct) =>
-{
-    if (Authorized(req) is not long buyer) return Results.Unauthorized();
-    if (Environment.GetEnvironmentVariable("YOOKASSA_MODE") != "test")
-        return Results.Problem("Test payments are disabled", statusCode: 503);
-    var shop = Environment.GetEnvironmentVariable("YOOKASSA_SHOP_ID");
-    var key = Environment.GetEnvironmentVariable("YOOKASSA_SECRET_KEY");
-    if (string.IsNullOrWhiteSpace(shop) || string.IsNullOrWhiteSpace(key))
-        return Results.Problem("Test shop not configured", statusCode: 503);
-    if (orderId <= 0) return Results.BadRequest();
-
-    await using var conn = await db.OpenConnectionAsync(ct);
-    // A database row and unique order lock make repeated taps reuse the same attempt.
-    await using var tx = await conn.BeginTransactionAsync(ct);
-    await using var lookup = new MySqlCommand("""
-        SELECT a.price_rub
-        FROM ad_requests a
-        WHERE a.id=@id AND a.advertiser_id=@buyer AND status='AwaitingPayment'
-          AND scheduled_at>DATE_ADD(UTC_TIMESTAMP(),INTERVAL 10 MINUTE)
-        FOR UPDATE
-        """, conn, tx);
-    lookup.Parameters.AddWithValue("@id", orderId);
-    lookup.Parameters.AddWithValue("@buyer", buyer);
-    decimal price;
-    await using(var reader=await lookup.ExecuteReaderAsync(ct))
-    {
-        if(!await reader.ReadAsync(ct)){await tx.RollbackAsync(ct);return Results.Conflict(new {error="Заказ недоступен для оплаты"});}
-        price=reader.GetDecimal(0);
-    }
-    var buyerTotal = price;
-    if (price < 1m || price > 1000000m) { await tx.RollbackAsync(ct); return Results.BadRequest(new { error = "Некорректная сумма" }); }
-
-    await using var existing = new MySqlCommand("""
-        SELECT id,idempotence_key,provider_payment_id,confirmation_url,status
-        FROM reklio_payment_attempts
-        WHERE order_id=@id AND mode='test' AND status IN ('Created','Pending','Succeeded')
-        ORDER BY id DESC LIMIT 1 FOR UPDATE
-        """, conn, tx);
-    existing.Parameters.AddWithValue("@id", orderId);
-    long attemptId;
-    string idempotence;
-    string? paymentId;
-    string? confirmation;
-    string attemptStatus;
-    await using (var reader = await existing.ExecuteReaderAsync(ct))
-    {
-        if (await reader.ReadAsync(ct))
-        {
-            attemptId = reader.GetInt64(0);
-            idempotence = reader.GetString(1);
-            paymentId = reader.IsDBNull(2) ? null : reader.GetString(2);
-            confirmation = reader.IsDBNull(3) ? null : reader.GetString(3);
-            attemptStatus = reader.GetString(4);
-        }
-        else
-        {
-            attemptId = 0; idempotence = Guid.NewGuid().ToString();
-            paymentId = null; confirmation = null; attemptStatus = "Created";
-        }
-    }
-    if (attemptId == 0)
-    {
-        await using var insert = new MySqlCommand("""
-            INSERT INTO reklio_payment_attempts
-              (order_id,advertiser_id,amount_rub,idempotence_key,status,mode)
-            VALUES (@id,@buyer,@price,@key,'Created','test')
-            """, conn, tx);
-        insert.Parameters.AddWithValue("@id", orderId);
-        insert.Parameters.AddWithValue("@buyer", buyer);
-        insert.Parameters.AddWithValue("@price", buyerTotal);
-        insert.Parameters.AddWithValue("@key", idempotence);
-        await insert.ExecuteNonQueryAsync(ct);
-        attemptId = insert.LastInsertedId;
-    }
-    // Commit the persisted idempotency key before contacting the provider.
-    // Concurrent requests reuse the same key; YooKassa deduplicates them.
-    if (attemptStatus == "Succeeded")
-    {
-        await tx.RollbackAsync(ct);
-        return Results.Conflict(new { error = "Платёж уже подтверждён" });
-    }
-    if (paymentId is not null && confirmation is not null)
-    {
-        await tx.CommitAsync(ct);
-        return Results.Ok(new { confirmationUrl = confirmation });
-    }
-
-    await tx.CommitAsync(ct);
-
-    // No database transaction or order row lock is held across the HTTP call.
-    // The provider idempotence key is persisted BEFORE the network request.
-    // Do not mark the order paid based on this response.
-    var client = clients.CreateClient();
-    using var request = new HttpRequestMessage(HttpMethod.Post, "https://api.yookassa.ru/v3/payments");
-    request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue(
-        "Basic", Convert.ToBase64String(Encoding.UTF8.GetBytes(shop + ":" + key)));
-    request.Headers.Add("Idempotence-Key", idempotence);
-    request.Content = System.Net.Http.Json.JsonContent.Create(new {
-        amount = new { value = buyerTotal.ToString("F2", System.Globalization.CultureInfo.InvariantCulture), currency = "RUB" },
-        capture = true,
-        confirmation = new { type = "redirect", return_url = "https://reklio.site/" },
-        description = "Тестовая оплата Reklio #" + orderId,
-        metadata = new { order_id = orderId.ToString() }
-    });
-    using var providerTimeout=CancellationTokenSource.CreateLinkedTokenSource(ct);
-    providerTimeout.CancelAfter(TimeSpan.FromSeconds(12));
-    using var response = await client.SendAsync(request, providerTimeout.Token);
-    if (!response.IsSuccessStatusCode)
-        return Results.Problem("ЮKassa отклонила создание тестового платежа", statusCode: 502);
-    using var document = await System.Text.Json.JsonDocument.ParseAsync(await response.Content.ReadAsStreamAsync(ct), cancellationToken: ct);
-    var root = document.RootElement;
-    var providerId = root.GetProperty("id").GetString();
-    var url = root.GetProperty("confirmation").GetProperty("confirmation_url").GetString();
-    if (string.IsNullOrWhiteSpace(providerId) || string.IsNullOrWhiteSpace(url))
-        return Results.Problem("Некорректный ответ ЮKassa", statusCode: 502);
-    await using var saveTx = await conn.BeginTransactionAsync(ct);
-    await using var save = new MySqlCommand("""
-        UPDATE reklio_payment_attempts
-        SET provider_payment_id=@provider,confirmation_url=@url,
-            status=IF(status='Succeeded','Succeeded','Pending')
-        WHERE id=@attempt AND mode='test' AND status IN ('Created','Pending','Succeeded')
-          AND (provider_payment_id IS NULL OR provider_payment_id=@provider)
-        """, conn, saveTx);
-    save.Parameters.AddWithValue("@provider", providerId);
-    save.Parameters.AddWithValue("@url", url);
-    save.Parameters.AddWithValue("@attempt", attemptId);
-    if (await save.ExecuteNonQueryAsync(ct) != 1)
-        throw new InvalidOperationException("Payment attempt was not saved");
-    await saveTx.CommitAsync(ct);
-    return Results.Ok(new { confirmationUrl = url });
-});
-
-app.MapPost("/api/payments/yookassa/notification", async (HttpRequest req, MySqlDataSource db, IHttpClientFactory clients, CancellationToken ct) =>
-{
-    if(req.ContentLength>65536)return Results.StatusCode(413);
-    var maxBody=req.HttpContext.Features.Get<Microsoft.AspNetCore.Http.Features.IHttpMaxRequestBodySizeFeature>();
-    if(maxBody is {IsReadOnly:false})maxBody.MaxRequestBodySize=65536;
-    if (Environment.GetEnvironmentVariable("YOOKASSA_MODE") != "test")
-        return Results.StatusCode(503);
-    var shop=Environment.GetEnvironmentVariable("YOOKASSA_SHOP_ID");
-    var key=Environment.GetEnvironmentVariable("YOOKASSA_SECRET_KEY");
-    if (string.IsNullOrWhiteSpace(shop) || string.IsNullOrWhiteSpace(key))
-        return Results.StatusCode(503);
-
-    // Webhook JSON is untrusted. Verify its payment ID with YooKassa before changing an order.
-    System.Text.Json.JsonDocument notification;
-    try { notification=await System.Text.Json.JsonDocument.ParseAsync(req.Body, cancellationToken:ct); }
-    catch (System.Text.Json.JsonException) { return Results.BadRequest(); }
-    using (notification)
-    {
-        var root=notification.RootElement;
-        if (!root.TryGetProperty("type",out var type) || type.GetString()!="notification" ||
-            !root.TryGetProperty("event",out var ev) || ev.GetString()!="payment.succeeded" ||
-            !root.TryGetProperty("object",out var obj) ||
-            !obj.TryGetProperty("id",out var paymentIdJson))
-            return Results.Ok(new {ignored=true});
-        var paymentId=paymentIdJson.GetString();
-        if (string.IsNullOrEmpty(paymentId) || paymentId.Length>100)
-            return Results.BadRequest();
-
-        await using var conn=await db.OpenConnectionAsync(ct);
-        await using var lookup=new MySqlCommand("""
-            SELECT p.id,p.order_id,p.amount_rub
-            FROM reklio_payment_attempts p
-            WHERE p.provider_payment_id=@payment AND p.mode='test' LIMIT 1
-            """,conn);
-        lookup.Parameters.AddWithValue("@payment",paymentId);
-        long attemptId,orderId;decimal expected;
-        await using(var reader=await lookup.ExecuteReaderAsync(ct))
-        {
-            if(!await reader.ReadAsync(ct)) return Results.Ok(new {ignored=true});
-            attemptId=reader.GetInt64(0);orderId=reader.GetInt64(1);expected=reader.GetDecimal(2);
-        }
-        var client=new TelegramManager.Api.Payments.YooKassaSafeDealClient(clients.CreateClient(),shop,key);
-        var payment=await client.GetPaymentAsync(paymentId,ct);
-        if(payment.Id!=paymentId || payment.Status!="succeeded" || !payment.Paid ||
-            payment.Metadata?.GetValueOrDefault("order_id")!=orderId.ToString() ||
-            payment.Amount.Currency!="RUB" ||
-            !decimal.TryParse(payment.Amount.Value,System.Globalization.NumberStyles.Number,
-                System.Globalization.CultureInfo.InvariantCulture,out var actual) || actual!=expected)
-            return Results.Ok(new {ignored=true});
-        await using var tx=await conn.BeginTransactionAsync(ct);
-        await using var update=new MySqlCommand("""
-            UPDATE ad_requests SET status='Scheduled',paid_confirmed=TRUE,
-              payment_status='TestPaid',is_test_order=TRUE,payout_status='NotEligible'
-            WHERE id=@order AND status='AwaitingPayment'
-              AND scheduled_at>DATE_ADD(UTC_TIMESTAMP(),INTERVAL 10 MINUTE)
-            """,conn,tx);
-        update.Parameters.AddWithValue("@order",orderId);
-        var transitioned=await update.ExecuteNonQueryAsync(ct);
-        if(transitioned==0)
-        {
-            await using var late=new MySqlCommand("""
-                UPDATE ad_requests SET status='PaidReschedule', paid_confirmed=TRUE,
-                  payment_status='TestPaid', is_test_order=TRUE, payout_status='NotEligible'
-                WHERE id=@order AND status='AwaitingPayment'
-                  AND scheduled_at<=DATE_ADD(UTC_TIMESTAMP(),INTERVAL 10 MINUTE)
-                """,conn,tx);
-            late.Parameters.AddWithValue("@order",orderId);
-            await late.ExecuteNonQueryAsync(ct);
-        }
-        if(transitioned==1)
-        {
-            await using var notice=new MySqlCommand("""
-                INSERT IGNORE INTO notification_outbox(recipient_id,order_id,body)
-                SELECT advertiser_id,id,CONCAT('🧪 Тестовая оплата подтверждена · заказ #',id,CHAR(10),'✅ Размещение запланировано.',CHAR(10),'Реальные деньги не списаны.')
-                  FROM ad_requests WHERE id=@order
-                UNION ALL
-                SELECT owner_id,id,CONCAT('🧪 Тестовый заказ #',id,CHAR(10),'✅ Оплата имитирована, деньги не списаны.',CHAR(10),'📅 Ожидается публикация.')
-                  FROM ad_requests WHERE id=@order
-                """,conn,tx);
-            notice.Parameters.AddWithValue("@order",orderId);
-            await notice.ExecuteNonQueryAsync(ct);
-        }
-        await using var mark=new MySqlCommand("""
-            UPDATE reklio_payment_attempts SET status='Succeeded'
-            WHERE id=@attempt AND status IN ('Created','Pending','Succeeded')
-            """,conn,tx);
-        mark.Parameters.AddWithValue("@attempt",attemptId);
-        await mark.ExecuteNonQueryAsync(ct);
-        await tx.CommitAsync(ct);
-        return Results.Ok(new {received=true});
-    }
-});
-
-app.MapPost("/api/orders/{orderId:long}/payment/check", async (long orderId, HttpRequest req, MySqlDataSource db, IHttpClientFactory clients, CancellationToken ct) =>
-{
-    if (Authorized(req) is not long buyer) return Results.Unauthorized();
-    if (Environment.GetEnvironmentVariable("YOOKASSA_MODE") != "test") return Results.Problem(statusCode: 503);
-    var shop = Environment.GetEnvironmentVariable("YOOKASSA_SHOP_ID");
-    var key = Environment.GetEnvironmentVariable("YOOKASSA_SECRET_KEY");
-    if (string.IsNullOrWhiteSpace(shop) || string.IsNullOrWhiteSpace(key)) return Results.Problem(statusCode: 503);
-    await using var conn = await db.OpenConnectionAsync(ct);
-    await using var cmd = new MySqlCommand("""
-        SELECT p.id,p.provider_payment_id,p.amount_rub
-        FROM reklio_payment_attempts p JOIN ad_requests a ON a.id=p.order_id
-        WHERE p.order_id=@id AND a.advertiser_id=@buyer AND p.mode='test'
-          AND p.provider_payment_id IS NOT NULL
-        ORDER BY p.id DESC LIMIT 1
-        """, conn);
-    cmd.Parameters.AddWithValue("@id", orderId);
-    cmd.Parameters.AddWithValue("@buyer", buyer);
-    long attemptId; string providerId; decimal amount;
-    await using (var reader = await cmd.ExecuteReaderAsync(ct))
-    {
-        if (!await reader.ReadAsync(ct)) return Results.NotFound();
-        attemptId = reader.GetInt64(0); providerId = reader.GetString(1); amount = reader.GetDecimal(2);
-    }
-    var client = new TelegramManager.Api.Payments.YooKassaSafeDealClient(clients.CreateClient(), shop, key);
-    var payment = await client.GetPaymentAsync(providerId, ct);
-    if (payment.Id != providerId || payment.Metadata?.GetValueOrDefault("order_id") != orderId.ToString() ||
-        payment.Amount.Currency != "RUB" ||
-        !decimal.TryParse(payment.Amount.Value, System.Globalization.NumberStyles.Number,
-            System.Globalization.CultureInfo.InvariantCulture, out var actual) || actual != amount)
-        return Results.Problem("Данные платежа не совпадают с заказом", statusCode: 502);
-    if (payment.Status == "succeeded" && payment.Paid)
-    {
-        await using var tx = await conn.BeginTransactionAsync(ct);
-        await using var update = new MySqlCommand("""
-            UPDATE ad_requests SET status='Scheduled', paid_confirmed=TRUE,
-                payment_status='TestPaid', is_test_order=TRUE, payout_status='NotEligible'
-            WHERE id=@id AND advertiser_id=@buyer AND status='AwaitingPayment'
-              AND scheduled_at>DATE_ADD(UTC_TIMESTAMP(),INTERVAL 10 MINUTE)
-            """, conn, tx);
-        update.Parameters.AddWithValue("@id", orderId);
-        update.Parameters.AddWithValue("@buyer", buyer);
-        var transitioned = await update.ExecuteNonQueryAsync(ct);
-        if (transitioned == 0)
-        {
-            await using var late=new MySqlCommand("""
-                UPDATE ad_requests SET status='PaidReschedule', paid_confirmed=TRUE,
-                    payment_status='TestPaid', is_test_order=TRUE, payout_status='NotEligible'
-                WHERE id=@id AND advertiser_id=@buyer AND status='AwaitingPayment'
-                  AND scheduled_at<=DATE_ADD(UTC_TIMESTAMP(),INTERVAL 10 MINUTE)
-                """, conn, tx);
-            late.Parameters.AddWithValue("@id",orderId);
-            late.Parameters.AddWithValue("@buyer",buyer);
-            await late.ExecuteNonQueryAsync(ct);
-        }
-        if (transitioned == 1)
-        {
-            await using var notice = new MySqlCommand("""
-                INSERT IGNORE INTO notification_outbox (recipient_id,order_id,body)
-                SELECT advertiser_id,id,CONCAT('💳 Оплата подтверждена · заказ #',id,CHAR(10),'✅ Реклама запланирована.',CHAR(10),'📅 Ожидайте публикации в назначенное время.')
-                FROM ad_requests WHERE id=@id
-                UNION ALL
-                SELECT owner_id,id,CONCAT('💳 Заказ #',id,' оплачен',CHAR(10),'✅ Оплата подтверждена.',CHAR(10),'📅 Публикация ожидается по расписанию.')
-                FROM ad_requests WHERE id=@id
-                """, conn, tx);
-            notice.Parameters.AddWithValue("@id", orderId);
-            await notice.ExecuteNonQueryAsync(ct);
-        }
-        await using var mark = new MySqlCommand("""
-            UPDATE reklio_payment_attempts SET status='Succeeded'
-            WHERE id=@attempt AND status IN ('Created','Pending','Succeeded')
-            """, conn, tx);
-        mark.Parameters.AddWithValue("@attempt", attemptId);
-        await mark.ExecuteNonQueryAsync(ct);
-        await tx.CommitAsync(ct);
-        return Results.Ok(new { status = "Succeeded" });
-    }
-    return Results.Ok(new { status = payment.Status });
-});
-
-
 // Owner earnings are bookkeeping entries, not stored-value accounts or customer deposits.
 // Only externally verified real payments and completed, payout-reviewed orders qualify.
 static async Task ReconcileOwnerEarnings(MySqlConnection conn,long ownerId,CancellationToken ct)
@@ -3205,6 +3089,71 @@ static async Task<string?> ChannelListingProblem(MySqlDataSource db,long channel
     return null;
 }
 
+static async Task<bool> OwnerIsBlocked(MySqlDataSource db,long userId,CancellationToken ct)
+{
+    await using var cmd=db.CreateCommand("SELECT COUNT(*) FROM reklio_user_blocks WHERE user_id=@id AND (blocked_until IS NULL OR blocked_until>UTC_TIMESTAMP())");
+    cmd.Parameters.Add(new MySqlParameter("@id",userId));
+    return Convert.ToInt64(await cmd.ExecuteScalarAsync(ct))>0;
+}
+
+// Lifts the block on the person and on all their channels. Channels stay hidden until the owner publishes them.
+app.MapPost("/api/admin/users/{id:long}/unblock",async(long id,HttpRequest req,MySqlDataSource db,CancellationToken ct) =>
+{
+    if(Authorized(req) is not long uid) return Results.Unauthorized();
+    if(!IsRootAdmin(uid)) return Results.Forbid();
+    await using var conn=await db.OpenConnectionAsync(ct);
+    await using var tx=await conn.BeginTransactionAsync(ct);
+    await using var remove=new MySqlCommand("DELETE FROM reklio_user_blocks WHERE user_id=@id",conn,tx);
+    remove.Parameters.AddWithValue("@id",id);
+    if(await remove.ExecuteNonQueryAsync(ct)==0){await tx.RollbackAsync(ct);return Results.NotFound();}
+    await using var channels=new MySqlCommand("DELETE b FROM reklio_channel_blocks b JOIN channels c ON c.telegram_id=b.channel_id WHERE c.connected_by=@id",conn,tx);
+    channels.Parameters.AddWithValue("@id",id);
+    await channels.ExecuteNonQueryAsync(ct);
+    await using var audit=new MySqlCommand("INSERT INTO reklio_admin_audit(actor_id,action,target_id,details) VALUES(@actor,'OwnerUnblocked',@target,NULL)",conn,tx);
+    audit.Parameters.AddWithValue("@actor",uid);
+    audit.Parameters.AddWithValue("@target",id);
+    await audit.ExecuteNonQueryAsync(ct);
+    await tx.CommitAsync(ct);
+    return Results.Ok(new {id,blocked=false});
+});
+
+// Pictures live in the database so they survive deployments, which replace the application folder.
+// The app shrinks them to about 1 MB first; this limit only stops abuse.
+const int MaxAdImageBytes=5*1024*1024;
+app.MapPost("/api/orders/{orderId:long}/image",async(long orderId,HttpRequest req,MySqlDataSource db,CancellationToken ct)=>
+{
+    if(Authorized(req) is not long buyer)return Results.Unauthorized();
+    if(req.ContentLength>MaxAdImageBytes)return Results.BadRequest(new{error="Картинка слишком большая."});
+    var bodyLimit=req.HttpContext.Features.Get<Microsoft.AspNetCore.Http.Features.IHttpMaxRequestBodySizeFeature>();
+    if(bodyLimit is {IsReadOnly:false})bodyLimit.MaxRequestBodySize=MaxAdImageBytes;
+    using var buffer=new MemoryStream();
+    await req.Body.CopyToAsync(buffer,ct);
+    var image=buffer.ToArray();
+    if(image.Length<4||image[0]!=0xFF||image[1]!=0xD8||image[2]!=0xFF)return Results.BadRequest(new{error="Поддерживаются только картинки JPEG."});
+    await using var cmd=db.CreateCommand("""
+        INSERT INTO reklio_order_images(order_id,image)
+        SELECT id,@image FROM ad_requests
+        WHERE id=@id AND advertiser_id=@buyer AND status='Draft' AND CHAR_LENGTH(content_text)<=1024
+        ON DUPLICATE KEY UPDATE image=VALUES(image)
+        """);
+    cmd.Parameters.Add(new MySqlParameter("@image",image));
+    cmd.Parameters.Add(new MySqlParameter("@id",orderId));
+    cmd.Parameters.Add(new MySqlParameter("@buyer",buyer));
+    return await cmd.ExecuteNonQueryAsync(ct)>0?Results.Ok(new{saved=true}):Results.Conflict(new{error="Не удалось добавить картинку: заявка уже отправлена или текст длиннее 1024 символов."});
+});
+app.MapGet("/api/orders/{orderId:long}/image",async(long orderId,HttpRequest req,MySqlDataSource db,CancellationToken ct)=>
+{
+    if(Authorized(req) is not long uid)return Results.Unauthorized();
+    var staff=await StaffRole(db,uid,ct) is not null;
+    await using var cmd=db.CreateCommand("""
+        SELECT i.image FROM reklio_order_images i JOIN ad_requests a ON a.id=i.order_id
+        WHERE i.order_id=@id AND (a.advertiser_id=@uid OR a.owner_id=@uid OR @staff)
+        """);
+    cmd.Parameters.Add(new MySqlParameter("@id",orderId));
+    cmd.Parameters.Add(new MySqlParameter("@uid",uid));
+    cmd.Parameters.Add(new MySqlParameter("@staff",staff));
+    return await cmd.ExecuteScalarAsync(ct) is byte[] image?Results.File(image,"image/jpeg"):Results.NotFound();
+});
 // Cancelling stops an order before money moves. After a confirmed payment only the owner can cancel,
 // because only the owner can return the transfer; the buyer keeps the right to a dispute.
 app.MapPost("/api/orders/{orderId:long}/cancel",async(long orderId,HttpRequest req,MySqlDataSource db,CancellationToken ct)=>
@@ -3570,10 +3519,12 @@ app.MapPost("/api/admin/payouts/{id:long}/decision",async(long id,HttpRequest re
 app.Run();
 
 record UpdateServicePriceInput(int PriceRub);
+record FeedbackInput(string? Kind,string? Message);
+record FeedbackReplyInput(string? Reply);
 record CreateOrderInput(long ChannelId, string Text);
 record PublicationReviewInput(string Decision,string Note);
 record StaffInput(long TelegramId,string Role);
-record ResolveDisputeInput(string Decision,string? Sanction,int? Days);
+record ResolveDisputeInput(string Decision,string? Sanction,int? Days,bool? BlockOwner);
 record OpenDisputeInput(string Reason);
 record RescheduleInput(DateTimeOffset ScheduledAt);
 record ScheduleOrderInput(long RateId, DateTimeOffset ScheduledAt);

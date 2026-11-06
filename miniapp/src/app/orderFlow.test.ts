@@ -7,7 +7,7 @@ const NOW = Date.parse('2026-11-06T12:00:00Z');
 const order = (overrides: Partial<Order>): Order => ({
   id: 1, channel: 'Канал', price: 1000, status: 'Pending', createdAt: '2026-11-06T10:00:00', isOwner: false, text: 'Текст',
   scheduledAt: '2026-11-08T12:00:00', durationHours: 24, paymentStatus: 'Unpaid', disputeReason: null, publicationIssue: null,
-  publishedAt: null, claimStatus: null, claimedAt: null, resolution: null, counterpart: null, canDispute: false,
+  publishedAt: null, claimStatus: null, claimedAt: null, resolution: null, counterpart: null, canDispute: false, hasImage: false,
   ...overrides
 });
 

@@ -103,9 +103,16 @@ public sealed class PublicationWorker(MySqlDataSource database, IHttpClientFacto
         // After this point any network failure is ambiguous; require manual reconciliation.
         try
         {
-            using var response = await http.PostAsJsonAsync(
-                $"https://api.telegram.org/bot{token}/sendMessage",
-                new { chat_id = channel, text = message, disable_web_page_preview = true }, ct);
+            byte[]? image;
+            await using (var findImage = new MySqlCommand("SELECT image FROM reklio_order_images WHERE order_id=@id", conn))
+            {
+                findImage.Parameters.AddWithValue("@id", id);
+                image = await findImage.ExecuteScalarAsync(ct) as byte[];
+            }
+            using var response = image is null
+                ? await http.PostAsJsonAsync($"https://api.telegram.org/bot{token}/sendMessage",
+                    new { chat_id = channel, text = message, disable_web_page_preview = true }, ct)
+                : await SendPhotoAsync(http, token, channel, message, image, ct);
             using var json = await JsonDocument.ParseAsync(await response.Content.ReadAsStreamAsync(ct), cancellationToken: ct);
             // A clear refusal, such as the bot losing its admin rights, sent nothing and is safe to retry.
             if ((int)response.StatusCode is >= 400 and < 500 and not 429)
@@ -265,6 +272,17 @@ public sealed class PublicationWorker(MySqlDataSource database, IHttpClientFacto
             await notice.ExecuteNonQueryAsync(ct);
         }
         await tx.CommitAsync(ct);
+    }
+
+    private static async Task<HttpResponseMessage> SendPhotoAsync(HttpClient http, string token, long channel, string caption, byte[] image, CancellationToken ct)
+    {
+        using var form = new MultipartFormDataContent();
+        form.Add(new StringContent(channel.ToString()), "chat_id");
+        form.Add(new StringContent(caption), "caption");
+        var photo = new ByteArrayContent(image);
+        photo.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("image/jpeg");
+        form.Add(photo, "photo", "ad.jpg");
+        return await http.PostAsync($"https://api.telegram.org/bot{token}/sendPhoto", form, ct);
     }
 
     private async Task MarkRefusedAsync(MySqlConnection conn, long orderId)

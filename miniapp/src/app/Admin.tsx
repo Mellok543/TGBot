@@ -1,13 +1,14 @@
 import { useEffect, useState } from 'react';
 import { get, post, put } from './api';
 import { blockText, dateTime, errorText, money } from './format';
-import type { AdminDispute, AdminOrder, AdminOverview, AdminUser, AuditItem, ModerationChannel, MtprotoStatus, PublicationIssue, StaffMember } from './types';
+import { FEEDBACK_KINDS } from './Feedback';
+import type { AdminDispute, AdminFeedback, AdminOrder, AdminOverview, AdminUser, AuditItem, ModerationChannel, MtprotoStatus, PublicationIssue, StaffMember } from './types';
 
-type AdminTab = 'overview' | 'disputes' | 'channels' | 'orders' | 'users' | 'team' | 'audit';
-type Sanction = { sanction: 'none' | 'temporary' | 'permanent'; days: string };
+type AdminTab = 'overview' | 'feedback' | 'disputes' | 'channels' | 'orders' | 'users' | 'team' | 'audit';
+type Sanction = { sanction: 'none' | 'temporary' | 'permanent'; days: string; blockOwner: boolean };
 
 const SERVICE_PRICES = [{ key: 'pro30', label: 'PRO · 30 дней' }, { key: 'promotion7', label: 'Продвижение · 7 дней' }];
-const NO_SANCTION: Sanction = { sanction: 'none', days: '7' };
+const NO_SANCTION: Sanction = { sanction: 'none', days: '7', blockOwner: false };
 
 export function Admin({ role }: { role: string | null }) {
   const canManageTeam = role === 'owner' || role === 'admin';
@@ -32,6 +33,9 @@ export function Admin({ role }: { role: string | null }) {
   const [prices, setPrices] = useState<Record<string, number>>({});
   const [priceDraft, setPriceDraft] = useState<Record<string, string>>({});
   const [priceNotice, setPriceNotice] = useState('');
+  const [feedback, setFeedback] = useState<AdminFeedback[]>([]);
+  const [replies, setReplies] = useState<Record<number, string>>({});
+  const [feedbackNotice, setFeedbackNotice] = useState('');
 
   async function act(action: () => Promise<void>) {
     setBusy(true);
@@ -51,13 +55,15 @@ export function Admin({ role }: { role: string | null }) {
   };
 
   const load = async () => {
-    const [stats, openDisputes, moderation, publication, servicePrices] = await Promise.all([
+    const [stats, openDisputes, moderation, publication, servicePrices, messages] = await Promise.all([
       get<AdminOverview>('/api/admin/overview'),
       get<AdminDispute[]>('/api/admin/disputes'),
       get<ModerationChannel[]>('/api/admin/channels'),
       get<PublicationIssue[]>('/api/admin/publication-issues'),
-      get<Record<string, number>>('/api/service-prices')
+      get<Record<string, number>>('/api/service-prices'),
+      get<AdminFeedback[]>('/api/admin/feedback')
     ]);
+    setFeedback(messages);
     setOverview(stats);
     setDisputes(openDisputes);
     setChannels(moderation);
@@ -75,7 +81,7 @@ export function Admin({ role }: { role: string | null }) {
 
   const resolveDispute = (id: number, decision: 'BuyerRight' | 'OwnerRight') => act(async () => {
     const choice = sanctions[id] ?? NO_SANCTION;
-    await post(`/api/admin/disputes/${id}/resolve`, { decision, sanction: choice.sanction, days: choice.sanction === 'temporary' ? Number(choice.days) : null });
+    await post(`/api/admin/disputes/${id}/resolve`, { decision, sanction: choice.sanction, days: choice.sanction === 'temporary' ? Number(choice.days) : null, blockOwner: choice.blockOwner });
     await load();
   });
 
@@ -86,6 +92,11 @@ export function Admin({ role }: { role: string | null }) {
 
   const unblock = (id: number) => act(async () => {
     await post(`/api/admin/channels/${id}/unblock`);
+    await load();
+  });
+
+  const unblockOwner = (id: number) => act(async () => {
+    await post(`/api/admin/users/${id}/unblock`);
     await load();
   });
 
@@ -118,8 +129,23 @@ export function Admin({ role }: { role: string | null }) {
     setPriceNotice('Цена сохранена.');
   });
 
+  const answerFeedback = (id: number) => act(async () => {
+    setFeedbackNotice('');
+    const result = await post<{ delivered: boolean }>(`/api/admin/feedback/${id}/reply`, { reply: (replies[id] ?? '').trim() });
+    setFeedbackNotice(result.delivered ? 'Ответ отправлен в Telegram.' : 'Бот не смог отправить ответ, но пользователь увидит его в своём профиле.');
+    setReplies(current => ({ ...current, [id]: '' }));
+    setFeedback(await get<AdminFeedback[]>('/api/admin/feedback'));
+  });
+
+  const closeFeedback = (id: number) => act(async () => {
+    setFeedbackNotice('');
+    await post(`/api/admin/feedback/${id}/close`);
+    setFeedback(await get<AdminFeedback[]>('/api/admin/feedback'));
+  });
+
   const tabs: { id: AdminTab; label: string }[] = [
     { id: 'disputes', label: `Споры (${disputes.filter(d => d.status === 'Disputed').length})` },
+    { id: 'feedback', label: `Обращения (${feedback.filter(f => f.status === 'new').length})` },
     { id: 'overview', label: 'Обзор' },
     { id: 'channels', label: 'Каналы' },
     { id: 'orders', label: 'Заказы' },
@@ -149,6 +175,25 @@ export function Admin({ role }: { role: string | null }) {
       </section>}
     </>}
 
+    {tab === 'feedback' && <>
+      {feedbackNotice && <div className="notice success" role="status">{feedbackNotice}</div>}
+      {feedback.length === 0 && <p>Обращений нет.</p>}
+      {feedback.map(f => <article className="card" key={f.id}>
+        <strong>#{f.id} · {FEEDBACK_KINDS[f.kind] ?? f.kind}</strong>
+        <p className="hint">{f.name || 'Пользователь'} · {f.username ? '@' + f.username + ' · ' : ''}{f.userId} · {dateTime(f.createdAt)}</p>
+        <p className="description">{f.message}</p>
+        {f.reply && <p className="feedbackReply"><strong>Ответ:</strong> {f.reply}</p>}
+        {f.status === 'closed' && <p className="hint">Закрыто без ответа</p>}
+        {f.status === 'new' && <>
+          <label className="field">Ответ<textarea rows={3} maxLength={2000} value={replies[f.id] ?? ''} onChange={e => { const reply = e.target.value; setReplies(r => ({ ...r, [f.id]: reply })); }}/></label>
+          <div className="orderActions">
+            <button className="primary small" disabled={busy || !(replies[f.id] ?? '').trim()} onClick={() => void answerFeedback(f.id)}>Ответить</button>
+            <button className="secondary small" disabled={busy} onClick={() => void closeFeedback(f.id)}>Закрыть без ответа</button>
+          </div>
+        </>}
+      </article>)}
+    </>}
+
     {tab === 'disputes' && <>
       {disputes.length === 0 && <p>Обращений нет.</p>}
       {disputes.map(d => {
@@ -166,6 +211,10 @@ export function Admin({ role }: { role: string | null }) {
             </label>
             {choice.sanction === 'temporary' && <label className="field">Срок блокировки, дней
               <input type="number" min="1" max="365" inputMode="numeric" value={choice.days} onChange={e => { const days = e.target.value; setSanctions(s => ({ ...s, [d.id]: { ...choice, days } })); }}/>
+            </label>}
+            {choice.sanction !== 'none' && <label className="blockOwnerToggle">
+              <input type="checkbox" checked={choice.blockOwner} onChange={e => { const blockOwner = e.target.checked; setSanctions(s => ({ ...s, [d.id]: { ...choice, blockOwner } })); }}/>
+              Заблокировать и самого владельца: все его каналы и подключение новых
             </label>}
             <div className="orderActions">
               <button className="primary small" disabled={busy} onClick={() => void resolveDispute(d.id, 'BuyerRight')}>Покупатель прав</button>
@@ -192,7 +241,8 @@ export function Admin({ role }: { role: string | null }) {
     </div>}
 
     {tab === 'users' && users.map(u => <div className="sellerRate" key={u.id}>
-      <div><strong>{u.name || 'Пользователь'} · {u.id}</strong><small>{u.username ? '@' + u.username + ' · ' : ''}Каналов: {u.channels} · Покупок: {u.purchases}</small></div>
+      <div><strong>{u.name || 'Пользователь'} · {u.id}</strong><small>Первый запуск: {dateTime(u.firstSeen)}</small><small>{u.username ? '@' + u.username + ' · ' : ''}Каналов: {u.channels} · Покупок: {u.purchases}{u.blocked ? ' · ' + blockText(u.blockedUntil) : ''}</small></div>
+      {u.blocked && <button className="secondary small" disabled={busy} onClick={() => void unblockOwner(u.id)}>Снять блокировку</button>}
     </div>)}
 
     {tab === 'orders' && <>
