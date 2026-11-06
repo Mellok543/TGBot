@@ -1,5 +1,4 @@
 import {useEffect,useState} from 'react';
-import {reportUserSource} from './app/traffic';
 import {openCheckout} from './app/checkout';
 import {SiteBooking,SiteOrders,SitePlan} from './app/SiteSections';
 const orderStatusNames:Record<string,string>={Draft:'Черновик',Pending:'Ожидает подтверждения',PendingPaid:'Ожидает повторного подтверждения',AwaitingPayment:'Ожидает оплаты',Scheduled:'Запланировано',Publishing:'Публикуется',Published:'Опубликовано',Deleted:'Размещение завершено',DeleteFailed:'Ошибка удаления',PaidReschedule:'Нужно выбрать новое время',Rejected:'Отклонено',Disputed:'Открыт спор',DisputeResolved:'Спор рассмотрен',Cancelled:'Отменено',Expired:'Истекло',EarlyDeletionPending:'Пост удалён раньше срока',PublishFailed:'Не опубликовано',Failed:'Ошибка'};
@@ -79,7 +78,7 @@ export default function WebAccount(){
  const buyPromotion=async(channelId:number)=>{setChannelMessage('');setPendingChannel(channelId);try{await openCheckout('/api/payments/checkout/promotion/'+channelId)}catch(e){setChannelMessage(e instanceof Error?e.message:'Не удалось открыть оплату');setPendingChannel(null)}};
  const [status,setStatus]=useState<'loading'|'ready'|'guest'|'error'>('loading');
  useEffect(()=>{const c=new AbortController();fetch(api+'/api/web/profile',{credentials:'include',signal:c.signal})
- .then(async r=>{if(r.status===401){setStatus('guest');return;}if(!r.ok)throw new Error('Не удалось загрузить профиль');setProfile(await r.json());setStatus('ready');reportUserSource();})
+ .then(async r=>{if(r.status===401){setStatus('guest');return;}if(!r.ok)throw new Error('Не удалось загрузить профиль');setProfile(await r.json());setStatus('ready');})
  .catch(()=>{if(!c.signal.aborted)setStatus('error');});return()=>c.abort()},[]);
  return <section className="lp-account">
   <div className="lp-account-heading"><span className="lp-kicker">ЛИЧНЫЙ КАБИНЕТ</span><h1>Мой Reklio</h1><p>Один аккаунт для сайта и Telegram Mini App.</p></div>

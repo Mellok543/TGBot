@@ -88,6 +88,4 @@ export type ModerationChannel = { id: number; title: string; category: string; l
 export type MtprotoStatus = { configured: boolean; checkedOrders: number; present: number; missing: number; lastCheck: string | null; healthy: boolean };
 export type PublicationIssue = { id: number; channel: string; status: string; error: string; scheduledAt: string | null; publishedAt: string | null };
 export type AdminOverview = { channels: number; listed: number; orders: number; openDisputes: number; failedPublications: number };
-export type TrafficSource = { source: string; visits: number; users: number; newUsers: number; orders: number; payments: number; revenue: number };
-export type TrafficReport = { days: number; sources: TrafficSource[] };
 export type AdminDispute = { id: number; channel: string; price: number; text: string; reason: string; openedAt: string | null; status: string; resolution: string | null; paymentStatus: string };
